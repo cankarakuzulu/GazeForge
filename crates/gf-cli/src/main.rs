@@ -581,5 +581,7 @@ mod tests {
         assert_eq!(cli, serde_json::to_value(gf_api::designer::f3_defaults()).unwrap());
         let f4 = serde_json::to_value(f3_placement(&none, "f4").unwrap().settings.f4).unwrap();
         assert_eq!(f4, serde_json::to_value(Some(gf_api::designer::f4_defaults())).unwrap());
+        let f5 = serde_json::to_value(f5_placement(&none).unwrap().settings).unwrap();
+        assert_eq!(f5, serde_json::to_value(gf_api::designer::f5_defaults()).unwrap());
     }
 }

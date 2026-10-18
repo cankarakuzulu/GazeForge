@@ -36,11 +36,13 @@ pub fn length(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
+pub fn corner_angle(p: [[f64; 3]; 3], i: usize) -> f64 {
+    let a = sub(p[(i + 1) % 3], p[i]);
+    let b = sub(p[(i + 2) % 3], p[i]);
+    let denominator = (length(a) * length(b)).max(1e-30);
+    (dot(a, b) / denominator).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
 pub fn corner_angles(p: [[f64; 3]; 3]) -> [f64; 3] {
-    std::array::from_fn(|i| {
-        let a = sub(p[(i + 1) % 3], p[i]);
-        let b = sub(p[(i + 2) % 3], p[i]);
-        let denominator = (length(a) * length(b)).max(1e-30);
-        (dot(a, b) / denominator).clamp(-1.0, 1.0).acos().to_degrees()
-    })
+    std::array::from_fn(|i| corner_angle(p, i))
 }

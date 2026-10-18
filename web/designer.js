@@ -248,15 +248,18 @@ function settleInput() {
   return input;
 }
 
-async function settle() {
+async function settle(full) {
   if (D.settling) { D.pendingSettle = 1; return; }
+  clearTimeout(D.fullTimer);
   D.settling = true;
   setStatus("busy", "settling");
   const wSent = D.w.slice(), mSent = { ...D.macroW };
   const t0 = performance.now();
   let r;
   try {
-    r = await api("designer.settle", settleInput());
+    const input = settleInput();
+    if (params.get("fast") === "1" && !full) input.fast = true;
+    r = await api("designer.settle", input);
   } catch (e) {
     D.settling = false;
     setStatus("preview", `settle failed: ${e.message}`);
@@ -276,7 +279,7 @@ async function settle() {
     D.stats.errors.push(Array.from(err));
     D.stats.flips.push({ vs_settled: flipsVsSettled, vs_anchor: flipsVsAnchor });
   }
-  D.stats.settles.push({ rtt_ms: rtt, server: r.timing_ms, same });
+  D.stats.settles.push({ rtt_ms: rtt, server: r.timing_ms, same, draft: !!r.approximate });
   views().anchor.set(pos);
   D.w0 = wSent;
   D.macroW0 = mSent;
@@ -285,14 +288,17 @@ async function settle() {
   D.settleCount++;
   D.settling = false;
   showMeasure(r.measurements);
-  setStatus(changed() ? "preview" : "settled", changed() ? "preview (approximate)" : `settled ${r.placement} ${rtt.toFixed(0)} ms`);
+  const kind = r.approximate ? `${r.placement} draft (approximate, ${r.draft.rounds} of ${r.draft.full_rounds} fit rounds; save and export use the full placement)` : r.placement;
+  setStatus(changed() ? "preview" : "settled", changed() ? "preview (approximate)" : `settled ${kind} ${rtt.toFixed(0)} ms`);
   $("info").textContent = `${D.n} vertices, ${D.tri} triangles, ${D.targets.length} targets loaded, ${D.renderer || ""}`;
   request(true);
   if (D.pendingSettle) { D.pendingSettle = 0; settle(); }
+  else if (r.approximate && !changed()) D.fullTimer = setTimeout(() => { if (!changed() && !D.settling) settle(true); }, 3000);
 }
 
 function scheduleSettle() {
   clearTimeout(D.timer);
+  clearTimeout(D.fullTimer);
   D.timer = setTimeout(settle, 150);
 }
 

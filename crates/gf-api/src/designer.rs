@@ -8,11 +8,12 @@ use gf_core::character::{FORMAT, MacroSpec, ResidualRef, Spec, SpecBase};
 use gf_core::head::{self, HeadOnly};
 use gf_core::macros::{MACRO_SLIDERS, Mode, RACES};
 use gf_core::measure;
-use gf_core::placement::{self as gp, DenseMesh, Placement, PlacementVersion};
+use gf_core::placement::{self as gp, DenseMesh, Placement, PlacementVersion, Prepared};
 use gf_core::residual;
 use gf_geom::decimate::Decimated;
 use gf_geom::lids::ClearSettings;
 use gf_geom::placement_f3::{F3Settings, F4Settings};
+use gf_geom::placement_f5::F5Settings;
 use gf_io::character::{self as ch, MacroSource};
 use gf_io::dense::Dense;
 use gf_io::store::Store;
@@ -24,6 +25,7 @@ use crate::error::ApiError;
 
 pub const HEAD_CATEGORIES: [&str; 10] = ["cheek", "chin", "ears", "eyebrows", "eyes", "forehead", "head", "mouth", "neck", "nose"];
 pub const PACK_FORMAT: &str = "gazeforge.preview/1";
+pub const DRAFT_ROUNDS: usize = 1;
 
 pub fn f3_defaults() -> F3Settings {
     F3Settings {
@@ -55,6 +57,20 @@ pub fn f4_defaults() -> F4Settings {
     F4Settings { target_deg: 10.0, passes: 12, step: 0.25, gain: 0.5, fold_deg: 60.0, backoff_dense: true, game_plane: true }
 }
 
+pub fn f5_defaults() -> F5Settings {
+    F5Settings {
+        tangential: 0.01,
+        smooth: 0.1,
+        membrane: 0.1,
+        max_move: 3.0 / 1000.0,
+        uv_ring: 2,
+        subset_normals: true,
+        eye_clearance: 0.05 / 1000.0,
+        eye_depth: [0.3, 0.6].map(|x: f64| x / 1000.0),
+        eye_front_deg: 75.0,
+    }
+}
+
 struct Loaded {
     key: String,
     store: Store,
@@ -65,6 +81,7 @@ struct Loaded {
     targets: Mutex<HashMap<String, Arc<SparseTarget>>>,
     residuals: Mutex<HashMap<String, Arc<Vec<[f64; 3]>>>>,
     frame: OnceLock<Result<HeadOnly, String>>,
+    prepared: OnceLock<Prepared>,
 }
 
 static CACHE: OnceLock<Mutex<Option<Arc<Loaded>>>> = OnceLock::new();
@@ -98,6 +115,7 @@ fn load(input: &Value) -> Result<(Arc<Loaded>, bool), ApiError> {
         targets: Mutex::new(HashMap::new()),
         residuals: Mutex::new(HashMap::new()),
         frame: OnceLock::new(),
+        prepared: OnceLock::new(),
     });
     *held = Some(loaded.clone());
     Ok((loaded, false))
@@ -135,6 +153,10 @@ impl Loaded {
             .get_or_init(|| HeadOnly::new(&self.dense.positions, &gf_geom::open_boundary(&self.dense.triangles), settings.pin_top_m))
             .as_ref()
             .map_err(|e| ApiError::internal(e.clone()))
+    }
+
+    fn prepared(&self) -> &Prepared {
+        self.prepared.get_or_init(|| Prepared::new(self.dense.positions.len(), &self.dense.triangles, &self.dense.triangle_uvs, &self.game, f3_defaults().uv_ring))
     }
 
     fn macro_layer(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64) -> Result<Vec<[f64; 3]>, ApiError> {
@@ -256,13 +278,19 @@ fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Resu
     Ok(spec)
 }
 
-fn placer(version: PlacementVersion, eyes: Vec<gf_geom::lids::Eye>) -> Result<Box<dyn Placement>, ApiError> {
+pub fn draft_defaults() -> F3Settings {
+    F3Settings { rounds: DRAFT_ROUNDS, ..f3_defaults() }
+}
+
+fn placer(version: PlacementVersion, eyes: Vec<gf_geom::lids::Eye>, draft: bool) -> Result<Box<dyn Placement>, ApiError> {
+    let f3 = if draft { draft_defaults() } else { f3_defaults() };
     Ok(match version.name {
-        "f3" => Box::new(gp::F3 { settings: f3_defaults(), eyes }),
-        "f4" => Box::new(gp::F3 { settings: F3Settings { f4: Some(f4_defaults()), ..f3_defaults() }, eyes }),
+        "f3" => Box::new(gp::F3 { settings: f3, eyes }),
+        "f4" => Box::new(gp::F3 { settings: F3Settings { f4: Some(f4_defaults()), ..f3 }, eyes }),
+        "f5" => Box::new(gp::F5 { settings: f5_defaults(), eyes }),
         "subset" => Box::new(gp::Subset),
         "optimal" => Box::new(gp::Optimal { max_move: 3.0 / 1000.0 }),
-        other => return Err(ApiError::invalid(format!("designer.settle places with f3, f4, subset or optimal, not {other}"))),
+        other => return Err(ApiError::invalid(format!("designer.settle places with f3, f4, f5, subset or optimal, not {other}"))),
     })
 }
 
@@ -316,7 +344,8 @@ pub fn pack_output() -> Value {
 pub fn settle_input() -> Value {
     obj(
         with(with(base_props(), character_props()), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file for f3's eyelid clearance"},
-                                                           "uvs": {"type": "boolean", "description": "also return the placed triangle UVs (default false)"}})),
+                                                           "uvs": {"type": "boolean", "description": "also return the placed triangle UVs (default false)"},
+                                                           "fast": {"type": "boolean", "description": "opt-in designer draft for f3/f4: DRAFT_ROUNDS fit rounds instead of 4, so the result is approximate (flagged approximate); designer.save and every export still place with the full released placement (default false)"}})),
         &["store", "pack", "catalog", "game"],
     )
 }
@@ -487,7 +516,8 @@ pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         None => Vec::new(),
     };
     let version = PlacementVersion::parse(&spec.base.placement).map_err(ApiError::invalid)?;
-    let placement = placer(version, eyes)?;
+    let draft = input.get("fast").and_then(Value::as_bool).unwrap_or(false) && matches!(version.name, "f3" | "f4");
+    let placement = placer(version, eyes, draft)?;
     let t0 = started.elapsed().as_secs_f64();
     let dense = loaded.evaluate(&spec, source.as_ref())?;
     let t1 = started.elapsed().as_secs_f64();
@@ -501,16 +531,21 @@ pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             measurements.insert(name, json!({"mm": measure::round_mm(now), "base_mm": measure::round_mm(was), "delta_mm": measure::round_mm(now - was), "what": what}));
         }
     }
-    let placed =placement.place(&dense, &DenseMesh { triangles: &loaded.dense.triangles, triangle_uvs: &loaded.dense.triangle_uvs }, &loaded.game);
+    let ready = loaded.prepared.get().is_some();
+    let prepared = loaded.prepared();
+    let t_prepared = started.elapsed().as_secs_f64();
+    let placed = placement.place_prepared(&dense, &DenseMesh { triangles: &loaded.dense.triangles, triangle_uvs: &loaded.dense.triangle_uvs }, &loaded.game, prepared);
     let t2 = started.elapsed().as_secs_f64();
     let mut out = json!({"vertices": placed.game.len(), "revision": spec.revision(), "placement": placement.version().to_string(),
-                         "positions_f32_b64": f32_base64(placed.game.iter().flatten().copied()), "cached": cached});
+                         "positions_f32_b64": f32_base64(placed.game.iter().flatten().copied()), "cached": cached, "approximate": draft,
+                         "draft": if draft { json!({"rounds": DRAFT_ROUNDS, "full_rounds": f3_defaults().rounds, "note": "designer-only draft; save and export use the full placement"}) } else { Value::Null }});
     if input.get("uvs").and_then(Value::as_bool).unwrap_or(false) {
         let uvs = placed.triangle_uvs.unwrap_or_else(|| loaded.game.triangle_uvs.clone());
         out["triangle_uvs_f32_b64"] = json!(f32_base64(uvs.iter().flatten().flatten().map(|&x| x as f64)));
     }
     let t3 = started.elapsed().as_secs_f64();
-    out["timing_ms"] = json!({"load": t_load * 1000.0, "evaluate": (t1 - t0) * 1000.0, "place": (t2 - t1) * 1000.0, "encode": (t3 - t2) * 1000.0, "total": t3 * 1000.0});
+    out["timing_ms"] = json!({"load": t_load * 1000.0, "evaluate": (t1 - t0) * 1000.0, "prepare": (t_prepared - t1) * 1000.0, "place": (t2 - t_prepared) * 1000.0,
+                             "encode": (t3 - t2) * 1000.0, "total": t3 * 1000.0, "prepared_cached": ready});
     out["measurements"] = Value::Object(measurements);
     out["report"] = Value::Object(placed.report);
     Ok(out)
