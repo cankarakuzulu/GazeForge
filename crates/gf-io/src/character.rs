@@ -129,6 +129,12 @@ pub fn parametric(store: &Store, resolved: &Resolved, spec: &Spec, macro_source:
 }
 
 pub fn evaluate(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Value), String> {
+    evaluate_with_base(store, spec, macro_source).map(|(positions, _, report)| (positions, report))
+}
+
+pub type Evaluated = (Vec<[f64; 3]>, Vec<[f64; 3]>, Value);
+
+pub fn evaluate_with_base(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<Evaluated, String> {
     let (problems, resolved) = problems(store, spec, macro_source);
     if !problems.is_empty() {
         return Err(format!("the spec does not validate: {}", problems.join("; ")));
@@ -147,7 +153,7 @@ pub fn evaluate(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
         }
         report["residual"] = json!({"vertices": values.len(), "bytes": r.bytes});
     }
-    Ok((dense, report))
+    Ok((dense, resolved.dense.positions, report))
 }
 
 pub fn capture_residual(store: &Store, parametric: &[[f64; 3]], target: &[[f64; 3]], quantum_m: f64) -> Result<(ResidualRef, Value), String> {

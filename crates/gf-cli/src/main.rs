@@ -10,6 +10,9 @@ use gf_io::{game_base, obj};
 use serde_json::{Value, json};
 
 mod data_cmds;
+mod front;
+mod http;
+mod mcp;
 mod mesh_cmds;
 
 const USAGE: &str = "gazeforge <command> [--key value ...]
@@ -52,6 +55,11 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   A gate that fails prints its report with \"ok\": false and exits non-zero.
 JSON|@FILE: inline JSON, or @ and a path to a JSON file. MACRO_JSON is read from the user's MakeHuman/MPFB install.
 An option the command does not read is refused; numbers must be finite and not negative; input positions must be finite.
+The command registry (the same commands over every front door):
+  commands                              list every command with its input schema
+  call    COMMAND --input JSON|@FILE    run one command
+  serve   [--port N]                    local HTTP API on 127.0.0.1: GET /v1/commands, POST /v1/<command>
+  mcp                                   MCP server over stdio
 Every command prints one JSON object on stdout; a non-zero exit code means it failed.";
 
 const BUILD_KEYS: &[&str] = &[
@@ -437,6 +445,9 @@ fn run(args: &[String]) -> Result<Value, String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = front::dispatch(&args) {
+        return code;
+    }
     match run(&args) {
         Ok(value) => {
             println!("{value}");

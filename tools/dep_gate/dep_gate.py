@@ -7,7 +7,7 @@ clippy       cargo clippy on the pure crates (PURE) with -D warnings; their clip
              process, net and clock calls.
 wasm         the pure maths crate builds for wasm32-unknown-unknown with no features.
 front-doors  copy the workspace without its front doors (FRONT_DOORS) into a temporary directory and
-             build the domain and format crates there.
+             build the domain, format and api crates there.
 
 Prints one JSON object; exit code 0 only when every selected gate passes.
 
@@ -38,7 +38,7 @@ ALLOWED = {
 PURE = ["gf-geom", "gf-core"]
 WASM = "gf-geom"
 FRONT_DOORS = ["gf-cli", "gf-http", "gf-mcp"]
-KEEP_BUILT = ["gf-core", "gf-io"]
+KEEP_BUILT = ["gf-core", "gf-io", "gf-api"]
 
 
 def run(cmd, cwd, env=None):

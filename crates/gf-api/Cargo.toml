@@ -1,0 +1,11 @@
+[package]
+name = "gf-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gf-core = { path = "../gf-core" }
+gf-io = { path = "../gf-io" }
+serde = "1"
+serde_json = "1"
