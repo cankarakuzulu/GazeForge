@@ -167,7 +167,7 @@ pub fn landmarks(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 }
 
 pub fn mesh_input() -> Value {
-    obj(with_tools(json!({"glb": {"type": "string", "description": "reuse this mesh instead of calling the server"}})), &["run"])
+    obj(with_tools(json!({"glb": {"type": "string", "description": "reuse this mesh instead of calling the server"}, "shell_mode": shell_mode_prop()})), &["run"])
 }
 
 pub fn mesh(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -195,7 +195,7 @@ pub fn mesh(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
     };
     let mesh_seconds = started.elapsed().as_secs_f64();
-    let shell = worker(input, "photo_worker.py", "shell", json!({"glb": glb.display().to_string()}), &run)?;
+    let shell = worker(input, "photo_worker.py", "shell", json!({"glb": glb.display().to_string(), "shell_mode": opt(input, "shell_mode")}), &run)?;
     Ok(json!({"glb": glb.display().to_string(), "mesh": generated, "mesh_seconds": mesh_seconds, "shell": shell}))
 }
 
@@ -234,8 +234,17 @@ fn photo_points(run: &Path) -> Result<(Vec<[f64; 2]>, Value), ApiError> {
     Ok((px, v))
 }
 
+fn shell_mode_prop() -> Value {
+    json!({"type": "string", "enum": ["outer_triangles", "visible_vertices"],
+           "description": "outer-shell extraction: triangles front-most from 26 directions with normals oriented to their viewers (default), or vertices visible from them"})
+}
+
+fn base_table_prop() -> Value {
+    json!({"base_landmarks": {"type": "string", "description": "the base's landmark table, JSON {\"vertices\": {landmark index: dense vertex}} (else detected on a render of the base)"}})
+}
+
 pub fn register_input() -> Value {
-    obj(merged(tool_props(), store_props()), &["run", "store", "pack"])
+    obj(merged(merged(tool_props(), store_props()), base_table_prop()), &["run", "store", "pack"])
 }
 
 pub fn register(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -243,6 +252,17 @@ pub fn register(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let started = Instant::now();
     let base = load_base(input)?;
     let p = &base.dense.positions;
+    if let Some(table) = opt(input, "base_landmarks") {
+        let dest = run.join("base_landmarks.json");
+        let same = std::fs::canonicalize(table).ok().zip(std::fs::canonicalize(&dest).ok()).is_some_and(|(a, b)| a == b);
+        if !same {
+            let body = read_json(Path::new(table))?;
+            if !body["vertices"].is_object() {
+                return Err(ApiError::invalid(format!("{table} has no vertices object")));
+            }
+            write_json(&dest, &body)?;
+        }
+    }
     if !run.join("base_landmarks.json").is_file() {
         let normals = gates::vertex_normals(p, &base.quads);
         dio::write_points(&run.join("base_positions.npy"), p).map_err(ApiError::internal)?;
@@ -374,6 +394,56 @@ impl Accum {
     }
 }
 
+enum FrontCam {
+    Ortho(OrthoCamera),
+    Persp(fit::PerspectiveCamera),
+}
+
+impl FrontCam {
+    fn solve(model: &str, focal: Option<f64>, size: [f64; 2], x: &[Point], u: &[[f64; 2]]) -> Result<FrontCam, ApiError> {
+        match model {
+            "orthographic" => fit::fit_ortho_camera(x, u).map(FrontCam::Ortho).map_err(ApiError::invalid),
+            "perspective" if size[0] > 0.0 && size[1] > 0.0 => {
+                fit::fit_perspective_camera(x, u, [size[0] / 2.0, size[1] / 2.0], focal).map(FrontCam::Persp).map_err(ApiError::invalid)
+            }
+            "perspective" => Err(ApiError::invalid("a perspective camera needs the photo size (landmarks.json front.size)")),
+            other => Err(ApiError::invalid(format!("unknown camera model {other}")).hint("perspective or orthographic")),
+        }
+    }
+
+    fn project(&self, x: Point) -> [f64; 2] {
+        match self {
+            FrontCam::Ortho(c) => c.project(x),
+            FrontCam::Persp(c) => c.project(x),
+        }
+    }
+
+    fn scale_at(&self, x: Point) -> f64 {
+        match self {
+            FrontCam::Ortho(c) => c.scale,
+            FrontCam::Persp(c) => c.pixels_per_metre(x),
+        }
+    }
+
+    fn focal(&self) -> Option<f64> {
+        match self {
+            FrontCam::Ortho(_) => None,
+            FrontCam::Persp(c) => Some(c.focal),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match self {
+            FrontCam::Ortho(c) => json!(c),
+            FrontCam::Persp(c) => {
+                let mut v = json!(c);
+                v["kind"] = json!("perspective");
+                v
+            }
+        }
+    }
+}
+
 struct Profile {
     to_model: Similarity2,
     rows: Vec<(usize, f64)>,
@@ -393,7 +463,27 @@ fn silhouette(prob: &Problem, base: &[Point], w: &[f64], midline: &[usize], tip:
     bins
 }
 
-fn fit_profile(curve: &BTreeMap<i64, (usize, f64)>, line: &[[f64; 2]], keys: &Value, tip: Point, previous: Option<&Similarity2>) -> Result<Profile, ApiError> {
+fn scale_translation2(src: &[[f64; 2]], dst: &[[f64; 2]]) -> Result<Similarity2, String> {
+    if src.len() != dst.len() || src.len() < 2 {
+        return Err("a scale and translation needs at least two matched points".into());
+    }
+    let n = src.len() as f64;
+    let ms = [src.iter().map(|p| p[0]).sum::<f64>() / n, src.iter().map(|p| p[1]).sum::<f64>() / n];
+    let md = [dst.iter().map(|p| p[0]).sum::<f64>() / n, dst.iter().map(|p| p[1]).sum::<f64>() / n];
+    let (mut num, mut den) = (0.0, 0.0);
+    for (a, b) in src.iter().zip(dst) {
+        num += (a[0] - ms[0]) * (b[0] - md[0]) + (a[1] - ms[1]) * (b[1] - md[1]);
+        den += (a[0] - ms[0]).powi(2) + (a[1] - ms[1]).powi(2);
+    }
+    if den <= 0.0 || num <= 0.0 {
+        return Err("the profile points are degenerate".into());
+    }
+    let scale = num / den;
+    Ok(Similarity2 { scale, angle: 0.0, translation: [md[0] - scale * ms[0], md[1] - scale * ms[1]] })
+}
+
+fn fit_profile(curve: &BTreeMap<i64, (usize, f64)>, line: &[[f64; 2]], keys: &Value, tip: Point, previous: Option<&Similarity2>, upright: bool, refine: bool) -> Result<Profile, ApiError> {
+    let pair = |a: &[[f64; 2]], b: &[[f64; 2]]| if upright { scale_translation2(a, b) } else { fit::similarity2(a, b) };
     let model = |bin: i64| curve.get(&bin).map(|c| [c.1, -(tip[2] + bin as f64 / 1000.0)]);
     let to_model = match previous {
         Some(p) => p.clone(),
@@ -402,12 +492,12 @@ fn fit_profile(curve: &BTreeMap<i64, (usize, f64)>, line: &[[f64; 2]], keys: &Va
             let (pt, pn) = (key("nose_tip").ok_or_else(|| ApiError::invalid("the profile has no nose_tip"))?, key("nasion").ok_or_else(|| ApiError::invalid("the profile has no nasion"))?);
             let tip_bin = curve.range(-20..=10).max_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|(k, _)| *k).ok_or_else(|| ApiError::invalid("no model profile near the nose"))?;
             let nasion_bin = curve.range(tip_bin + 8..=tip_bin + 50).min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|(k, _)| *k).ok_or_else(|| ApiError::invalid("no model nasion"))?;
-            fit::similarity2(&[pt, pn], &[model(tip_bin).unwrap_or([0.0; 2]), model(nasion_bin).unwrap_or([0.0; 2])]).map_err(ApiError::invalid)?
+            pair(&[pt, pn], &[model(tip_bin).unwrap_or([0.0; 2]), model(nasion_bin).unwrap_or([0.0; 2])]).map_err(ApiError::invalid)?
         }
     };
     let upper: Vec<[f64; 2]> = curve.range(-12..=40).filter_map(|(b, _)| model(*b)).collect();
     let mut sim = to_model;
-    for _ in 0..25 {
+    for _ in 0..if refine || previous.is_none() { 25 } else { 0 } {
         let mut a = Vec::new();
         let mut b = Vec::new();
         for u in line {
@@ -428,7 +518,7 @@ fn fit_profile(curve: &BTreeMap<i64, (usize, f64)>, line: &[[f64; 2]], keys: &Va
         if a.len() < 5 {
             break;
         }
-        sim = fit::similarity2(&a, &b).map_err(ApiError::invalid)?;
+        sim = pair(&a, &b).map_err(ApiError::invalid)?;
     }
     let mut rows = Vec::new();
     let mut sq = Vec::new();
@@ -481,7 +571,11 @@ pub fn targets_input() -> Value {
                 json!({"rounds": {"type": "integer", "minimum": 1, "maximum": 20},
                        "shell_weight": {"type": "number", "minimum": 0}, "landmark_weight": {"type": "number", "minimum": 0},
                        "profile_weight": {"type": "number", "minimum": 0}, "ridge": {"type": "number", "minimum": 0},
-                       "prior_weight": {"type": "number", "minimum": 0}, "symmetry_weight": {"type": "number", "minimum": 0}}),
+                       "prior_weight": {"type": "number", "minimum": 0}, "symmetry_weight": {"type": "number", "minimum": 0},
+                       "camera": {"type": "string", "enum": ["perspective", "orthographic"], "description": "front camera model (default perspective, focal length solved)"},
+                       "focal_px": {"type": "number", "exclusiveMinimum": 0, "description": "fix the front camera's focal length in pixels instead of solving it"},
+                       "profile_upright": {"type": "boolean", "description": "align the profile photo by scale and translation only (an upright photo), not rotation"},
+                       "profile_align": {"type": "string", "enum": ["every_round", "first_round"], "description": "re-align the profile photo to the model each round, or once (to the base) and keep it"}}),
             ),
         ),
         &["run", "store", "pack", "catalog"],
@@ -554,16 +648,21 @@ pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let load_seconds = started.elapsed().as_secs_f64();
     let slot = |v: usize| prob.slots[v] as usize;
     let mid_slots: Vec<usize> = mid.iter().map(|v| slot(*v)).collect();
-    let (ws, wl, wp) = (num(input, "shell_weight", 1.0), num(input, "landmark_weight", 0.3), num(input, "profile_weight", 0.5));
-    let ridge = num(input, "ridge", 1e-4);
-    let (wprior, wsym) = (num(input, "prior_weight", 0.2), num(input, "symmetry_weight", 0.05));
+    let (ws, wl, wp) = (num(input, "shell_weight", 1.0), num(input, "landmark_weight", 0.3), num(input, "profile_weight", 0.0));
+    let ridge = num(input, "ridge", 1e-3);
+    let (wprior, wsym) = (num(input, "prior_weight", 1.0), num(input, "symmetry_weight", 0.05));
     let index: HashMap<&str, usize> = ids.iter().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
     let sym_pairs: Vec<(usize, usize)> = ids.iter().enumerate().filter_map(|(i, k)| index.get(k.replacen("/l-", "/r-", 1).as_str()).filter(|&&j| j != i).map(|&j| (i, j))).collect();
     let mut refinements = Vec::new();
     let rounds = input.get("rounds").and_then(Value::as_u64).unwrap_or(5) as usize;
     let mut w = vec![0.0; t];
     let mut log = Vec::new();
-    let mut camera: Option<OrthoCamera> = None;
+    let mut camera: Option<Value> = None;
+    let camera_model = opt(input, "camera").unwrap_or("perspective").to_string();
+    let focal_fixed = input.get("focal_px").and_then(Value::as_f64);
+    let profile_upright = input.get("profile_upright").and_then(Value::as_bool).unwrap_or(false);
+    let profile_once = opt(input, "profile_align") == Some("first_round");
+    let photo_size = [marks["front"]["size"][0].as_f64().unwrap_or(0.0), marks["front"]["size"][1].as_f64().unwrap_or(0.0)];
     let mut profile: Option<Profile> = None;
     let keys = marks["profile"]["keys"].clone();
     for round in 0..rounds {
@@ -631,21 +730,38 @@ pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         let xl: Vec<Point> = lm_used.iter().map(|(_, v)| prob.position(p, slot(*v), &w)).collect();
         let ul: Vec<[f64; 2]> = lm_used.iter().map(|(i, _)| px[*i]).collect();
-        let cam = fit::fit_ortho_camera(&xl, &ul).map_err(ApiError::invalid)?;
+        let cam = FrontCam::solve(&camera_model, focal_fixed, photo_size, &xl, &ul)?;
         let lm_px: Vec<f64> = xl.iter().zip(&ul).map(|(x, u)| {
             let q = cam.project(*x);
             ((q[0] - u[0]).powi(2) + (q[1] - u[1]).powi(2)).sqrt()
         }).collect();
         let lm_weight = wl / (2 * lm_used.len()).max(1) as f64;
-        for ((_, v), u) in lm_used.iter().zip(&ul) {
-            let s = slot(*v);
-            for (k, uk) in u.iter().enumerate() {
-                let a: Vec<f64> = (0..t).map(|j| (0..3).map(|c| cam.rows[k][c] * prob.row(s, c)[j] as f64).sum()).collect();
-                acc.add(&a, (uk - cam.translation[k]) / cam.scale - fit::dot(cam.rows[k], p[*v]), lm_weight);
+        match &cam {
+            FrontCam::Ortho(cam) => {
+                for ((_, v), u) in lm_used.iter().zip(&ul) {
+                    let s = slot(*v);
+                    for (k, uk) in u.iter().enumerate() {
+                        let a: Vec<f64> = (0..t).map(|j| (0..3).map(|c| cam.rows[k][c] * prob.row(s, c)[j] as f64).sum()).collect();
+                        acc.add(&a, (uk - cam.translation[k]) / cam.scale - fit::dot(cam.rows[k], p[*v]), lm_weight);
+                    }
+                }
+            }
+            FrontCam::Persp(cam) => {
+                for (((_, v), u), x) in lm_used.iter().zip(&ul).zip(&xl) {
+                    let s = slot(*v);
+                    let g = cam.gradient(*x);
+                    let ppm = cam.pixels_per_metre(*x);
+                    let q = cam.project(*x);
+                    for k in 0..2 {
+                        let gk = fit::scale(g[k], 1.0 / ppm);
+                        let a: Vec<f64> = (0..t).map(|j| (0..3).map(|c| gk[c] * prob.row(s, c)[j] as f64).sum()).collect();
+                        acc.add(&a, (u[k] - q[k]) / ppm + fit::dot(gk, fit::sub(*x, p[*v])), lm_weight);
+                    }
+                }
             }
         }
         let curve = silhouette(&prob, p, &w, &mid_slots, tip);
-        let prof = if line.is_empty() { None } else { Some(fit_profile(&curve, &line, &keys, tip, profile.as_ref().map(|x| &x.to_model))?) };
+        let prof = if line.is_empty() { None } else { Some(fit_profile(&curve, &line, &keys, tip, profile.as_ref().map(|x| &x.to_model), profile_upright, !profile_once)?) };
         if let Some(pr) = &prof {
             let pw = wp / pr.rows.len().max(1) as f64;
             for (s, f) in &pr.rows {
@@ -659,11 +775,12 @@ pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         let shell_rms = (shell_res.iter().map(|r| r * r).sum::<f64>() / shell_res.len().max(1) as f64).sqrt();
         let lm_rms = (lm_px.iter().map(|r| r * r).sum::<f64>() / lm_px.len().max(1) as f64).sqrt();
+        let centroid = fit::scale(xl.iter().fold([0.0; 3], |a, x| fit::add(a, *x)), 1.0 / xl.len().max(1) as f64);
         log.push(json!({"round": round, "before_solve": {"shell_rows": shell_items.len(), "shell_rms_mm": shell_rms, "landmark_rms_px": lm_rms,
-                         "landmark_rms_mm": lm_rms / cam.scale * 1000.0, "profile_rows": prof.as_ref().map(|x| x.rows.len()),
-                         "profile_rms_mm": prof.as_ref().map(|x| x.rms_mm)}}));
+                         "landmark_rms_mm": lm_rms / cam.scale_at(centroid) * 1000.0, "profile_rows": prof.as_ref().map(|x| x.rows.len()),
+                         "profile_rms_mm": prof.as_ref().map(|x| x.rms_mm), "focal_px": cam.focal()}}));
         w = fit::bounded_least_squares(&acc.gram, &acc.rhs, 0.0, 1.0, &w, 3000);
-        camera = Some(cam);
+        camera = Some(cam.to_json());
         profile = prof;
     }
     let mut regions: Vec<Vec<f64>> = vec![Vec::new(); fit::REGIONS.len()];
@@ -682,7 +799,8 @@ pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let weights: BTreeMap<String, f64> = ids.iter().zip(&w).filter(|(_, x)| **x > 1e-6).map(|(k, x)| (k.clone(), (x * 1e6).round() / 1e6)).collect();
     let report = json!({
         "targets": t, "nonzero": weights.len(), "at_1": w.iter().filter(|x| **x >= 1.0 - 1e-9).count(),
-        "weights": weights, "rounds": log, "front_camera": camera, "profile_photo_to_model": profile.as_ref().map(|x| &x.to_model),
+        "weights": weights, "rounds": log, "front_camera": camera, "camera_model": camera_model, "focal_px_fixed": focal_fixed, "profile_upright": profile_upright, "profile_align": if profile_once { "first_round" } else { "every_round" },
+        "profile_photo_to_model": profile.as_ref().map(|x| &x.to_model),
         "profile_rms_mm": profile.as_ref().map(|x| x.rms_mm), "shell_residual_mm_by_region": per_region,
         "samples": {"shell": shell_rows.len(), "midline": mid.len(), "prior": prior_rows.len(), "landmarks": lm_used.len(), "symmetry_pairs": sym_pairs.len()},
         "shell_refinements": refinements, "term_weights": {"shell": ws, "landmarks": wl, "profile": wp, "prior": wprior, "symmetry": wsym, "ridge": ridge},
@@ -882,13 +1000,14 @@ fn cameras(run: &Path, x: &[Point], lm: &BTreeMap<usize, usize>, tip: Point, fit
     let used: Vec<(usize, usize)> = STABLE_LANDMARKS.iter().filter_map(|i| lm.get(i).map(|v| (*i, *v))).filter(|(i, _)| px.get(*i).is_some_and(|u| u[0].is_finite())).collect();
     let xl: Vec<Point> = used.iter().map(|(_, v)| x[*v]).collect();
     let ul: Vec<[f64; 2]> = used.iter().map(|(i, _)| px[*i]).collect();
-    let cam = fit::fit_ortho_camera(&xl, &ul).map_err(ApiError::invalid)?;
+    let size = [marks["front"]["size"][0].as_f64().unwrap_or(0.0), marks["front"]["size"][1].as_f64().unwrap_or(0.0)];
+    let cam = FrontCam::solve(fitted["camera_model"].as_str().unwrap_or("orthographic"), fitted["focal_px_fixed"].as_f64(), size, &xl, &ul)?;
     let errs: Vec<f64> = xl.iter().zip(&ul).map(|(a, u)| {
         let q = cam.project(*a);
         ((q[0] - u[0]).powi(2) + (q[1] - u[1]).powi(2)).sqrt()
     }).collect();
     let rms = (errs.iter().map(|e| e * e).sum::<f64>() / errs.len().max(1) as f64).sqrt();
-    let mut out = json!({"front": cam, "front_rms_px": rms, "front_max_px": errs.iter().copied().fold(0.0, f64::max), "front_points": used.len(),
+    let mut out = json!({"front": cam.to_json(), "front_rms_px": rms, "front_max_px": errs.iter().copied().fold(0.0, f64::max), "front_points": used.len(),
                          "photo_size": marks["front"]["size"], "profile_size": marks["profile"]["size"], "tip": tip});
     if let Ok(prof) = serde_json::from_value::<Similarity2Json>(fitted["profile_photo_to_model"].clone()) {
         let sim = Similarity2 { scale: prof.scale, angle: prof.angle, translation: prof.translation };
@@ -964,9 +1083,15 @@ pub fn from_photos_input() -> Value {
                 "name": {"type": "string", "minLength": 1}, "glb": {"type": "string", "description": "reuse a mesh (skips the server)"},
                 "eyes": {"type": "string", "description": "eye description for the placement (export-glb --eyes)"},
                 "sheet": {"type": "string", "description": "where to write the review sheet (default <run>/review_sheet.png)"},
-                "texture_size": {"type": "integer", "minimum": 256, "maximum": 8192}
+                "texture_size": {"type": "integer", "minimum": 256, "maximum": 8192},
+                "camera": {"type": "string", "enum": ["perspective", "orthographic"]},
+                "focal_px": {"type": "number", "exclusiveMinimum": 0},
+                "profile_upright": {"type": "boolean"},
+                "profile_align": {"type": "string", "enum": ["every_round", "first_round"]},
+                "shell_mode": shell_mode_prop(),
+                "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion tolerance (default 0.12)"}
             })),
-            store_props(),
+            merged(store_props(), base_table_prop()),
         ),
         &["front", "profile", "run", "store", "pack", "catalog", "game"],
     )
@@ -991,7 +1116,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         })
     };
     let mut ingest_in = json!({"front": text(input, "front"), "profile": text(input, "profile"), "profile_side": opt(input, "profile_side").unwrap_or("right")});
-    for k in ["run", "python", "workers", "landmarker"] {
+    for k in ["run", "python", "workers", "landmarker", "max_ratio_gap"] {
         if let Some(v) = input.get(k) {
             ingest_in[k] = v.clone();
         }
@@ -1008,19 +1133,29 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     };
     let marks = step("1 photo.landmarks", &mut || landmarks(ctx, &tools_only), &mut stages)?;
     let mut mesh_in = tools_only.clone();
-    if let Some(g) = input.get("glb") {
-        mesh_in["glb"] = g.clone();
+    for k in ["glb", "shell_mode"] {
+        if let Some(g) = input.get(k) {
+            mesh_in[k] = g.clone();
+        }
     }
     let meshed = step("2 mesh.multiview", &mut || mesh(ctx, &mesh_in), &mut stages)?;
     let reg_in = {
         let mut v = tools_only.clone();
         v["store"] = input["store"].clone();
         v["pack"] = input["pack"].clone();
+        if let Some(t) = input.get("base_landmarks") {
+            v["base_landmarks"] = t.clone();
+        }
         v
     };
     let registered = step("3 fit.register", &mut || register(ctx, &reg_in), &mut stages)?;
     let mut fit_in = reg_in.clone();
     fit_in["catalog"] = input["catalog"].clone();
+    for k in ["camera", "focal_px", "profile_upright", "profile_align"] {
+        if let Some(x) = input.get(k) {
+            fit_in[k] = x.clone();
+        }
+    }
     let fitted = step("4 fit.targets", &mut || targets(ctx, &fit_in), &mut stages)?;
     let resid = step("5 fit.residual", &mut || residual(ctx, &fit_in), &mut stages)?;
     let name = opt(input, "name").unwrap_or("photo_character").to_string();

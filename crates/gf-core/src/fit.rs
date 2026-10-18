@@ -467,9 +467,285 @@ pub fn spread_mm(values_mm: &[f64]) -> Spread {
     Spread { count: v.len(), mean_mm: v.iter().sum::<f64>() / v.len() as f64, p95_mm: p95, max_mm: v[v.len() - 1] }
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PerspectiveCamera {
+    pub focal: f64,
+    pub principal: [f64; 2],
+    pub rotation: [Point; 3],
+    pub translation: Point,
+}
+
+impl PerspectiveCamera {
+    pub fn camera_space(&self, p: Point) -> Point {
+        [
+            dot(self.rotation[0], p) + self.translation[0],
+            dot(self.rotation[1], p) + self.translation[1],
+            dot(self.rotation[2], p) + self.translation[2],
+        ]
+    }
+
+    pub fn project(&self, p: Point) -> [f64; 2] {
+        let c = self.camera_space(p);
+        [self.principal[0] + self.focal * c[0] / c[2], self.principal[1] + self.focal * c[1] / c[2]]
+    }
+
+    pub fn pixels_per_metre(&self, p: Point) -> f64 {
+        self.focal / self.camera_space(p)[2]
+    }
+
+    pub fn gradient(&self, p: Point) -> [Point; 2] {
+        let c = self.camera_space(p);
+        let s = self.focal / c[2];
+        [
+            scale(sub(self.rotation[0], scale(self.rotation[2], c[0] / c[2])), s),
+            scale(sub(self.rotation[1], scale(self.rotation[2], c[1] / c[2])), s),
+        ]
+    }
+}
+
+pub fn cross(a: Point, b: Point) -> Point {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn rodrigues(w: Point) -> [Point; 3] {
+    let th = norm(w);
+    if th < 1e-14 {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    let k = scale(w, 1.0 / th);
+    let (s, c) = th.sin_cos();
+    let mut r = [[0.0; 3]; 3];
+    for (i, row) in r.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
+            *x = k[i] * k[j] * (1.0 - c) + if i == j { c } else { 0.0 };
+        }
+    }
+    r[0][1] -= s * k[2];
+    r[0][2] += s * k[1];
+    r[1][0] += s * k[2];
+    r[1][2] -= s * k[0];
+    r[2][0] -= s * k[1];
+    r[2][1] += s * k[0];
+    r
+}
+
+fn matmul3(a: &[Point; 3], b: &[Point; 3]) -> [Point; 3] {
+    let mut r = [[0.0; 3]; 3];
+    for (i, row) in r.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
+            *x = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    r
+}
+
+fn solve_dense(n: usize, a: &[f64], b: &[f64]) -> Option<Vec<f64>> {
+    let mut m = a.to_vec();
+    let mut x = b.to_vec();
+    for col in 0..n {
+        let piv = (col..n).max_by(|i, j| m[i * n + col].abs().total_cmp(&m[j * n + col].abs()))?;
+        if m[piv * n + col].abs() < 1e-300 {
+            return None;
+        }
+        for k in 0..n {
+            m.swap(col * n + k, piv * n + k);
+        }
+        x.swap(col, piv);
+        for row in col + 1..n {
+            let f = m[row * n + col] / m[col * n + col];
+            for k in col..n {
+                m[row * n + k] -= f * m[col * n + k];
+            }
+            x[row] -= f * x[col];
+        }
+    }
+    for row in (0..n).rev() {
+        let s: f64 = (row + 1..n).map(|k| m[row * n + k] * x[k]).sum();
+        x[row] = (x[row] - s) / m[row * n + row];
+    }
+    Some(x)
+}
+
+struct CameraSeed {
+    focal: f64,
+    principal: [f64; 2],
+    rotation: [Point; 3],
+    centre_cam: Point,
+    centroid: Point,
+}
+
+impl CameraSeed {
+    fn camera(&self, q: &[f64]) -> PerspectiveCamera {
+        let r = matmul3(&rodrigues([q[0], q[1], q[2]]), &self.rotation);
+        let z = self.centre_cam[2];
+        let grow = q.get(6).map_or(1.0, |g| g.exp());
+        let c = [(self.centre_cam[0] + q[3] * z) * grow, (self.centre_cam[1] + q[4] * z) * grow, (self.centre_cam[2] + q[5] * z) * grow];
+        let rc = [dot(r[0], self.centroid), dot(r[1], self.centroid), dot(r[2], self.centroid)];
+        PerspectiveCamera { focal: self.focal * grow, principal: self.principal, rotation: r, translation: sub(c, rc) }
+    }
+}
+
+fn reprojection(cam: &PerspectiveCamera, points: &[Point], pixels: &[[f64; 2]]) -> Vec<f64> {
+    points
+        .iter()
+        .zip(pixels)
+        .flat_map(|(p, u)| {
+            let q = cam.project(*p);
+            [q[0] - u[0], q[1] - u[1]]
+        })
+        .collect()
+}
+
+fn refine_camera(seed: &CameraSeed, points: &[Point], pixels: &[[f64; 2]], params: usize) -> (Vec<f64>, f64) {
+    let mut q = vec![0.0; params];
+    let cost = |q: &[f64]| -> f64 {
+        let cam = seed.camera(q);
+        if points.iter().any(|p| cam.camera_space(*p)[2] <= 1e-6) {
+            return f64::INFINITY;
+        }
+        reprojection(&cam, points, pixels).iter().map(|r| r * r).sum()
+    };
+    let mut current = cost(&q);
+    let mut lambda = 1e-3;
+    for _ in 0..200 {
+        let r0 = reprojection(&seed.camera(&q), points, pixels);
+        let m = r0.len();
+        let mut jac = vec![0.0; m * params];
+        for k in 0..params {
+            let h = 1e-6;
+            let mut qp = q.clone();
+            qp[k] += h;
+            let rp = reprojection(&seed.camera(&qp), points, pixels);
+            for i in 0..m {
+                jac[i * params + k] = (rp[i] - r0[i]) / h;
+            }
+        }
+        let mut jtj = vec![0.0; params * params];
+        let mut jtr = vec![0.0; params];
+        for i in 0..m {
+            for a in 0..params {
+                jtr[a] -= jac[i * params + a] * r0[i];
+                for b in 0..params {
+                    jtj[a * params + b] += jac[i * params + a] * jac[i * params + b];
+                }
+            }
+        }
+        let mut improved = false;
+        for _ in 0..12 {
+            let mut damped = jtj.clone();
+            for a in 0..params {
+                damped[a * params + a] += lambda * jtj[a * params + a].max(1e-12);
+            }
+            let Some(step) = solve_dense(params, &damped, &jtr) else { break };
+            let trial: Vec<f64> = q.iter().zip(&step).map(|(a, b)| a + b).collect();
+            let c = cost(&trial);
+            if c < current {
+                let gain = current - c;
+                q = trial;
+                current = c;
+                lambda = (lambda * 0.3).max(1e-9);
+                improved = gain > 1e-12 * current.max(1e-30);
+                break;
+            }
+            lambda *= 10.0;
+        }
+        if !improved {
+            break;
+        }
+    }
+    (q, (current / points.len().max(1) as f64).sqrt())
+}
+
+pub fn fit_perspective_camera(points: &[Point], pixels: &[[f64; 2]], principal: [f64; 2], focal: Option<f64>) -> Result<PerspectiveCamera, String> {
+    let ortho = fit_ortho_camera(points, pixels)?;
+    let n = points.len() as f64;
+    let centroid = scale(points.iter().fold([0.0; 3], |a, p| add(a, *p)), 1.0 / n);
+    let rotation = [ortho.rows[0], ortho.rows[1], cross(ortho.rows[0], ortho.rows[1])];
+    let at = ortho.project(centroid);
+    let width = 2.0 * principal[0].max(principal[1]).max(1.0);
+    let seed_for = |f: f64| {
+        let z = f / ortho.scale;
+        CameraSeed { focal: f, principal, rotation, centre_cam: [(at[0] - principal[0]) * z / f, (at[1] - principal[1]) * z / f, z], centroid }
+    };
+    let candidates: Vec<f64> = match focal {
+        Some(f) if f > 0.0 => vec![f],
+        Some(_) => return Err("the focal length must be positive".into()),
+        None => [0.5, 0.7, 1.0, 1.4, 2.0, 2.8, 4.0, 5.6, 8.0, 11.0, 16.0, 24.0, 32.0].iter().map(|k| k * width).collect(),
+    };
+    let mut best: Option<(f64, CameraSeed, Vec<f64>)> = None;
+    for f in candidates {
+        let seed = seed_for(f);
+        let (q, rms) = refine_camera(&seed, points, pixels, 6);
+        if best.as_ref().is_none_or(|b| rms < b.0) {
+            best = Some((rms, seed, q));
+        }
+    }
+    let (_, seed, q) = best.ok_or("no camera candidate")?;
+    let cam = seed.camera(&q);
+    if focal.is_some() {
+        return Ok(cam);
+    }
+    let reseeded = CameraSeed {
+        focal: cam.focal,
+        principal,
+        rotation: cam.rotation,
+        centre_cam: cam.camera_space(centroid),
+        centroid,
+    };
+    let (q2, _) = refine_camera(&reseeded, points, pixels, 7);
+    let out = reseeded.camera(&q2);
+    let limit = [0.3 * width, 50.0 * width];
+    if !(limit[0]..=limit[1]).contains(&out.focal) {
+        let clamped = out.focal.clamp(limit[0], limit[1]);
+        return fit_perspective_camera(points, pixels, principal, Some(clamped));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn face_cloud() -> Vec<Point> {
+        let mut pts = Vec::new();
+        for i in 0..40 {
+            let a = i as f64 * 0.7;
+            pts.push([0.07 * a.sin(), -0.04 * (1.0 + (a * 1.3).cos()) - 0.02 * (i % 3) as f64, 1.45 + 0.09 * (a * 0.5).cos()]);
+        }
+        pts
+    }
+
+    #[test]
+    fn perspective_camera_recovers_a_known_focal() {
+        let truth = PerspectiveCamera {
+            focal: 2400.0,
+            principal: [627.0, 627.0],
+            rotation: [[0.995, 0.0998, 0.0], [0.0, 0.0, -1.0], [-0.0998, 0.995, 0.0]],
+            translation: [0.0, 0.0, 0.0],
+        };
+        let r = truth.rotation;
+        let lens = norm(r[0]);
+        let rotation = [scale(r[0], 1.0 / lens), r[1], scale(r[2], 1.0 / norm(r[2]))];
+        let mut truth = PerspectiveCamera { rotation, ..truth };
+        let centre = [0.08, -0.85, 1.46];
+        truth.translation = scale([dot(rotation[0], centre), dot(rotation[1], centre), dot(rotation[2], centre)], -1.0);
+        let pts = face_cloud();
+        let px: Vec<[f64; 2]> = pts.iter().map(|p| truth.project(*p)).collect();
+        let free = fit_perspective_camera(&pts, &px, [627.0, 627.0], None).unwrap();
+        assert!((free.focal / 2400.0 - 1.0).abs() < 0.01, "focal {}", free.focal);
+        let worst = pts.iter().zip(&px).map(|(p, u)| {
+            let q = free.project(*p);
+            ((q[0] - u[0]).powi(2) + (q[1] - u[1]).powi(2)).sqrt()
+        }).fold(0.0, f64::max);
+        assert!(worst < 1e-3, "worst {worst}");
+        let fixed = fit_perspective_camera(&pts, &px, [627.0, 627.0], Some(2400.0)).unwrap();
+        assert!(norm(sub(fixed.translation, truth.translation)) < 1e-6);
+        let g = fixed.gradient(pts[3]);
+        let h = 1e-7;
+        let moved = fixed.project(add(pts[3], [h, 0.0, 0.0]));
+        let base = fixed.project(pts[3]);
+        assert!(((moved[0] - base[0]) / h - g[0][0]).abs() < 1e-2);
+    }
 
     #[test]
     fn similarity_recovers_a_known_transform() {

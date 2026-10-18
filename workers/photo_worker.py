@@ -538,6 +538,30 @@ def outer_shell(pos, normals):
     return visible
 
 
+def outer_surface(pos, tri, cells=1000.0, tol=0.5):
+    diag = np.linalg.norm(pos.max(0) - pos.min(0))
+    cell = diag / cells
+    a, b, c = pos[tri[:, 0]], pos[tri[:, 1]], pos[tri[:, 2]]
+    cen = (a + b + c) / 3.0
+    fn = np.cross(b - a, c - a)
+    unit = fn / np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-30)
+    seen = np.zeros(len(tri), bool)
+    votes = np.zeros(len(tri))
+    for d in directions():
+        ax = np.cross(d, [0, 0, 1] if abs(d[2]) < 0.9 else [1, 0, 0])
+        ax /= np.linalg.norm(ax)
+        bx = np.cross(d, ax)
+        u, v, depth = cen @ ax / cell, cen @ bx / cell, cen @ d
+        u -= u.min()
+        v -= v.min()
+        w, h = int(u.max()) + 2, int(v.max()) + 2
+        zbuf, _ = splat(u, v, depth, w, h, 1)
+        front = depth <= zbuf[v.astype(int), u.astype(int)] + tol * cell
+        seen |= front
+        votes[front] += np.sign(unit[front] @ (-d))
+    return seen, votes, fn
+
+
 def shell(args):
     run = args["run"]
     started = time.time()
@@ -576,12 +600,26 @@ def shell(args):
         fail("no face found on the mesh from any horizontal direction", tried=tried)
     _, name, rot, img, ids, pts = best
     p = pos @ rot.T
-    if own_normals:
-        n = nrm @ rot.T
-        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-20)
+    mode = args.get("shell_mode") or "outer_triangles"
+    layer = None
+    if mode == "visible_vertices":
+        if own_normals:
+            n = nrm @ rot.T
+            n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-20)
+        else:
+            n = vertex_normals(p, tri)
+        visible = outer_shell(p, n)
     else:
-        n = vertex_normals(p, tri)
-    visible = outer_shell(p, n)
+        seen, votes, fn = outer_surface(p, tri)
+        oriented = fn[seen] * np.where(votes[seen] >= 0, 1.0, -1.0)[:, None]
+        n = np.zeros_like(p)
+        for k in range(3):
+            np.add.at(n, tri[seen, k], oriented)
+        length = np.linalg.norm(n, axis=1)
+        visible = length > 0
+        n /= np.maximum(length, 1e-30)[:, None]
+        layer = {"outer_triangles": int(seen.sum()), "flipped_to_face_out": int((votes[seen] < 0).sum()),
+                 "undecided": int((votes[seen] == 0).sum())}
     lm = lift(ids, pts, p)
     points = {k: p[v].tolist() for k, v in lm.items()}
     ov = img.copy()
@@ -593,7 +631,9 @@ def shell(args):
     cv2.imwrite(overlay, ov)
     np.save(os.path.join(run, "shell_points.npy"), p[visible].astype(np.float32))
     np.save(os.path.join(run, "shell_normals.npy"), n[visible].astype(np.float32))
-    result = {"forward": name, "tried": tried, "normals": "file" if own_normals else "computed", "vertices": int(len(p)), "triangles": int(len(tri)), "outer_vertices": int(visible.sum()),
+    result = {"forward": name, "tried": tried, "shell_mode": mode, "layer": layer,
+              "normals": ("file" if own_normals else "computed") if mode == "visible_vertices" else "outer triangles, oriented to the viewers",
+              "vertices": int(len(p)), "triangles": int(len(tri)), "outer_vertices": int(visible.sum()),
               "landmarks": len(points), "overlay": overlay, "seconds": time.time() - started}
     write_json(os.path.join(run, "shell_landmarks.json"), {"points": points, **result})
     emit({"ok": True, **result})
@@ -669,10 +709,19 @@ class Cameras:
         c = json.load(open(os.path.join(run, "cameras.json"), encoding="utf-8"))
         ing = json.load(open(os.path.join(run, "ingest.json"), encoding="utf-8"))
         self.raw = c
-        self.scale = c["front"]["scale"]
-        self.rows = np.array(c["front"]["rows"], float)
-        self.t = np.array(c["front"]["translation"], float)
-        self.forward = np.cross(self.rows[0], self.rows[1])
+        f = c["front"]
+        self.kind = f.get("kind", "orthographic")
+        if self.kind == "perspective":
+            self.rot = np.array(f["rotation"], float)
+            self.t = np.array(f["translation"], float)
+            self.focal = float(f["focal"])
+            self.principal = np.array(f["principal"], float)
+            self.forward = self.rot[2]
+        else:
+            self.scale = f["scale"]
+            self.rows = np.array(f["rows"], float)
+            self.t = np.array(f["translation"], float)
+            self.forward = np.cross(self.rows[0], self.rows[1])
         p = c.get("profile_model_to_photo")
         self.profile = p
         self.side = ing["profile"]["side"]
@@ -680,6 +729,9 @@ class Cameras:
         self.profile_size = c["profile_size"]
 
     def front(self, x):
+        if self.kind == "perspective":
+            c = x @ self.rot.T + self.t
+            return self.focal * c[:, :2] / c[:, 2:3] + self.principal, c[:, 2]
         return self.scale * x @ self.rows.T + self.t, x @ self.forward
 
     def side_view(self, x):
