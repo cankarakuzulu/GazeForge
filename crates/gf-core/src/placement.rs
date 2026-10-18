@@ -335,13 +335,13 @@ pub(crate) fn project(points: &[[f64; 3]], owner: &[u32], game: &[[f64; 3]], mes
     })
 }
 
-struct Sparse {
-    cols: Vec<Vec<u32>>,
-    vals: Vec<Vec<f64>>,
+pub(crate) struct Sparse {
+    pub(crate) cols: Vec<Vec<u32>>,
+    pub(crate) vals: Vec<Vec<f64>>,
 }
 
 impl Sparse {
-    fn new(mesh: &Decimated, count: usize) -> Sparse {
+    pub(crate) fn new(mesh: &Decimated, count: usize) -> Sparse {
         let mut cols: Vec<Vec<u32>> = (0..count as u32).map(|i| vec![i]).collect();
         for tri in &mesh.triangles {
             for e in 0..3 {
@@ -356,7 +356,7 @@ impl Sparse {
         Sparse { cols, vals }
     }
 
-    fn add(&mut self, r: u32, c: u32, v: f64) {
+    pub(crate) fn add(&mut self, r: u32, c: u32, v: f64) {
         let k = self.cols[r as usize].iter().position(|&x| x == c).unwrap();
         self.vals[r as usize][k] += v;
     }
@@ -368,7 +368,7 @@ impl Sparse {
     }
 }
 
-fn conjugate_gradient(a: &Sparse, b: &[f64], x: &mut [f64]) {
+pub(crate) fn conjugate_gradient(a: &Sparse, b: &[f64], x: &mut [f64]) {
     let n = b.len();
     let inverse_diagonal: Vec<f64> = (0..n).map(|r| 1.0 / a.vals[r][0].max(1e-300)).collect();
     let mut ax = vec![0.0; n];
@@ -617,22 +617,6 @@ pub(crate) fn repair_by<A: Fn(&[[f64; 3]], &[u32]) -> bool>(
     moved.iter().filter(|&&m| m).count()
 }
 
-pub(crate) fn nose_tip(game: &[[f64; 3]]) -> [f64; 3] {
-    let mut zs: Vec<f64> = game.iter().map(|p| p[2]).collect();
-    zs.sort_by(f64::total_cmp);
-    let percentile = |q: f64| {
-        let at = q / 100.0 * (zs.len() - 1) as f64;
-        let (lo, hi) = (at.floor() as usize, at.ceil() as usize);
-        zs[lo] + (zs[hi] - zs[lo]) * (at - lo as f64)
-    };
-    let (z95, z30) = (percentile(95.0), percentile(30.0));
-    game.iter()
-        .filter(|p| p[0].abs() < 0.004 && p[2] < z95 && p[2] > z30)
-        .min_by(|a, b| a[1].total_cmp(&b[1]))
-        .copied()
-        .unwrap_or([0.0; 3])
-}
-
 pub(crate) fn angle_weighted_normals(positions: &[[f64; 3]], triangles: &[[u32; 3]]) -> Vec<[f64; 3]> {
     let mut out = vec![[0.0f64; 3]; positions.len()];
     for tri in triangles {
@@ -689,11 +673,10 @@ pub struct Orientation {
     pub front_worst: Vec<(u32, f64)>,
 }
 
-pub fn orientation(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &Decimated, game: &[[f64; 3]]) -> Orientation {
+pub fn orientation(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &Decimated, game: &[[f64; 3]], tip: [f64; 3]) -> Orientation {
     let normals = angle_weighted_normals(positions, dense_triangles);
     let kept_normals: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| normals[d as usize]).collect();
     let references = triangle_references(mesh, &kept_normals);
-    let tip = nose_tip(game);
     let mut o = Orientation { tip, ..Default::default() };
     let mut front: Vec<(u32, f64)> = Vec::new();
     for (t, tri) in mesh.triangles.iter().enumerate() {
@@ -723,14 +706,13 @@ pub fn orientation(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &
     o
 }
 
-pub fn measure(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &Decimated, game: &[[f64; 3]]) -> Measure {
+pub fn measure(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &Decimated, game: &[[f64; 3]], tip: [f64; 3]) -> Measure {
     let vtris = vertex_triangles(mesh, game.len());
     let rings = ring_triangles(mesh, &vtris);
     let hits = project(positions, &mesh.owner, game, mesh, &rings, (positions.len() / 300_000).max(1));
     let mut gaps: Vec<f64> = hits.iter().filter(|h| h.0 != u32::MAX).map(|h| h.2.sqrt() * 1000.0).collect();
     gaps.sort_by(f64::total_cmp);
-    let tip = nose_tip(game);
-    let mut m = Measure { orientation: orientation(positions, dense_triangles, mesh, game), ..Default::default() };
+    let mut m = Measure { orientation: orientation(positions, dense_triangles, mesh, game, tip), ..Default::default() };
     if !gaps.is_empty() {
         m.proxy_mean_mm = gaps.iter().sum::<f64>() / gaps.len() as f64;
         m.proxy_p95_mm = gaps[((gaps.len() - 1) as f64 * 0.95) as usize];

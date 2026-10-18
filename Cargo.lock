@@ -91,6 +91,8 @@ name = "gf-cli"
 version = "0.1.0"
 dependencies = [
  "gf-core",
+ "ndarray",
+ "ndarray-npy",
  "serde_json",
 ]
 

@@ -161,7 +161,7 @@ impl<'a> Surface<'a> {
         best
     }
 
-    fn uv(&self, hit: Hit) -> Uv {
+    pub(crate) fn uv(&self, hit: Hit) -> Uv {
         let t = self.uvs[hit.0 as usize];
         [0, 1].map(|k| (hit.1[0] * t[0][k] as f64 + hit.1[1] * t[1][k] as f64 + hit.1[2] * t[2][k] as f64) as f32)
     }
