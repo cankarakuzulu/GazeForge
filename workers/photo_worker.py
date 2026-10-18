@@ -654,6 +654,7 @@ def shell(args):
         offset += len(m["positions"])
     pos, tri, col, nrm = np.concatenate(pos), np.concatenate(tri), np.concatenate(col), np.concatenate(nrm)
     own_normals = not np.isnan(nrm).any()
+    clay = vertex_normals(pos, tri) if all(m["image"] is None or m["uv"] is None for m in meshes) else None
     det = landmarker(args["landmarker"])
     up = np.array([0.0, 1.0, 0.0])
     best = None
@@ -663,6 +664,8 @@ def shell(args):
         rot = np.array([np.cross(-f, up), -f, up])
         p = pos @ rot.T
         px_size = (p[:, 0].max() - p[:, 0].min()) / 700.0
+        if clay is not None:
+            col = np.repeat((40 + 200 * np.abs(clay @ rot[1])).astype(np.uint8)[:, None], 3, 1)
         img, ids = surface_render(p, tri, col, px_size)
         pts = detect(det, cv2.medianBlur(np.ascontiguousarray(img[:min(img.shape[:2])]), 3))
         score = None if pts is None else abs(yaw_asymmetry(pts))

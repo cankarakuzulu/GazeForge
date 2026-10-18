@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Instant;
 
-use gf_core::fit::{self, PerspectiveCamera, Point};
+use gf_core::fit::{self, PerspectiveCamera, Point, PointGrid, Similarity};
 use gf_core::gates::{self, ShellLimits};
 use gf_io::dense as dio;
 use serde_json::{Value, json};
@@ -560,6 +560,125 @@ fn camera_json(cam: &PerspectiveCamera) -> Value {
            "convention": "camera space c = R x + t; u = cx + f c0 / c2, v = cy + f c1 / c2 (pixels from the top left)"})
 }
 
+struct Shell {
+    points: Vec<Point>,
+    normals: Vec<Point>,
+    marks: Vec<(usize, Point)>,
+}
+
+struct ShellMatch {
+    vertex: usize,
+    point: Point,
+    normal: Point,
+    residual: f64,
+    source: Point,
+}
+
+struct ShellState {
+    shell: Shell,
+    sim: Similarity,
+    marks: Vec<(Point, usize)>,
+    pool: Vec<bool>,
+    seen: Vec<bool>,
+    cand: Vec<usize>,
+    weight: f64,
+    radius: f64,
+    tolerance: f64,
+    log: Vec<Value>,
+}
+
+fn load_shell(dir: &str) -> Result<Shell, ApiError> {
+    let dir = Path::new(dir);
+    let points = dio::read_points(&dir.join("shell_points.npy")).map_err(ApiError::not_found)?;
+    let normals = dio::read_points(&dir.join("shell_normals.npy")).map_err(ApiError::not_found)?;
+    if points.len() != normals.len() || points.len() < 1000 {
+        return Err(ApiError::invalid(format!("{}: the shell needs as many normals as points, and at least 1000", dir.display())));
+    }
+    let doc = read_json(&dir.join("shell_landmarks.json"))?;
+    let marks = doc["points"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| {
+            let a = v.as_array()?;
+            Some((k.parse().ok()?, [a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?]))
+        })
+        .collect();
+    Ok(Shell { points, normals, marks })
+}
+
+fn shell_start(shell: &Shell, p: &[Point], lm: &BTreeMap<usize, usize>) -> Result<(Similarity, Vec<(Point, usize)>), ApiError> {
+    let pairs: Vec<(Point, usize)> = shell.marks.iter().filter(|(i, _)| STABLE_LANDMARKS.contains(i)).filter_map(|(i, s)| lm.get(i).map(|v| (*s, *v))).collect();
+    if pairs.len() < 8 {
+        return Err(ApiError::invalid(format!("the shell has {} landmarks in the base table; 8 are needed to place it", pairs.len())));
+    }
+    let solve = |pairs: &[(Point, usize)]| {
+        let src: Vec<Point> = pairs.iter().map(|x| x.0).collect();
+        let dst: Vec<Point> = pairs.iter().map(|x| p[x.1]).collect();
+        fit::similarity(&src, &dst, &vec![1.0; src.len()], true).map_err(ApiError::invalid)
+    };
+    let sim = solve(&pairs)?;
+    let res: Vec<f64> = pairs.iter().map(|(s, v)| fit::norm(fit::sub(sim.apply(*s), p[*v]))).collect();
+    let mut sorted = res.clone();
+    sorted.sort_by(f64::total_cmp);
+    let cut = 2.5 * sorted[sorted.len() / 2];
+    let kept: Vec<(Point, usize)> = pairs.iter().zip(&res).filter(|(_, r)| **r <= cut).map(|(x, _)| *x).collect();
+    Ok((solve(&kept)?, kept))
+}
+
+fn shell_match(shell: &Shell, sim: &Similarity, x: &[Point], cand: &[usize], radius: f64) -> Vec<ShellMatch> {
+    let grid = PointGrid::new(shell.points.iter().map(|q| sim.apply(*q)).collect(), 0.002);
+    let mut out = Vec::new();
+    for &v in cand {
+        if let Some((i, _)) = grid.nearest(x[v], radius) {
+            let s = grid.points()[i];
+            let n = sim.rotate(shell.normals[i]);
+            let len = fit::norm(n);
+            if len < 1e-12 {
+                continue;
+            }
+            let n = fit::scale(n, 1.0 / len);
+            out.push(ShellMatch { vertex: v, point: s, normal: n, residual: fit::dot(n, fit::sub(x[v], s)), source: shell.points[i] });
+        }
+    }
+    if out.len() > 20 {
+        let mut a: Vec<f64> = out.iter().map(|m| m.residual.abs()).collect();
+        a.sort_by(f64::total_cmp);
+        let cut = (3.0 * a[a.len() / 2]).max(0.0005);
+        out.retain(|m| m.residual.abs() <= cut);
+    }
+    out
+}
+
+fn shell_update(st: &ShellState, x: &[Point]) -> Option<Similarity> {
+    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius);
+    if m.len() < 100 {
+        return None;
+    }
+    let mut d: Vec<f64> = m.iter().map(|k| fit::norm(fit::sub(k.point, x[k.vertex]))).collect();
+    d.sort_by(f64::total_cmp);
+    let cut = d[(d.len() as f64 * 0.8) as usize];
+    let kept: Vec<&ShellMatch> = m.iter().filter(|k| fit::norm(fit::sub(k.point, x[k.vertex])) <= cut).collect();
+    let mut src: Vec<Point> = kept.iter().map(|k| k.source).collect();
+    let mut dst: Vec<Point> = kept.iter().map(|k| x[k.vertex]).collect();
+    let mut w = vec![1.0; src.len()];
+    let lw = 0.5 * kept.len() as f64 / st.marks.len().max(1) as f64;
+    for (s, v) in &st.marks {
+        src.push(*s);
+        dst.push(x[*v]);
+        w.push(lw);
+    }
+    fit::similarity(&src, &dst, &w, true).ok()
+}
+
+fn shell_report(st: &ShellState, x: &[Point]) -> Value {
+    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius);
+    let r: Vec<f64> = m.iter().map(|k| k.residual * 1000.0).collect();
+    let lm: Vec<f64> = st.marks.iter().map(|(s, v)| fit::norm(fit::sub(st.sim.apply(*s), x[*v])) * 1000.0).collect();
+    json!({"points": st.shell.points.len(), "landmark_pairs": st.marks.len(), "landmark_rms_mm": rms(&lm), "candidates": st.cand.len(),
+           "matched": m.len(), "residual_rms_mm": rms(&r), "residual_p95_mm": p95(&r), "scale": st.sim.scale, "rounds": st.log})
+}
+
 pub fn input() -> Value {
     obj(
         photo::merged(
@@ -580,7 +699,12 @@ pub fn input() -> Value {
                     "pose_prior_deg": {"type": "number", "minimum": 0, "description": "how far the gated front and profile may turn from straight before it costs as much as every observation being 1 px off (default 3; 0 frees them)"},
                     "focal_px": {"type": "number", "exclusiveMinimum": 0, "description": "every photo's focal length in pixels (default 70/36 of the photo width: a 70 mm full-frame lens)"},
                     "outline_regions": {"type": "array", "items": {"type": "string", "enum": fit::REGIONS}, "description": "regions whose outline is fitted (default all but skull and neck: hair and clothing)"},
-                    "leave_out": {"type": "string", "description": "a view name: fit without it, then solve its camera and report how well the fit predicts its outline and landmarks"}
+                    "leave_out": {"type": "string", "description": "a view name: fit without it, then solve its camera and report how well the fit predicts its outline and landmarks"},
+                    "shell": {"type": "string", "description": "a directory holding a generated mesh's outer shell (shell_points.npy, shell_normals.npy, shell_landmarks.json, as mesh.multiview writes them): adds a dense surface term, the shell placed by its landmarks and re-registered every round"},
+                    "shell_weight": {"type": "number", "minimum": 0, "description": "weight of the shell term relative to the landmark term (default 3)"},
+                    "shell_regions": {"type": "array", "items": {"type": "string", "enum": fit::REGIONS}, "description": "regions the shell term pulls (default all but eyes and neck: eyeballs and the cut neck)"},
+                    "shell_radius_mm": {"type": "number", "exclusiveMinimum": 0, "description": "how far a vertex looks for the shell (default 8)"},
+                    "shell_tolerance_mm": {"type": "number", "minimum": 0, "description": "a dead band: a vertex within this distance of the shell (along its normal) is not pulled, one further away is pulled to the band's edge (default 2: about the generated surface's own error)"}
                 }),
             ),
         ),
@@ -617,6 +741,20 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let eyes = photo::eye_centres(p, &lm);
     let region: Vec<usize> = p.iter().map(|q| fit::region(photo::mm(fit::sub(*q, tip)), photo::eye_gap_mm(*q, &eyes))).collect();
     let allowed: Vec<bool> = region.iter().map(|r| region_names.iter().any(|n| n == fit::REGIONS[*r])).collect();
+    let mut surface = match opt(input, "shell") {
+        Some(dir) => {
+            let loaded = load_shell(dir)?;
+            let (sim, marks) = shell_start(&loaded, p, &lm)?;
+            let names: Vec<String> = match input.get("shell_regions").and_then(Value::as_array) {
+                Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                None => fit::REGIONS.iter().filter(|r| **r != "eyes" && **r != "neck").map(|r| r.to_string()).collect(),
+            };
+            let pool: Vec<bool> = region.iter().map(|r| names.iter().any(|n| n == fit::REGIONS[*r])).collect();
+            Some(ShellState { shell: loaded, sim, marks, seen: vec![false; p.len()], pool, cand: Vec::new(), weight: num(input, "shell_weight", 3.0),
+                              radius: num(input, "shell_radius_mm", 8.0) / 1000.0, tolerance: num(input, "shell_tolerance_mm", 2.0) / 1000.0, log: Vec::new() })
+        }
+        None => None,
+    };
 
     let mut views: Vec<View> = Vec::new();
     for rec in views_doc["views"].as_array().ok_or_else(|| ApiError::invalid(format!("{views_path} has no views")))? {
@@ -716,6 +854,16 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             let prior_of = view.nominal.as_ref().filter(|_| pose_sigma > 0.0).map(|r| (r, total / pose_sigma.to_radians().powi(2)));
             refine_pose(&mut view.cam, &obs, 12, prior_of);
             fr = frame(&view.cam, &x, tris, view.size);
+            if round == 0
+                && !view.left_out
+                && let Some(st) = surface.as_mut()
+            {
+                for v in 0..x.len() {
+                    if st.pool[v] && !st.seen[v] && fr.visible(v, 0.004) {
+                        st.seen[v] = true;
+                    }
+                }
+            }
             let rim = fr.rim(&allowed);
             let (matched, rim_total) = match_outline(view, &fr, &rim, if last { RADII_PX[RADII_PX.len() - 1] } else { radius });
             let marks = visible_marks(view, &fr, &x, &normals, &lm, &mark_set);
@@ -760,8 +908,30 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             }
         }
         log.push(json!({"round": round, "radius_px": radius, "views": round_log}));
+        if round == 0
+            && let Some(st) = surface.as_mut()
+        {
+            let all: Vec<usize> = (0..p.len()).filter(|v| st.seen[*v]).collect();
+            st.cand = all.iter().copied().step_by((all.len() / 20000).max(1)).collect();
+        }
         if last || round == 0 {
             continue;
+        }
+        if let Some(st) = surface.as_mut() {
+            for _ in 0..2 {
+                if let Some(s) = shell_update(st, &x) {
+                    st.sim = s;
+                }
+            }
+            let matched = shell_match(&st.shell, &st.sim, &x, &st.cand, st.radius);
+            let shell_w = st.weight / matched.len().max(1) as f64;
+            for m in matched.iter().filter(|m| m.residual.abs() > st.tolerance) {
+                let rows = targets.rows(m.vertex).to_vec();
+                let goal = fit::dot(m.normal, fit::sub(m.point, p[m.vertex])) + m.residual.signum() * st.tolerance;
+                acc.add(&Normal::row(&rows, m.normal), goal, shell_w);
+            }
+            let r: Vec<f64> = matched.iter().map(|m| m.residual * 1000.0).collect();
+            st.log.push(json!({"round": round, "matched": matched.len(), "residual_rms_mm": rms(&r), "scale": st.sim.scale}));
         }
         let sw = wsym / sym_pairs.len().max(1) as f64;
         for (i, j) in &sym_pairs {
@@ -790,7 +960,7 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         per_view.insert(name, s);
     }
     let weights: BTreeMap<String, f64> = targets.ids.iter().zip(&w).filter(|(_, x)| **x > 1e-6).map(|(k, x)| (k.clone(), (x * 1e6).round() / 1e6)).collect();
-    let report = json!({
+    let mut report = json!({
         "targets": t, "nonzero": weights.len(), "at_1": w.iter().filter(|x| **x >= 1.0 - 1e-9).count(),
         "weights_in_bounds": w.iter().all(|x| (0.0..=1.0).contains(x)), "weight_min": w.iter().copied().fold(f64::INFINITY, f64::min),
         "weight_max": w.iter().copied().fold(f64::NEG_INFINITY, f64::max), "weights": weights,
@@ -800,6 +970,12 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "shell_gate": shell, "rounds": log, "load_seconds": load_seconds, "seconds": started.elapsed().as_secs_f64(),
         "fitted": run.join("fitted_dense.npy").display().to_string()
     });
+    if let Some(st) = &surface {
+        report["shell"] = shell_report(st, &x);
+        report["term_weights"]["shell"] = json!(st.weight);
+        report["term_weights"]["shell_radius_mm"] = json!(st.radius * 1000.0);
+        report["term_weights"]["shell_tolerance_mm"] = json!(st.tolerance * 1000.0);
+    }
     write_json(&run.join("fit_photos.json"), &report)?;
     Ok(report)
 }
@@ -895,11 +1071,25 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     views_in["photos"] = json!(photos);
     let t0 = Instant::now();
     let viewed = step("1 photo.views", views(ctx, &views_in), t0)?;
+    let mut dense_shell = Value::Null;
+    if input.get("dense_shell").and_then(Value::as_bool) == Some(true) {
+        let mut mesh_in = tools.clone();
+        for k in ["server", "graph", "glb", "shell_mode"] {
+            if let Some(v) = input.get(k) {
+                mesh_in[k] = v.clone();
+            }
+        }
+        let t0 = Instant::now();
+        dense_shell = step("2 mesh.multiview", photo::mesh(ctx, &mesh_in), t0)?;
+    }
     let mut fit_in = input.get("fit_options").cloned().filter(Value::is_object).unwrap_or(json!({}));
     for k in ["run", "store", "pack", "catalog", "base_landmarks"] {
         if let Some(v) = input.get(k) {
             fit_in[k] = v.clone();
         }
+    }
+    if !dense_shell.is_null() {
+        fit_in["shell"] = json!(run.display().to_string());
     }
     let errors = crate::schema::validate(&self::input(), &fit_in);
     if !errors.is_empty() {
@@ -928,12 +1118,15 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         sheet(ctx, &s)
     });
     let reviewed = step("8b review.views", made, t0)?;
-    let report = json!({"run": run.display().to_string(), "fit": "photos", "spec": spec_path.display().to_string(), "glb": glb.display().to_string(),
+    let mut report = json!({"run": run.display().to_string(), "fit": "photos", "spec": spec_path.display().to_string(), "glb": glb.display().to_string(),
                         "sheet": sheet_out, "total_seconds": started.elapsed().as_secs_f64(), "stages": stages,
                         "facing": ingested.get("facing"), "views": viewed.get("views").and_then(Value::as_array).map(Vec::len),
                         "fitted": {"nonzero": fitted["nonzero"], "views": fitted["views"], "shell_gate": fitted["shell_gate"], "weights_in_bounds": fitted["weights_in_bounds"]},
                         "export": exported, "review": reviewed,
                         "texture": "not projected: texture.project reads the mesh path's orthographic front and profile cameras"});
+    if !dense_shell.is_null() {
+        report["dense_shell"] = json!({"mesh": dense_shell, "fit": fitted["shell"]});
+    }
     write_json(&run.join("from_photos.json"), &report)?;
     Ok(report)
 }
@@ -989,7 +1182,10 @@ mod tests {
         assert_eq!(input().get("additionalProperties"), Some(&Value::Bool(false)));
         let ok = crate::schema::validate(&input(), &json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "landmarks": "dense", "leave_out": "front"}));
         assert!(ok.is_empty(), "{ok:?}");
-        assert!(!crate::schema::validate(&input(), &json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "shell_weight": 1})).is_empty());
+        assert!(!crate::schema::validate(&input(), &json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "surface_weight": 1})).is_empty());
+        let shell = json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "shell": "d", "shell_weight": 3, "shell_tolerance_mm": 2, "shell_regions": ["nose"]});
+        assert!(crate::schema::validate(&input(), &shell).is_empty());
+        assert!(!crate::schema::validate(&input(), &json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "shell_regions": ["face"]})).is_empty());
         assert!(!crate::schema::validate(&views_input(), &json!({"run": "r", "photos": [{"name": "a", "path": "b", "role": "side"}, {"name": "c", "path": "d", "role": "front"}]})).is_empty());
     }
 
