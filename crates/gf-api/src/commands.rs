@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, designer, jobs, registry};
+use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -157,6 +157,87 @@ pub static REGISTRY: &[CommandDef] = &[
         input: slow_input,
         output: slow_output,
         run: jobs::slow,
+    },
+    CommandDef {
+        name: "photo.ingest",
+        kind: Kind::Query,
+        summary: "Stage 0 of image to character: read a front and a profile photo into a run directory and check facing (the front looks at the camera, the profile shows the declared side, both photos agree on proportions).",
+        limits: "A failed check is an error (gate_failed) and the run stops; nothing is averaged. A mirrored front photo of a symmetric face cannot be detected.",
+        input: photo::ingest_input,
+        output: photo::generic_output,
+        run: photo::ingest,
+    },
+    CommandDef {
+        name: "photo.landmarks",
+        kind: Kind::Job,
+        summary: "Stage 1: 478 face landmarks on the front photo, the silhouette and profile line of the profile photo, and an overlay image of each for review.",
+        limits: "Read the overlays before trusting any number: lips and chin are where trackers fail. Needs the Python worker and the MediaPipe landmarker model.",
+        input: photo::landmarks_input,
+        output: photo::generic_output,
+        run: photo::landmarks,
+    },
+    CommandDef {
+        name: "mesh.multiview",
+        kind: Kind::Job,
+        summary: "Stage 2: a 3D mesh from the front and profile photos through an external image-to-mesh server, then its outer shell (visible surface only) and 3D landmarks on it.",
+        limits: "The server and its graph are external (server, graph or GAZEFORGE_MESH_SERVER / GAZEFORGE_MESH_GRAPH); the mesh has no metric scale. Pass glb to reuse a mesh.",
+        input: photo::mesh_input,
+        output: photo::generic_output,
+        run: photo::mesh,
+    },
+    CommandDef {
+        name: "fit.register",
+        kind: Kind::Job,
+        summary: "Stage 3: similarity transform of the outer shell onto the dense base from matched landmarks, refined by trimmed ICP on the face; landmark residual in mm.",
+        limits: "Scale comes from the base's landmark spans: photos carry no absolute size.",
+        input: photo::register_input,
+        output: photo::generic_output,
+        run: photo::register,
+    },
+    CommandDef {
+        name: "fit.targets",
+        kind: Kind::Job,
+        summary: "Stage 4: bounded least squares ([0, 1]) over the head targets on the dense topology, with terms for distance to the registered shell, front-photo landmark reprojection and the profile silhouette; per-region residual in mm.",
+        limits: "Correspondence to the shell is by nearest point, re-found each round; hair-covered skull and the eyelids are not trusted.",
+        input: photo::targets_input,
+        output: photo::generic_output,
+        run: photo::targets,
+    },
+    CommandDef {
+        name: "fit.residual",
+        kind: Kind::Job,
+        summary: "Stage 5: a bounded residual toward the shell (trust radius, smoothing, eye hold) checked by the shell gates (folds, inner surfaces, roughness).",
+        limits: "The residual is backed off (strength 1, 0.7, 0.5, 0.35, 0.25) until the gates pass; if none passes it is refused and nothing is written. plant adds a deliberate defect (never scaled) to prove the refusal.",
+        input: photo::residual_input,
+        output: photo::generic_output,
+        run: photo::residual,
+    },
+    CommandDef {
+        name: "texture.project",
+        kind: Kind::Job,
+        summary: "Stage 7: project the photos onto the character's game UVs through the fitted cameras, blended by facing and visibility; camera rms in px.",
+        limits: "Orthographic cameras; no delighting unless albedo images are given.",
+        input: photo::texture_input,
+        output: photo::generic_output,
+        run: photo::texture,
+    },
+    CommandDef {
+        name: "review.sheet",
+        kind: Kind::Job,
+        summary: "Stage 8: a review sheet with the photos beside renders of the result (textured and clay) at the fitted front and profile cameras.",
+        limits: "A software render for comparison, not the engine's lookdev.",
+        input: photo::sheet_input,
+        output: photo::generic_output,
+        run: photo::sheet,
+    },
+    CommandDef {
+        name: "character.from_photos",
+        kind: Kind::Job,
+        summary: "Image to character, stages 0 to 8 end to end: ingest and facing, landmarks, mesh, register, targets, residual, spec and glb export, texture, review sheet; logs per-stage times.",
+        limits: "Stops at the first failing stage with that stage's error and the times so far.",
+        input: photo::from_photos_input,
+        output: photo::generic_output,
+        run: photo::from_photos,
     },
 ];
 

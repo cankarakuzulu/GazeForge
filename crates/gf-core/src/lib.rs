@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod fit;
 pub mod game_mesh;
 pub mod gates;
 pub mod character;

@@ -6,6 +6,7 @@ mod commands;
 pub mod designer;
 pub mod error;
 pub mod jobs;
+pub mod photo;
 mod process;
 pub mod schema;
 
