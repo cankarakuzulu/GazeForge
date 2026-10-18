@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use gf_core::placement::{self as gp, DenseMesh, Placement, PlacementVersion};
 use gf_geom::decimate::{self, Decimated, Settings};
-use gf_geom::{lids, placement, placement_f2, placement_f3};
+use gf_geom::{lids, placement, placement_f2, placement_f3, placement_f5};
 use gf_io::dense::{self, Dense};
 use gf_io::{game_base, obj};
 use serde_json::{Value, json};
@@ -32,6 +32,9 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
               [--f3-eye-rounds 1] [--f3-eye-samples 6]
               f4 = f3 + an angle pass: every f3 option, and [--f4-target 10] [--f4-passes 12] [--f4-step 0.25] [--f4-gain 0.5] [--f4-fold 60]
               [--f4-backoff dense|subset] [--f4-plane game|dense]
+              f5 only: [--f5-tangential 0.01] [--f5-smooth 0.1] [--f5-membrane 0.1] [--f5-max-move 3]
+              [--f5-uv-ring 2] [--f5-normals subset|dense] [--eyes EYES.json]
+              [--f5-eye-front 75] [--f5-eye-clearance 0.05] [--f5-eye-depth 0.3,0.6]
   collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
               [--front-deg 75] [--smooth 4]
   store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
@@ -116,6 +119,18 @@ const F3_KEYS: &[&str] = &[
     "f3-eye-samples",
 ];
 const F4_KEYS: &[&str] = &["f4-target", "f4-passes", "f4-step", "f4-gain", "f4-fold", "f4-backoff", "f4-plane"];
+const F5_KEYS: &[&str] = &[
+    "f5-tangential",
+    "f5-smooth",
+    "f5-membrane",
+    "f5-max-move",
+    "f5-uv-ring",
+    "f5-normals",
+    "eyes",
+    "f5-eye-front",
+    "f5-eye-depth",
+    "f5-eye-clearance",
+];
 const COLLIDE_KEYS: &[&str] = &["dense", "positions", "eyes", "out", "clearance", "front-deg", "smooth"];
 
 pub(crate) type Options = HashMap<String, String>;
@@ -246,6 +261,7 @@ pub(crate) fn placement_keys(name: &str) -> &'static [&'static [&'static str]] {
         "fit" => &[FIT_KEYS],
         "f2" => &[FIT_KEYS, F2_KEYS],
         "f3" => &[F3_KEYS],
+        "f5" => &[F5_KEYS],
         _ => &[F3_KEYS, F4_KEYS],
     }
 }
@@ -253,6 +269,7 @@ pub(crate) fn placement_keys(name: &str) -> &'static [&'static [&'static str]] {
 pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dyn Placement>, String> {
     Ok(match version.name {
         "f3" | "f4" => Box::new(f3_placement(opts, version.name)?),
+        "f5" => Box::new(f5_placement(opts)?),
         "subset" => Box::new(gp::Subset),
         "optimal" => Box::new(gp::Optimal { max_move: number(opts, "max-move", 3.0)? / 1000.0 }),
         "fit" => Box::new(gp::Fit { settings: fit_settings(opts)? }),
@@ -266,7 +283,7 @@ pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dy
 fn export_obj(opts: &Options) -> Result<Value, String> {
     let given = opts.get("placement").map(String::as_str).unwrap_or("optimal");
     let version = PlacementVersion::parse(given)
-        .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
+        .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4, f5 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
     let mut allowed: Vec<&[&str]> = vec![EXPORT_KEYS];
     allowed.extend_from_slice(placement_keys(version.name));
     only(opts, &format!("export-obj --placement {given}"), &allowed)?;
@@ -402,6 +419,32 @@ fn f3_placement(opts: &Options, name: &str) -> Result<gp::F3, String> {
         None => Vec::new(),
     };
     Ok(gp::F3 { settings, eyes })
+}
+
+fn f5_placement(opts: &Options) -> Result<gp::F5, String> {
+    let settings = placement_f5::F5Settings {
+        tangential: number(opts, "f5-tangential", 0.01)?,
+        smooth: number(opts, "f5-smooth", 0.1)?,
+        membrane: number(opts, "f5-membrane", 0.1)?,
+        max_move: number(opts, "f5-max-move", 3.0)? / 1000.0,
+        uv_ring: count(opts, "f5-uv-ring", 2)?,
+        subset_normals: match opts.get("f5-normals").map(String::as_str).unwrap_or("subset") {
+            "subset" => true,
+            "dense" => false,
+            other => return Err(format!("--f5-normals must be subset or dense, got {other}")),
+        },
+        eye_clearance: number(opts, "f5-eye-clearance", 0.05)? / 1000.0,
+        eye_depth: pair(opts, "f5-eye-depth", [0.3, 0.6])?.map(|x| x / 1000.0),
+        eye_front_deg: number(opts, "f5-eye-front", 75.0)?,
+    };
+    if settings.eye_front_deg < 10.0 {
+        return Err(format!("--f5-eye-front must be at least 10 (its fade starts 10 degrees inside it), got {}", settings.eye_front_deg));
+    }
+    let eyes = match opts.get("eyes") {
+        Some(path) => gf_io::load_eyes(Path::new(path))?,
+        None => Vec::new(),
+    };
+    Ok(gp::F5 { settings, eyes })
 }
 
 fn collide_lids(opts: &Options) -> Result<Value, String> {

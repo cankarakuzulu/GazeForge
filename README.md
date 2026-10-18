@@ -51,12 +51,20 @@ Export a shape (the base, a target, or any positions over the dense order) at ga
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement optimal|fit|f2|f3|f4|subset|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
+                     [--placement optimal|fit|f2|f3|f4|f5|subset|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
-Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`) and never changes once released;
-a bare name means its latest version, and `f3/1` is the default of a character spec. With `--eyes`, `f3` keeps the
-placed eyelids outside the eyeballs. The output names the version it ran (`placement_version`).
+Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`, `f5/1`) and never changes once
+released; a bare name means its latest version, and `f3/1` is the default of a character spec. With `--eyes`, `f3` and `f5`
+keep the placed eyelids outside the eyeballs. The output names the version it ran (`placement_version`).
+
+`f5` is the continuous placement: a small change to the dense shape makes a proportionally small change to the game mesh.
+Each dense vertex is tied to a fixed game triangle and barycentric weights found in texture space (they do not depend on
+the shape), and the game mesh is one linear least-squares solve: distance to the dense surface along normals taken from
+the game-resolution subset, a weak pull toward the fixed correspondence, edge vectors kept close to the subset's, and a
+tangential membrane that keeps triangles open. Seam vertices move along those normals only; the eyelid lift uses smooth
+fades instead of cut-offs. There are no accept/reject steps, nearest-surface searches or data-dependent iteration counts
+in the positions (the linear solver stops at a relative residual of 1e-13).
 
 Push a character's eyelid skin out of its eyeballs at dense resolution:
 

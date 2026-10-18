@@ -6,6 +6,7 @@ use gf_geom::lids::{self, Eye};
 use gf_geom::placement::{self as pl, FitSettings};
 use gf_geom::placement_f2::{self, F2Settings};
 use gf_geom::placement_f3::{self, F3Settings};
+use gf_geom::placement_f5::{self, F5Settings};
 use serde_json::{Map, Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub const RELEASED: &[PlacementVersion] = &[
     PlacementVersion { name: "f2", version: 1 },
     PlacementVersion { name: "f3", version: 1 },
     PlacementVersion { name: "f4", version: 1 },
+    PlacementVersion { name: "f5", version: 1 },
 ];
 
 pub const DEFAULT: PlacementVersion = PlacementVersion { name: "f3", version: 1 };
@@ -78,6 +80,11 @@ pub struct F2 {
 
 pub struct F3 {
     pub settings: F3Settings,
+    pub eyes: Vec<Eye>,
+}
+
+pub struct F5 {
+    pub settings: F5Settings,
     pub eyes: Vec<Eye>,
 }
 
@@ -159,6 +166,33 @@ impl Placement for F3 {
     }
 }
 
+impl Placement for F5 {
+    fn version(&self) -> PlacementVersion {
+        PlacementVersion { name: "f5", version: 1 }
+    }
+    fn place(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated) -> Placed {
+        let (game, triangle_uvs, stats) =
+            placement_f5::place(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings);
+        let lids = (!self.eyes.is_empty()).then(|| {
+            let front = self.settings.eye_front_deg;
+            let (dense_area, dense_depth) = lids::penetration_area(positions, dense.triangles, &self.eyes, front, 2);
+            let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &self.eyes, front, 6);
+            json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
+                   "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
+        });
+        Placed {
+            game,
+            triangle_uvs: Some(triangle_uvs),
+            report: report(vec![
+                ("settings", json!(self.settings)),
+                ("eyes", json!(self.eyes.len())),
+                ("placement_stats", json!(stats)),
+                ("lids", json!(lids)),
+            ]),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,11 +204,12 @@ mod tests {
         }
         assert_eq!(DEFAULT.to_string(), "f3/1");
         assert_eq!(PlacementVersion::parse("f3").unwrap(), DEFAULT);
+        assert_eq!(PlacementVersion::parse("f5").unwrap(), PlacementVersion { name: "f5", version: 1 });
     }
 
     #[test]
     fn unreleased_versions_are_refused() {
-        for bad in ["f3/2", "f5", "f3/x", "", "F3/1", "subset/0"] {
+        for bad in ["f3/2", "f5/2", "f6", "f3/x", "", "F3/1", "subset/0"] {
             assert!(PlacementVersion::parse(bad).is_err(), "{bad} accepted");
         }
     }
@@ -182,6 +217,6 @@ mod tests {
     #[test]
     fn the_released_list_is_append_only() {
         let names: Vec<String> = RELEASED.iter().map(|v| v.to_string()).collect();
-        assert_eq!(names[..6], ["subset/1", "optimal/1", "fit/1", "f2/1", "f3/1", "f4/1"]);
+        assert_eq!(names[..7], ["subset/1", "optimal/1", "fit/1", "f2/1", "f3/1", "f4/1", "f5/1"]);
     }
 }
