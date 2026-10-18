@@ -1,0 +1,13 @@
+[package]
+name = "gf-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gazeforge"
+path = "src/main.rs"
+
+[dependencies]
+gf-core = { path = "../gf-core" }
+serde_json = "1"
