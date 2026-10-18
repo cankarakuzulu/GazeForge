@@ -21,6 +21,26 @@ pub struct F3Settings {
     pub backoff_step: f64,
     pub uv_ring: usize,
     pub clear: ClearSettings,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f4: Option<F4Settings>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct F4Settings {
+    pub target_deg: f64,
+    pub passes: usize,
+    pub step: f64,
+    pub gain: f64,
+    pub fold_deg: f64,
+    pub backoff_dense: bool,
+    pub game_plane: bool,
+}
+
+#[derive(Default, Serialize)]
+pub struct F4Stats {
+    pub moved_per_pass: Vec<usize>,
+    pub below_target_before: usize,
+    pub below_target_after: usize,
 }
 
 #[derive(Default, Serialize)]
@@ -42,6 +62,8 @@ pub struct F3Stats {
     pub uv_flipped_before: usize,
     pub uv_reverted_vertices: usize,
     pub uv_flipped_after: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f4: Option<F4Stats>,
 }
 
 type Hits = Vec<(u32, [f64; 3], f64)>;
@@ -179,6 +201,19 @@ struct Fit<'a> {
     vtris: Vec<Vec<u32>>,
     neighbours: Vec<Vec<u32>>,
     subset_normals: Vec<Option<[f64; 3]>>,
+    dense_refs: Option<Vec<[f64; 3]>>,
+}
+
+fn small_angle_penalty(p: [[f64; 3]; 3], target: f64) -> f64 {
+    crate::quadric::corner_angles(p).iter().map(|&a| (target - a).max(0.0).powi(2)).sum()
+}
+
+fn tangent_basis(n: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let helper = if n[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let t1 = crate::quadric::cross(n, helper);
+    let l = length(t1).max(1e-30);
+    let t1 = t1.map(|x| x / l);
+    (t1, crate::quadric::cross(n, t1))
 }
 
 impl Fit<'_> {
@@ -218,7 +253,10 @@ impl Fit<'_> {
         self.vtris[g]
             .iter()
             .filter_map(|&t| {
-                let m = self.subset_normals[t as usize]?;
+                let m = match &self.dense_refs {
+                    Some(refs) => refs[t as usize],
+                    None => self.subset_normals[t as usize]?,
+                };
                 let n = pl::triangle_normal(self.mesh.triangles[t as usize].map(|i| game[i as usize]));
                 let l = length(n);
                 let turn = if l < 1e-20 { 180.0 } else { (dot(n, m) / l).clamp(-1.0, 1.0).acos().to_degrees() };
@@ -227,11 +265,81 @@ impl Fit<'_> {
             .fold(0.0, f64::max)
     }
 
-    fn relax(&self, game: &mut [[f64; 3]], subset: &[[f64; 3]], eyes: &[Eye], settings: &F3Settings, stats: &mut F3Stats) {
-        let away: Vec<f64> = subset
+    fn worst_at(&self, game: &[[f64; 3]], g: usize) -> f64 {
+        self.vtris[g].iter().map(|&t| pl::min_angle(self.mesh.triangles[t as usize].map(|i| game[i as usize]))).fold(180.0f64, f64::min)
+    }
+
+    fn star_with(&self, game: &[[f64; 3]], g: usize, p: [f64; 3], t: u32) -> [[f64; 3]; 3] {
+        self.mesh.triangles[t as usize].map(|i| if i as usize == g { p } else { game[i as usize] })
+    }
+
+    fn angle_pass(&self, game: &mut [[f64; 3]], away: &[f64], f4: &F4Settings, refs: &[[f64; 3]]) -> F4Stats {
+        let mut stats = F4Stats::default();
+        let below = |game: &[[f64; 3]]| (0..game.len()).filter(|&g| !self.fixed[g] && self.worst_at(game, g) < f4.target_deg).count();
+        stats.below_target_before = below(game);
+        for _ in 0..f4.passes {
+            let mut moved = 0;
+            for g in 0..game.len() {
+                if self.fixed[g] || self.neighbours[g].is_empty() || away[g] <= 0.0 || self.worst_at(game, g) >= f4.target_deg {
+                    continue;
+                }
+                let tris = &self.vtris[g];
+                let penalty = |p: [f64; 3]| tris.iter().map(|&t| small_angle_penalty(self.star_with(game, g, p, t), f4.target_deg)).sum::<f64>();
+                let fold = |p: [f64; 3]| tris.iter().map(|&t| pl::deviation_deg(self.star_with(game, g, p, t), refs[t as usize])).fold(0.0f64, f64::max);
+                let ring = &self.neighbours[g];
+                let edge = ring.iter().map(|&w| length(sub(game[w as usize], game[g]))).sum::<f64>() / ring.len() as f64;
+                let plane = if f4.game_plane {
+                    let n = tris.iter().fold([0.0; 3], |a, &t| {
+                        let m = pl::triangle_normal(self.mesh.triangles[t as usize].map(|i| game[i as usize]));
+                        [a[0] + m[0], a[1] + m[1], a[2] + m[2]]
+                    });
+                    let l = length(n);
+                    if l > 1e-30 { n.map(|x| x / l) } else { self.normals[g] }
+                } else {
+                    self.normals[g]
+                };
+                let (t1, t2) = tangent_basis(plane);
+                let p0 = game[g];
+                let h = 1e-3 * edge;
+                let at = |d: [f64; 3], s: f64| [0, 1, 2].map(|k| p0[k] + s * d[k]);
+                let gx = (penalty(at(t1, h)) - penalty(at(t1, -h))) / (2.0 * h);
+                let gy = (penalty(at(t2, h)) - penalty(at(t2, -h))) / (2.0 * h);
+                let gl = (gx * gx + gy * gy).sqrt();
+                if !(gl > 1e-30) {
+                    continue;
+                }
+                let dir = [0, 1, 2].map(|k| -(gx * t1[k] + gy * t2[k]) / gl);
+                let (f0, fold0) = (penalty(p0), fold(p0).max(f4.fold_deg));
+                let newton = f4.gain * edge * edge * gl / (2.0 * (180.0 / std::f64::consts::PI).powi(2));
+                let mut s = newton.min(f4.step * edge) * away[g];
+                for _ in 0..2 {
+                    let p = at(dir, s);
+                    if penalty(p) < f0 && fold(p) <= fold0 {
+                        game[g] = p;
+                        moved += 1;
+                        break;
+                    }
+                    s *= 0.5;
+                }
+            }
+            stats.moved_per_pass.push(moved);
+            if moved == 0 {
+                break;
+            }
+        }
+        stats.below_target_after = below(game);
+        stats
+    }
+
+    fn away(&self, subset: &[[f64; 3]], eyes: &[Eye], settings: &F3Settings) -> Vec<f64> {
+        subset
             .iter()
             .map(|&p| eyes.iter().map(|e| smoothstep(length(sub(p, e.centre)) - e.radius, settings.relax_eye_mm)).fold(1.0, f64::min))
-            .collect();
+            .collect()
+    }
+
+    fn relax(&self, game: &mut [[f64; 3]], subset: &[[f64; 3]], eyes: &[Eye], settings: &F3Settings, stats: &mut F3Stats) {
+        let away = self.away(subset, eyes, settings);
         for _ in 0..settings.relax_steps {
             let moves: Vec<Option<[f64; 3]>> = (0..game.len())
                 .map(|g| {
@@ -316,7 +424,10 @@ pub fn place(
         neighbours: crate::placement_f2::neighbours(mesh),
         vtris,
         subset_normals,
+        dense_refs: None,
     };
+    let refs = pl::triangle_references(mesh, &fit.normals);
+    let fit = Fit { dense_refs: settings.f4.as_ref().filter(|f| f.backoff_dense).map(|_| refs.clone()), ..fit };
 
     let (centre, local, sums) = pl::cluster_quadrics(points, dense_triangles, mesh);
     let mut game: Vec<[f64; 3]> = (0..count)
@@ -358,6 +469,11 @@ pub fn place(
         }
     }
     fit.relax(&mut game, &subset, eyes, settings, &mut stats);
+    if let Some(f4) = &settings.f4 {
+        let away = fit.away(&subset, eyes, settings);
+        stats.f4 = Some(fit.angle_pass(&mut game, &away, f4, &refs));
+    }
+    drop(refs);
     if let Some(dense_clear) = &dense_clear {
         let keep: Vec<bool> = dense_clear.iter().map(|c| c.is_finite()).collect();
         let grid = lids::PointGrid::new(points, &keep, 0.001);
@@ -411,4 +527,74 @@ pub fn place(
     }
     stats.uv_flipped_after = bad.len();
     (game, uvs, stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lattice(n: usize, spacing: f64) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+        let points = (0..n * n).map(|i| [(i % n) as f64 * spacing, (i / n) as f64 * spacing, 0.0]).collect();
+        let mut tris = Vec::new();
+        for y in 0..n - 1 {
+            for x in 0..n - 1 {
+                let a = (y * n + x) as u32;
+                tris.push([a, a + 1, a + n as u32 + 1]);
+                tris.push([a, a + n as u32 + 1, a + n as u32]);
+            }
+        }
+        (points, tris)
+    }
+
+    fn settings(f4: Option<F4Settings>) -> F3Settings {
+        F3Settings {
+            regular: 1e-3,
+            max_move: 0.5,
+            smooth: 0.1,
+            rounds: 0,
+            relax_steps: 0,
+            relax_step: 0.5,
+            relax_angle_deg: [1.0, 8.0],
+            relax_eye_mm: [0.003, 0.008],
+            backoff_turn_deg: [25.0, 55.0],
+            backoff_step: 0.5,
+            uv_ring: 2,
+            clear: ClearSettings { along_gaze: false, depth: [0.0003, 0.0006], reach: 0.002, clearance: 0.00005, front_deg: 75.0, rounds: 1, samples: 6 },
+            f4,
+        }
+    }
+
+    fn min_angle_of(game: &[[f64; 3]], mesh: &Decimated) -> f64 {
+        mesh.triangles.iter().map(|t| pl::min_angle(t.map(|i| game[i as usize]))).fold(180.0, f64::min)
+    }
+
+    #[test]
+    fn the_angle_pass_opens_a_planted_sliver_with_fit_and_relaxation_off() {
+        let (fine, n, step) = (16usize, 6usize, 0.004);
+        let size = (n - 1) * fine + 1;
+        let (dense, dense_tris) = lattice(size, step / fine as f64);
+        let uv_of = |p: [f64; 3]| [p[0] as f32 * 50.0, p[1] as f32 * 50.0];
+        let dense_uvs: Vec<[Uv; 3]> = dense_tris.iter().map(|t| t.map(|i| uv_of(dense[i as usize]))).collect();
+        let mut kept: Vec<u32> = (0..n * n).map(|i| ((i / n) * fine * size + (i % n) * fine) as u32).collect();
+        kept[2 * n + 2] = (40 * size + 47) as u32;
+        let (_, triangles) = lattice(n, step);
+        let triangle_uvs: Vec<[Uv; 3]> = triangles.iter().map(|t| t.map(|g| uv_of(dense[kept[g as usize] as usize]))).collect();
+        let owner: Vec<u32> = dense
+            .iter()
+            .map(|p| {
+                (0..kept.len())
+                    .min_by(|&a, &b| length(sub(*p, dense[kept[a] as usize])).total_cmp(&length(sub(*p, dense[kept[b] as usize]))))
+                    .unwrap() as u32
+            })
+            .collect();
+        let mesh = Decimated { kept, owner, triangles, triangle_uvs, stats: Default::default() };
+        let (f3_game, _, _) = place(&dense, &dense_tris, &dense_uvs, &mesh, &[], &settings(None));
+        let f4 = F4Settings { target_deg: 10.0, passes: 12, step: 0.25, gain: 0.5, fold_deg: 60.0, backoff_dense: true, game_plane: true };
+        let (f4_game, uvs, stats) = place(&dense, &dense_tris, &dense_uvs, &mesh, &[], &settings(Some(f4)));
+        let (before, after) = (min_angle_of(&f3_game, &mesh), min_angle_of(&f4_game, &mesh));
+        assert!(before < 9.0, "the plant must leave a sliver under f3, got {before}");
+        assert!(after > before + 1.0, "f4 {after} vs f3 {before}");
+        assert!(stats.f4.unwrap().below_target_after < 4);
+        assert_eq!(uvs.len(), mesh.triangles.len());
+    }
 }

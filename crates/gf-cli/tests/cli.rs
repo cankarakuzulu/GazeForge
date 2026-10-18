@@ -128,6 +128,23 @@ fn the_versioned_placement_refuses_options_it_does_not_read() {
 }
 
 #[test]
+fn the_angle_pass_version_exports_and_refuses_what_it_does_not_read() {
+    let root = fixture("f4");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f4", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["placement"], Value::String("f4".into()));
+    assert!(value["placement_stats"]["f4"].is_object(), "{value}");
+    assert!(value["settings"]["f4"].is_object(), "{value}");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f3", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert!(value["settings"].get("f4").is_none() && value["placement_stats"].get("f4").is_none(), "{value}");
+    refused(export(&root, "good.npy", &["--placement", "f3", "--f4-target", "10", "--tip-vertex", "0"]), "--f4-target");
+    refused(export(&root, "good.npy", &["--placement", "f4", "--f4-backoff", "both", "--tip-vertex", "0"]), "--f4-backoff");
+    refused(export(&root, "good.npy", &["--placement", "f4", "--f4-plane", "eye", "--tip-vertex", "0"]), "--f4-plane");
+    refused(export(&root, "good.npy", &["--placement", "f4", "--f4-passes", "1.5", "--tip-vertex", "0"]), "f4-passes");
+}
+
+#[test]
 fn bad_layout_options_are_refused() {
     let root = fixture("layout");
     let dense = root.join("dense");

@@ -22,6 +22,8 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
               [--f3-relax-angle 1,8] [--f3-relax-eye 3,8] [--f3-backoff-turn 25,55] [--f3-backoff-step 0.5] [--f3-uv-ring 2] [--eyes EYES.json]
               [--f3-eye-front 75] [--f3-eye-clearance 0.05] [--f3-eye-reach 2] [--f3-eye-depth 0.3,0.6] [--f3-eye-lift radial|gaze]
               [--f3-eye-rounds 1] [--f3-eye-samples 6]
+              f4 = f3 + an angle pass: every f3 option, and [--f4-target 10] [--f4-passes 12] [--f4-step 0.25] [--f4-gain 0.5] [--f4-fold 60]
+              [--f4-backoff dense|subset] [--f4-plane game|dense]
   collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
               [--front-deg 75] [--smooth 4]
 An option the command does not read is refused; numbers must be finite and not negative; input positions must be finite.
@@ -80,6 +82,7 @@ const F3_KEYS: &[&str] = &[
     "f3-eye-rounds",
     "f3-eye-samples",
 ];
+const F4_KEYS: &[&str] = &["f4-target", "f4-passes", "f4-step", "f4-gain", "f4-fold", "f4-backoff", "f4-plane"];
 const COLLIDE_KEYS: &[&str] = &["dense", "positions", "eyes", "out", "clearance", "front-deg", "smooth"];
 
 type Options = HashMap<String, String>;
@@ -208,12 +211,13 @@ fn export_obj(opts: &Options) -> Result<Value, String> {
         "fit" => &[EXPORT_KEYS, FIT_KEYS],
         "f2" => &[EXPORT_KEYS, FIT_KEYS, F2_KEYS],
         "f3" => &[EXPORT_KEYS, F3_KEYS],
-        other => return Err(format!("--placement must be optimal, fit, f2, f3 or subset, got {other}")),
+        "f4" => &[EXPORT_KEYS, F3_KEYS, F4_KEYS],
+        other => return Err(format!("--placement must be optimal, fit, f2, f3, f4 or subset, got {other}")),
     };
     only(opts, &format!("export-obj --placement {placement}"), allowed)?;
     let tip_vertex = count(opts, "tip-vertex", dense::NOSE_TIP_VERTEX)?;
-    if placement == "f3" {
-        return export_f3(opts, tip_vertex);
+    if placement == "f3" || placement == "f4" {
+        return export_f3(opts, tip_vertex, placement);
     }
     let max_move = number(opts, "max-move", 3.0)? / 1000.0;
     let fit = fit_settings(opts)?;
@@ -339,11 +343,31 @@ fn f3_settings(opts: &Options) -> Result<placement_f3::F3Settings, String> {
             rounds: count(opts, "f3-eye-rounds", 1)?,
             samples: count(opts, "f3-eye-samples", 6)?,
         },
+        f4: None,
     })
 }
 
-fn export_f3(opts: &Options, tip_vertex: usize) -> Result<Value, String> {
-    let settings = f3_settings(opts)?;
+fn export_f3(opts: &Options, tip_vertex: usize, placement: &str) -> Result<Value, String> {
+    let mut settings = f3_settings(opts)?;
+    if placement == "f4" {
+        settings.f4 = Some(placement_f3::F4Settings {
+            target_deg: number(opts, "f4-target", 10.0)?,
+            passes: count(opts, "f4-passes", 12)?,
+            step: number(opts, "f4-step", 0.25)?,
+            gain: number(opts, "f4-gain", 0.5)?,
+            fold_deg: number(opts, "f4-fold", 60.0)?,
+            backoff_dense: match opts.get("f4-backoff").map(String::as_str).unwrap_or("dense") {
+                "dense" => true,
+                "subset" => false,
+                other => return Err(format!("--f4-backoff must be dense or subset, got {other}")),
+            },
+            game_plane: match opts.get("f4-plane").map(String::as_str).unwrap_or("game") {
+                "game" => true,
+                "dense" => false,
+                other => return Err(format!("--f4-plane must be game or dense, got {other}")),
+            },
+        });
+    }
     let out = Path::new(need(opts, "out")?);
     let eyes = match opts.get("eyes") {
         Some(path) => lids::load_eyes(Path::new(path))?,
@@ -366,7 +390,7 @@ fn export_f3(opts: &Options, tip_vertex: usize) -> Result<Value, String> {
                "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
     });
     Ok(json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
-              "triangles": base.triangles.len(), "placement": "f3", "settings": settings, "eyes": eyes.len(),
+              "triangles": base.triangles.len(), "placement": placement, "settings": settings, "eyes": eyes.len(),
               "placement_stats": stats, "lids": lids, "measure": measure}))
 }
 
