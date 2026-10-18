@@ -26,6 +26,13 @@ cargo build --release
 
 The binary is `target/release/gazeforge`.
 
+The workspace is layered, and every edge points down: `gf-geom` (pure maths: no IO, no threads, no clocks; builds for
+`wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
+catalog, character spec, evaluation, residual codec, macros; no IO) <- `gf-io` (formats and the store) <- `gf-cli`.
+`python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
+against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
+`-D warnings`, the wasm32 build, and a build of `gf-core` and `gf-io` in a copy of the workspace without its front doors.
+
 ## Usage
 
 Every command prints one JSON object on stdout and exits non-zero on failure.
@@ -42,11 +49,12 @@ Export a shape (the base, a target, or any positions over the dense order) at ga
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement optimal|fit|f2|f3|subset] [--eyes EYES.json] [--tip-vertex N] ...
+                     [--placement optimal|fit|f2|f3|f4|subset|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
-Each placement is versioned and never changes once released; `f3` is the current one. With `--eyes`, `f3` keeps the
-placed eyelids outside the eyeballs.
+Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`) and never changes once released;
+a bare name means its latest version, and `f3/1` is the default of a character spec. With `--eyes`, `f3` keeps the
+placed eyelids outside the eyeballs. The output names the version it ran (`placement_version`).
 
 Push a character's eyelid skin out of its eyeballs at dense resolution:
 
@@ -56,6 +64,96 @@ gazeforge collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes E
 
 An option a command does not read is refused, and numbers and input positions must be finite. Run `gazeforge` without
 arguments for the full option list.
+
+#### Store
+
+A content-addressed store (sha256) holds dense packs, target catalogs and game bases. Each is a manifest whose id is
+the sha256 of its canonical JSON bytes; arrays and target files are blobs under `blobs/`, verified on every read.
+Identical files are stored once.
+
+```
+gazeforge store import-pack --store DIR --dense DIR [--macro-base SLIDERS_JSON|@FILE] [--pin-top Z_METRES]
+gazeforge store import-catalog --store DIR --targets DIR --pack sha256:...
+gazeforge store import-game --store DIR --base DIR --pack sha256:...
+```
+
+`import-catalog` reads `catalog.json` and its sparse targets (`.npz` with `indices` u32 and `deltas` f32 x 3, on the
+dense order) as baked. `import-game` also imports `lod_<N>` subdirectories. `--macro-base` records the pack's own macro
+slider values and `--pin-top` the height up to which head-only macros are pinned to the neck seam; both are needed for
+characters with macros.
+
+#### Characters
+
+A character spec (`gazeforge.character/1`) is canonical JSON: the pack, catalog, optional game base and placement
+version; target weights (each in [0, 1], rounded to 1e-6); optional macros; an optional residual. Its revision id is
+the sha256 of those bytes, which is also the sha256 of the file `character create` writes.
+
+```
+gazeforge character create --store DIR --pack sha256:... --catalog sha256:... --out FILE.gfchar.json
+                           [--game sha256:...] [--placement f3/1] [--name NAME] [--weights JSON|@FILE]
+                           [--macro MACRO_JSON --sliders JSON|@FILE --macro-mode gf|mpfb --head-scale 1]
+                           [--residual-from FACE.npy [--quantum-mm 0.005]]
+gazeforge character validate --store DIR --spec FILE [--macro MACRO_JSON]
+gazeforge character evaluate --store DIR --spec FILE --out DENSE.npy [--macro MACRO_JSON] [--precision f32|f64]
+```
+
+`evaluate` computes `base + sum(w * T) + head-only macros + residual` on the dense order; its output is a positions
+file that `export-obj --positions` reads. `--residual-from` stores `FACE - (base + sum(w * T) + macros)` as an i16,
+planar, delta-coded, zlib-compressed blob (`i16-planar-delta-zlib/1`); the default quantum of 0.005 mm keeps every
+vertex within 0.0044 mm of the face.
+
+#### Macros
+
+The macro definition (`macro.json`) is never shipped with GazeForge: every macro command reads it from the user's own
+MakeHuman / MPFB install (`--macro PATH`), and a spec records its sha256 so a different file is refused.
+
+```
+gazeforge macro weights --macro MACRO_JSON --sliders JSON|@FILE [--targets TARGETS_ROOT] [--mode gf|mpfb] [--floor 0.01|none]
+gazeforge macro labels --macro MACRO_JSON --slider NAME --values VALUES.npy --out TABLE.npy [--mode gf|mpfb]
+```
+
+`--sliders` is one object or a list of objects with all eleven sliders (`gender age muscle weight proportions height
+cupsize firmness african asian caucasian`, each in [0, 1]). `gf` (the default) is continuous along every slider; `mpfb`
+reproduces MPFB's values, including its 4-decimal rounding and, unless `--floor none`, its 0.01 key floor.
+
+On a character, macros are head-only: the change against the pack's own sliders is summed over the catalog's macro
+targets, its best linear similarity (translation, uniform scale, small rotation) over the whole head is removed, and the
+rest is pinned to the neck seam by a smoothstep from the seam's top to `--pin-top`. Head size is its own control,
+`--head-scale` in [0.9, 1.1], a scale about the seam centroid under the same pin.
+
+#### glTF export
+
+```
+gazeforge export-glb --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json]
+                     [--sparse auto|always|never] [--lod-screen 0.25,0.1] [the options of the spec's placement]
+```
+
+Writes one binary glTF 2.0 file of the character at game resolution: one node and mesh per LOD (`Head_LOD0` for the
+full game base, `Head_LOD1`... for each nested coarser LOD of the spec's game base), positions in metres with +Y up and
+the face looking along +Z, normals, one UV layer, 16-bit indices when a LOD has at most 65,535 vertices. Each catalog target named in `--morphs` becomes a morph
+target on every LOD, `F(c + e) - F(c)`: the placed game positions of the character with the target at weight 1, minus
+those without it. Morph targets are written as sparse accessors when that is smaller (`auto`), always, or never.
+`extras.gazeforge` names the spec revision, pack, game base, placement version and tool. A sidecar `FILE.gazeforge.json`
+lists the morph names and targets (with how many game vertices each moves), each LOD's node, vertex count and screen
+size, the spec hash and the sha256 of the `.glb`.
+
+#### Gates
+
+```
+gazeforge gates shell --dense DIR --before base|shape:NAME|FILE.npy --after base|shape:NAME|FILE.npy [limits]
+gazeforge gates game --dense DIR --base DIR --face base|shape:NAME|FILE.npy --obj GAME.obj [--gates triq,uv,census,seams]
+gazeforge gates path --dense DIR --base DIR --start FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
+                     [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM]
+```
+
+`shell` compares two dense shapes: quad folds that appear, inner surfaces that come to face the front, and move
+roughness (vertices that move unlike their neighbours). `game` measures an exported game mesh against its dense face:
+sliver and needle triangles outside the eye and nostril box (`triq`), flipped and zero-area UV triangles (`uv`), game
+triangles facing away from the face's own dense normals (`census`), and seam vertices that disagree between UV charts
+(`seams`). `path` places every step of a straight dense path and counts game vertices that jump while the dense surface
+under them barely moves; `--plant` adds a forward jump to one vertex at one step to prove the gate fires. `shell` and
+`game` assert the world frame first (-Y forward, +Z up); `path` measures distances only. A gate that fails prints its
+report with `"ok": false` and exits non-zero.
 
 ### Data layout
 
@@ -67,7 +165,7 @@ The dense base and the targets are not in this repository. `tools/blender/export
 `tools/blender/export_targets.py` produce them in Blender from MakeHuman's assets; a documented, self-contained data
 recipe is on the roadmap.
 
-### Macros
+### Macros (Python reference)
 
 `tools/macros/macro_weights.py` turns MakeHuman macro slider values (gender, age, muscle, weight, proportions, height,
 ...) into weights over MakeHuman's macro targets:
@@ -85,7 +183,7 @@ Each milestone ends on a measured gate, not a declaration.
 | | What | Gate |
 |---|---|---|
 | M0 | Pilot: the Rust core reads the dense base and targets and builds the shared ~20k-vertex game base; a sculpt maps onto it by index | per-region error against the dense sculpt within budget; no sliver triangles outside the eye and nostril areas; no UV flips; a painted look-development render passes review |
-| M1 | Core: the character spec (JSON: target weights + residual), apply and transfer, shape-quality gates (folds, inner surfaces, move roughness), glTF export with blend shapes | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect |
+| M1 | Core: the character spec (JSON: target weights, head-only macros, residual), evaluation and placement onto the game base, shape and game-mesh gates (folds, inner surfaces, move roughness, triangle quality, UV flips, orientation, seams, path continuity), glTF export with blend shapes and the nested LOD chain | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect |
 | M2 | Interfaces: CLI, local HTTP API and an MCP server, all over one core | an AI agent completes "make a character with a wide nose" through each of the three |
 | M3 | Browser designer: sliders and a live 3D view, the core compiled to WASM, heavy jobs on the server | slider response under 16 ms on the 20k base |
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute |

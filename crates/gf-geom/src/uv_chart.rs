@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::decimate::Decimated;
-use crate::dense::Uv;
+use crate::Uv;
 use crate::placement::closest;
 
 pub type Hit = (u32, [f64; 3], f64);
@@ -176,23 +176,10 @@ impl<'a> Surface<'a> {
                 }
             }
         }
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16);
-        let chunk = game.len().div_ceil(threads).max(1);
         let all: Vec<usize> = (0..game.len()).collect();
-        let found: Vec<Vec<(Uv, Option<Hit>)>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = all
-                .chunks(chunk)
-                .map(|part| {
-                    let wanted = &wanted;
-                    scope.spawn(move || {
-                        part.iter()
-                            .map(|&g| wanted[g].iter().map(|&uv| (uv, self.closest_on_patch(g as u32, game[g], uv))).collect::<Vec<_>>())
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-        });
+        let wanted = &wanted;
+        let found: Vec<Vec<(Uv, Option<Hit>)>> =
+            crate::map_each(&all, |g| wanted[g].iter().map(|&uv| (uv, self.closest_on_patch(g as u32, game[g], uv))).collect::<Vec<_>>());
         let mut stats = UvStats { charts: self.charts, ..Default::default() };
         let mut gaps: Vec<f64> = Vec::new();
         for list in &found {

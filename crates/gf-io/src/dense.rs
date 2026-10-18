@@ -4,7 +4,7 @@ use ndarray::{Array1, Array2};
 use ndarray_npy::read_npy;
 use serde::Deserialize;
 
-pub type Uv = [f32; 2];
+pub use gf_geom::{Uv, check_finite};
 
 pub const NOSE_TIP_VERTEX: usize = 185_894;
 
@@ -28,14 +28,18 @@ pub struct Dense {
     pub manifest: Manifest,
 }
 
-fn read_points(path: &Path) -> Result<Vec<[f64; 3]>, String> {
-    let array: Array2<f32> = read_npy(path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn points_from(array: &Array2<f32>) -> Result<Vec<[f64; 3]>, String> {
     if array.ncols() != 3 {
-        return Err(format!("{}: expected N x 3, got {:?}", path.display(), array.shape()));
+        return Err(format!("expected N x 3, got {:?}", array.shape()));
     }
     let points: Vec<[f64; 3]> = array.rows().into_iter().map(|r| [r[0] as f64, r[1] as f64, r[2] as f64]).collect();
-    check_finite(&points).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_finite(&points)?;
     Ok(points)
+}
+
+pub fn read_points(path: &Path) -> Result<Vec<[f64; 3]>, String> {
+    let array: Array2<f32> = read_npy(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    points_from(&array).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub fn write_points(path: &Path, points: &[[f64; 3]]) -> Result<(), String> {
@@ -44,12 +48,33 @@ pub fn write_points(path: &Path, points: &[[f64; 3]]) -> Result<(), String> {
     ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-pub fn check_finite(points: &[[f64; 3]]) -> Result<(), String> {
-    let bad: Vec<usize> = points.iter().enumerate().filter(|(_, p)| p.iter().any(|x| !x.is_finite())).map(|(i, _)| i).collect();
-    match bad.first() {
-        None => Ok(()),
-        Some(first) => Err(format!("{} vertices have a NaN or infinite coordinate (first: vertex {first})", bad.len())),
+pub fn write_points_f64(path: &Path, points: &[[f64; 3]]) -> Result<(), String> {
+    let array = Array2::from_shape_vec((points.len(), 3), points.iter().flatten().copied().collect()).map_err(|e| e.to_string())?;
+    ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub fn assemble(
+    positions: Vec<[f64; 3]>,
+    sizes: &Array1<u32>,
+    corners: &Array1<u32>,
+    uvs: &Array2<f32>,
+) -> Result<(Vec<[f64; 3]>, Vec<[u32; 3]>, Vec<[Uv; 3]>), String> {
+    let mut triangles = Vec::with_capacity(sizes.len() * 2);
+    let mut triangle_uvs = Vec::with_capacity(sizes.len() * 2);
+    let mut start = 0usize;
+    for &size in sizes.iter() {
+        let size = size as usize;
+        for k in 1..size - 1 {
+            let loops = [start, start + k, start + k + 1];
+            triangles.push(loops.map(|l| corners[l]));
+            triangle_uvs.push(loops.map(|l| [uvs[[l, 0]], uvs[[l, 1]]]));
+        }
+        start += size;
     }
+    if start != corners.len() {
+        return Err(format!("face sizes cover {start} corners, the file has {}", corners.len()));
+    }
+    Ok((positions, triangles, triangle_uvs))
 }
 
 impl Dense {
@@ -65,21 +90,7 @@ impl Dense {
         if positions.len() != manifest.vertices || sizes.len() != manifest.faces {
             return Err("the arrays disagree with manifest.json".into());
         }
-        let mut triangles = Vec::with_capacity(sizes.len() * 2);
-        let mut triangle_uvs = Vec::with_capacity(sizes.len() * 2);
-        let mut start = 0usize;
-        for &size in sizes.iter() {
-            let size = size as usize;
-            for k in 1..size - 1 {
-                let loops = [start, start + k, start + k + 1];
-                triangles.push(loops.map(|l| corners[l]));
-                triangle_uvs.push(loops.map(|l| [uvs[[l, 0]], uvs[[l, 1]]]));
-            }
-            start += size;
-        }
-        if start != corners.len() {
-            return Err(format!("face sizes cover {start} corners, the file has {}", corners.len()));
-        }
+        let (positions, triangles, triangle_uvs) = assemble(positions, &sizes, &corners, &uvs)?;
         Ok(Dense { dir: dir.to_path_buf(), positions, triangles, triangle_uvs, manifest })
     }
 
@@ -114,26 +125,21 @@ impl Dense {
         Ok(array.iter().map(|&w| w as f64).collect())
     }
 
+    pub fn quads(&self) -> Result<Vec<[u32; 4]>, String> {
+        let sizes: Array1<u32> = read_npy(self.dir.join("face_sizes.npy")).map_err(|e| format!("face_sizes.npy: {e}"))?;
+        let corners: Array1<u32> = read_npy(self.dir.join("corner_vertices.npy")).map_err(|e| format!("corner_vertices.npy: {e}"))?;
+        if let Some(bad) = sizes.iter().find(|&&s| s != 4) {
+            return Err(format!("the shell gates read quads only; the dense base has a face of {bad} corners"));
+        }
+        if corners.len() != sizes.len() * 4 {
+            return Err(format!("{} quads but {} corners", sizes.len(), corners.len()));
+        }
+        Ok(corners.as_slice().ok_or("corner_vertices.npy is not contiguous")?.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect())
+    }
+
     pub fn nose_tip(&self, positions: &[[f64; 3]], vertex: usize) -> Result<[f64; 3], String> {
         positions.get(vertex).copied().ok_or_else(|| {
             format!("nose tip vertex {vertex} is outside the dense base ({} vertices)", self.positions.len())
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finite_points_pass() {
-        assert!(check_finite(&[[0.0, 1.0, -2.0], [1e-9, 3.0, 4.0]]).is_ok());
-    }
-
-    #[test]
-    fn nan_and_infinite_points_are_refused() {
-        let error = check_finite(&[[0.0; 3], [0.0, f64::NAN, 0.0], [f64::INFINITY, 0.0, 0.0]]).unwrap_err();
-        assert!(error.contains("2 vertices") && error.contains("vertex 1"), "{error}");
-        assert!(check_finite(&[[f64::NEG_INFINITY, 0.0, 0.0]]).is_err());
     }
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use ndarray::{Array1, Array2};
 use ndarray_npy::{read_npy, write_npy};
 
-use crate::decimate::{Decimated, Stats};
+use gf_geom::decimate::{Decimated, Stats};
 
 pub fn save(dir: &Path, mesh: &Decimated) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

@@ -1,10 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::dense::Uv;
+use crate::Uv;
 use crate::quadric::{self, Quadric};
 
 #[derive(Clone, Serialize)]
@@ -358,7 +357,7 @@ impl<'a> Mesh<'a> {
 }
 
 pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 3]], settings: &Settings) -> Decimated {
-    decimate_levels(shapes, triangles, uvs, settings, None, &[]).remove(0)
+    decimate_levels(shapes, triangles, uvs, settings, None, &[], None).remove(0)
 }
 
 pub fn decimate_levels(
@@ -368,8 +367,9 @@ pub fn decimate_levels(
     settings: &Settings,
     weights: Option<&[f64]>,
     coarser: &[usize],
+    clock: Option<&dyn Fn() -> f64>,
 ) -> Vec<Decimated> {
-    let started = Instant::now();
+    let started = clock.map_or(0.0, |now| now());
     let n = shapes[0].len();
     let centre = {
         let mut c = [0.0f64; 3];
@@ -471,7 +471,7 @@ pub fn decimate_levels(
         collapse_to(&mut mesh, &mut heap, &mut alive_count, target, &mut stats);
         stats.flips = mesh.improve(settings.improve_below_deg, settings.flip_flat_deg);
         stats.reached_target = alive_count <= target;
-        stats.seconds = started.elapsed().as_secs_f64();
+        stats.seconds = clock.map_or(0.0, |now| now() - started);
         levels.push(extract(&mut mesh, &stats));
     }
     levels
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn coarser_levels_keep_a_subset_of_the_finer_vertices() {
         let (points, tris, uvs) = grid(24);
-        let levels = decimate_levels(vec![points], &tris, &uvs, &settings(300), None, &[150, 60]);
+        let levels = decimate_levels(vec![points], &tris, &uvs, &settings(300), None, &[150, 60], None);
         assert_eq!(levels.iter().map(|l| l.kept.len()).collect::<Vec<_>>(), vec![300, 150, 60]);
         for pair in levels.windows(2) {
             assert!(pair[1].kept.iter().all(|k| pair[0].kept.contains(k)), "a coarser level kept a vertex the finer one dropped");
@@ -614,7 +614,7 @@ mod tests {
     fn the_first_level_equals_a_single_level_build() {
         let (points, tris, uvs) = grid(20);
         let single = decimate(vec![points.clone()], &tris, &uvs, &settings(200));
-        let nested = decimate_levels(vec![points], &tris, &uvs, &settings(200), None, &[80]);
+        let nested = decimate_levels(vec![points], &tris, &uvs, &settings(200), None, &[80], None);
         assert_eq!(single.kept, nested[0].kept);
         assert_eq!(single.triangles, nested[0].triangles);
         assert_eq!(single.owner, nested[0].owner);
@@ -624,8 +624,8 @@ mod tests {
     fn a_heavy_region_weight_keeps_more_of_that_region() {
         let (points, tris, uvs) = grid(24);
         let weights: Vec<f64> = points.iter().map(|p| if p[0] < 0.05 { 8.0 } else { 1.0 }).collect();
-        let plain = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), None, &[]);
-        let weighted = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), Some(&weights), &[]);
+        let plain = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), None, &[], None);
+        let weighted = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), Some(&weights), &[], None);
         let left = |d: &Decimated| d.kept.iter().filter(|&&k| points[k as usize][0] < 0.05).count();
         assert!(left(&weighted[0]) > left(&plain[0]), "weighted {} vs plain {}", left(&weighted[0]), left(&plain[0]));
     }

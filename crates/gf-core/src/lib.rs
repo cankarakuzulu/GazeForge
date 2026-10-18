@@ -1,10 +1,11 @@
-pub mod decimate;
-pub mod dense;
-pub mod game_base;
-pub mod lids;
-pub mod obj;
+pub mod catalog;
+pub mod game_mesh;
+pub mod gates;
+pub mod character;
+pub mod hash;
+pub mod head;
+pub mod macros;
 pub mod placement;
-pub mod placement_f2;
-pub mod placement_f3;
-pub mod quadric;
-pub mod uv_chart;
+pub mod residual;
+
+pub use gf_geom;
