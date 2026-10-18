@@ -306,7 +306,7 @@ fn create_input() -> Value {
     obj(
         json!({"store": store_prop(), "pack": ref_text("dense pack"), "catalog": ref_text("catalog"),
                "out": {"type": "string", "minLength": 1, "description": "path of the spec file to write (.gfchar.json)"},
-               "game": ref_text("game base"), "placement": {"type": "string", "description": "placement name/version, default f3/1"},
+               "game": ref_text("game base"), "placement": {"type": "string", "description": format!("placement name/version, default {}", gp::DEFAULT)},
                "name": {"type": "string", "minLength": 1}, "weights": weights_prop()}),
         &["store", "pack", "catalog", "out"],
     )

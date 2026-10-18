@@ -26,7 +26,7 @@ pub const RELEASED: &[PlacementVersion] = &[
     PlacementVersion { name: "f5", version: 1 },
 ];
 
-pub const DEFAULT: PlacementVersion = PlacementVersion { name: "f3", version: 1 };
+pub const DEFAULT: PlacementVersion = PlacementVersion { name: "f5", version: 1 };
 
 impl fmt::Display for PlacementVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -234,9 +234,10 @@ mod tests {
         for v in RELEASED {
             assert_eq!(PlacementVersion::parse(&v.to_string()).unwrap(), *v);
         }
-        assert_eq!(DEFAULT.to_string(), "f3/1");
-        assert_eq!(PlacementVersion::parse("f3").unwrap(), DEFAULT);
-        assert_eq!(PlacementVersion::parse("f5").unwrap(), PlacementVersion { name: "f5", version: 1 });
+        assert_eq!(DEFAULT.to_string(), "f5/1");
+        assert!(RELEASED.contains(&DEFAULT));
+        assert_eq!(PlacementVersion::parse("f5").unwrap(), DEFAULT);
+        assert_eq!(PlacementVersion::parse("f3").unwrap(), PlacementVersion { name: "f3", version: 1 });
     }
 
     #[test]

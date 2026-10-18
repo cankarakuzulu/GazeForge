@@ -52,12 +52,15 @@ Export a shape (the base, a target, or any positions over the dense order) at ga
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement optimal|fit|f2|f3|f4|f5|subset|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
+                     [--placement f5|subset|optimal|fit|f2|f3|f4|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
 Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`, `f5/1`) and never changes once
-released; a bare name means its latest version, and `f3/1` is the default of a character spec. With `--eyes`, `f3` and `f5`
-keep the placed eyelids outside the eyeballs. The output names the version it ran (`placement_version`).
+released; a bare name means its latest version. `f5/1` is the default wherever no placement is named: a new character
+spec (and so `export-glb`, which places with the spec's placement), `export-obj` (whose default was `optimal` before),
+the designer, the image-to-character pipeline and `gates path`. A named placement runs exactly as released. With
+`--eyes`, `f3` and `f5` keep the placed eyelids outside the eyeballs. The output names the version it ran
+(`placement_version`).
 
 `f5` is the continuous placement: a small change to the dense shape makes a proportionally small change to the game mesh.
 Each dense vertex is tied to a fixed game triangle and barycentric weights found in texture space (they do not depend on
@@ -101,7 +104,7 @@ the sha256 of those bytes, which is also the sha256 of the file `character creat
 
 ```
 gazeforge character create --store DIR --pack sha256:... --catalog sha256:... --out FILE.gfchar.json
-                           [--game sha256:...] [--placement f3/1] [--name NAME] [--weights JSON|@FILE]
+                           [--game sha256:...] [--placement NAME/VERSION] [--name NAME] [--weights JSON|@FILE]
                            [--macro MACRO_JSON --sliders JSON|@FILE --macro-mode gf|mpfb --head-scale 1]
                            [--residual-from FACE.npy [--quantum-mm 0.005]]
 gazeforge character validate --store DIR --spec FILE [--macro MACRO_JSON]
@@ -330,7 +333,8 @@ one pack, catalog and game base in memory between settles. `GET /v1/blob/<sha256
 With them it keeps, built on the first settle, everything the placement computes that does not depend on the character:
 boundary and seam flags, rings, edges, the UV charts and each game vertex's UV search patch, the f5 footprint. Later
 settles compute only what depends on the dense positions, and their results are byte-identical to a one-shot placement.
-`designer.settle` also places with f5. `&fast=1` asks for an opt-in draft: f3/f4 with 1 of its 4 fit rounds (input
+`designer.settle` places with the spec's placement, f5 by default. `&fast=1` asks for an opt-in draft when that
+placement is f3/f4: 1 of its 4 fit rounds (input
 `fast`, reply flagged `approximate`, labelled as a draft in the page). A draft is never saved or exported; after 3 s
 without a change the page settles again with the full placement.
 

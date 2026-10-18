@@ -164,7 +164,8 @@ pub fn gates_game(opts: &Options) -> Result<Value, String> {
 }
 
 pub fn gates_path(opts: &Options) -> Result<Value, String> {
-    let given = opts.get("placement").map(String::as_str).unwrap_or("f3");
+    let default = gf_core::placement::DEFAULT.to_string();
+    let given = opts.get("placement").map(String::as_str).unwrap_or(&default);
     let version = PlacementVersion::parse(given)?;
     let mut allowed: Vec<&[&str]> = vec![PATH_KEYS];
     allowed.extend_from_slice(placement_keys(version.name));
