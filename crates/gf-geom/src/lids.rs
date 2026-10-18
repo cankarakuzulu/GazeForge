@@ -161,10 +161,46 @@ fn violation(eye: &Eye, p: [f64; 3], normal: [f64; 3], clearance: f64, front_deg
 }
 
 pub fn collide_dense(positions: &[[f64; 3]], triangles: &[[u32; 3]], eyes: &[Eye], settings: &CollideSettings) -> (Vec<[f64; 3]>, CollideStats) {
+    collide_dense_forced(positions, triangles, eyes, settings, &[])
+}
+
+pub fn push_out(eyes: &[Eye], p: [f64; 3], front_deg: f64, clearance: f64) -> Option<[f64; 3]> {
+    let mut best: Option<(f64, [f64; 3])> = None;
+    for eye in eyes {
+        let offset = sub(p, eye.centre);
+        let d = length(offset);
+        if d < 0.5 * eye.radius || d > 1.3 * eye.radius {
+            continue;
+        }
+        let dir = offset.map(|x| x / d);
+        if eye.polar_deg(dir) > front_deg {
+            continue;
+        }
+        let reach = eye.surface(dir).unwrap_or(eye.radius).max(eye.radius) + clearance;
+        if reach > d && best.is_none_or(|b| reach - d > b.0) {
+            best = Some((reach - d, [0, 1, 2].map(|k| eye.centre[k] + dir[k] * reach)));
+        }
+    }
+    best.map(|b| b.1)
+}
+
+pub fn collide_dense_forced(
+    positions: &[[f64; 3]],
+    triangles: &[[u32; 3]],
+    eyes: &[Eye],
+    settings: &CollideSettings,
+    forced: &[u32],
+) -> (Vec<[f64; 3]>, CollideStats) {
     let normals = pl::angle_weighted_normals(positions, triangles);
     let mut out = positions.to_vec();
     let mut stats = CollideStats::default();
     let n = positions.len();
+    let mut force = vec![false; n];
+    for &i in forced {
+        if let Some(f) = force.get_mut(i as usize) {
+            *f = true;
+        }
+    }
     let near: Vec<bool> = positions.iter().map(|&p| eyes.iter().any(|e| length(sub(p, e.centre)) < 1.4 * e.radius)).collect();
     let mut displacement = vec![[0.0f64; 3]; n];
     let mut limit: Vec<Option<(usize, f64)>> = vec![None; n];
@@ -173,7 +209,8 @@ pub fn collide_dense(positions: &[[f64; 3]], triangles: &[[u32; 3]], eyes: &[Eye
             continue;
         }
         for (k, eye) in eyes.iter().enumerate() {
-            if let Some((dir, need)) = violation(eye, p, normals[i], settings.clearance, settings.front_deg) {
+            let normal = if force[i] { sub(p, eye.centre) } else { normals[i] };
+            if let Some((dir, need)) = violation(eye, p, normal, settings.clearance, settings.front_deg) {
                 if need > settings.clearance {
                     stats.inside_before += 1;
                 }
@@ -243,6 +280,63 @@ pub fn collide_dense(positions: &[[f64; 3]], triangles: &[[u32; 3]], eyes: &[Eye
         .filter(|&i| near[i] && eyes.iter().any(|e| violation(e, out[i], after[i], 0.0, settings.front_deg).is_some_and(|(_, need)| need > 1e-7)))
         .count();
     (out, stats)
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct LidCheck {
+    pub vertices: usize,
+    pub candidates: usize,
+    pub inside: usize,
+    pub inside_per_eye: Vec<usize>,
+    pub deepest_mm: f64,
+    pub worst_vertex: Option<usize>,
+    #[serde(skip)]
+    pub inside_vertices: Vec<usize>,
+    pub front_deg: f64,
+    pub tolerance_mm: f64,
+    pub pass: bool,
+}
+
+pub fn lid_check(points: &[[f64; 3]], normals: &[[f64; 3]], eyes: &[Eye], front_deg: f64, tolerance: f64) -> LidCheck {
+    let mut c = LidCheck {
+        vertices: points.len(),
+        inside_per_eye: vec![0; eyes.len()],
+        front_deg,
+        tolerance_mm: tolerance * 1000.0,
+        ..Default::default()
+    };
+    for (i, (&p, &n)) in points.iter().zip(normals).enumerate() {
+        let mut worst: Option<(usize, f64)> = None;
+        let mut candidate = false;
+        for (k, eye) in eyes.iter().enumerate() {
+            let offset = sub(p, eye.centre);
+            let d = length(offset);
+            if d < 0.5 * eye.radius || d > 1.3 * eye.radius {
+                continue;
+            }
+            let dir = offset.map(|x| x / d);
+            if eye.polar_deg(dir) > front_deg || dot(n, dir) <= 0.0 {
+                continue;
+            }
+            candidate = true;
+            let need = eye.surface(dir).unwrap_or(eye.radius).max(eye.radius) - d;
+            if need > tolerance && worst.is_none_or(|w| need > w.1) {
+                worst = Some((k, need));
+            }
+        }
+        c.candidates += candidate as usize;
+        if let Some((k, need)) = worst {
+            c.inside += 1;
+            c.inside_per_eye[k] += 1;
+            c.inside_vertices.push(i);
+            if need * 1000.0 > c.deepest_mm {
+                c.deepest_mm = need * 1000.0;
+                c.worst_vertex = Some(i);
+            }
+        }
+    }
+    c.pass = c.inside == 0;
+    c
 }
 
 #[derive(Clone, Serialize)]
@@ -498,6 +592,22 @@ mod tests {
             }
         }
         EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles }
+    }
+
+    #[test]
+    fn the_lid_check_counts_outward_front_vertices_inside_the_eye_only() {
+        let eye = Eye::new(&sphere(0.012, 24, 48)).unwrap();
+        let out = [0.0, 0.0, 1.0];
+        let points = [[0.0, 0.0, 0.011], [0.0, 0.0, 0.011], [0.0, 0.0, 0.0125], [0.0108, 0.0, -0.002], [0.0, 0.004, 0.0105]];
+        let normals = [out, [0.0, 0.0, -1.0], out, [1.0, 0.0, 0.0], unit([0.0, 0.3, 0.9])];
+        let c = lid_check(&points, &normals, &[eye], 75.0, 0.0);
+        assert_eq!(c.candidates, 3);
+        assert_eq!(c.inside, 2);
+        assert_eq!(c.worst_vertex, Some(0));
+        assert!((c.deepest_mm - 1.0).abs() < 0.01, "{}", c.deepest_mm);
+        assert!(!c.pass);
+        let eye = Eye::new(&sphere(0.012, 24, 48)).unwrap();
+        assert!(lid_check(&points[2..3], &normals[2..3], &[eye], 75.0, 0.0).pass);
     }
 
     #[test]

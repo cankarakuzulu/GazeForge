@@ -271,6 +271,16 @@ pub struct Untangle {
 const UNTANGLE_STEP: f64 = 0.5;
 
 pub fn untangle(game: &[Point], lods: &[(&[u32], &[[u32; 3]])], max_iterations: usize, max_move: f64) -> (Vec<Point>, Untangle) {
+    untangle_projected(game, lods, max_iterations, max_move, &|p| p)
+}
+
+pub fn untangle_projected(
+    game: &[Point],
+    lods: &[(&[u32], &[[u32; 3]])],
+    max_iterations: usize,
+    max_move: f64,
+    project: &dyn Fn(Point) -> Point,
+) -> (Vec<Point>, Untangle) {
     let mut moved = game.to_vec();
     let neighbours: Vec<Vec<Vec<u32>>> = lods
         .iter()
@@ -334,7 +344,7 @@ pub fn untangle(game: &[Point], lods: &[(&[u32], &[[u32; 3]])], max_iterations: 
             }
             let (sum, n) = target[&g];
             let p = moved[g as usize];
-            let next = [0, 1, 2].map(|i| p[i] + UNTANGLE_STEP * (sum[i] / n - p[i]));
+            let next = project([0, 1, 2].map(|i| p[i] + UNTANGLE_STEP * (sum[i] / n - p[i])));
             if dot(sub(next, game[g as usize]), sub(next, game[g as usize])).sqrt() > max_move {
                 capped[g as usize] = true;
                 continue;

@@ -151,8 +151,10 @@ size, the spec hash and the sha256 of the `.glb`.
 Game-ready options (each is opt-in; without them the output is unchanged):
 
 ```
-                     [--morph-dir DIR] [--morph-floor MM] [--facing keep|repair] [--lod-screen measured
+                     [--morph-dir DIR] [--morph-floor MM] [--facing keep|repair|repair-states] [--lod-screen measured
                      [--lod-pixels 1] [--lod-height 1080]] [--rig none|head --rig-jaw TARGET --eyes EYES.json]
+                     [--lids off|auto --eyes EYES.json [--lids-step-mm 0.05] [--lids-max-mm 1] [--lids-front-deg 75]
+                     [--lids-tolerance-mm 0] [--lids-smooth 4]] [--lod0-out STEM]
 ```
 
 - `--morph-dir DIR` resolves a morph id `ID` as `DIR/ID.npz` (sparse `indices` + `deltas` on the dense topology) before
@@ -163,8 +165,24 @@ Game-ready options (each is opt-in; without them the output is unchanged):
 - `--facing repair` flips edges of triangles that face against their own vertex normals (folds a coarse LOD triangle
   picks up from the character's shape). A flip is taken only off UV seams, only when both new triangles face with their
   vertex normals in the neutral state, never adds a back-facing triangle in any morph state, and never makes a sliver
-  thinner than the pair it replaces (or 5 degrees). Vertices, positions and morph deltas are untouched, so the LODs stay
-  nested; only the triangulation changes. The sidecar records the counts before and after per LOD.
+  thinner than the pair it replaces (or 5 degrees). Triangles the flips cannot fix are untangled: their vertices step
+  toward their one-ring centroids in every LOD (at most 2 mm), and every morph state moves by the same amount, so morph
+  deltas are unchanged. The LODs stay nested. The sidecar records the counts before and after per LOD.
+- `--facing repair-states` does the same, then untangles each morph state at weight 1 that still has triangles facing
+  against its own vertex normals, on its own (at most 4 mm). The neutral is not moved further, so at the moved vertices
+  that morph's delta is no longer exactly `F(c + e) - F(c)`; the sidecar lists each state, its counts and its largest move.
+- `--lids auto` keeps the eyelids outside the eyeballs of `--eyes`. After the placement, the finest LOD and every coarser
+  LOD are checked: a vertex fails when it lies within 0.5 to 1.3 eye radii of an eye centre and within `--lids-front-deg`
+  of its gaze, its normal points away from the centre, and it is closer to the centre than the larger of the eye radius
+  and the eye mesh's outermost surface along that direction (by more than `--lids-tolerance-mm`). A state that passes is
+  left untouched. A state that fails is collided at dense level (as `collide-lids`, with the failing vertices pushed even
+  where the dense normal faces the eye) with clearance 0, then one `--lids-step-mm` more each time up to `--lids-max-mm`,
+  re-placed each time, and the first clearance that passes is kept. Morph states are evaluated from the neutral's dense
+  shape as exported, so the delta is `F(collided(c + e)) - F(c)`. After a facing repair, a vertex still inside an eye is
+  moved along the eye's radius to its surface, alternating with the untangle (whose steps are kept outside the eyes) for
+  up to 4 rounds. The sidecar's `lids` section records every search and the final check per LOD and state.
+- `--lod0-out STEM` also writes the finest LOD as exported (neutral positions, its own triangulation and UVs) to
+  `STEM.obj` and the neutral dense shape it was placed from to `STEM.dense.npy`, for `gates game --triangles obj`.
 - `--lod-screen measured` chooses each LOD's screen size from the largest distance between the finest LOD's vertices
   and that LOD's surface: switch when that error projects to `--lod-pixels` on a screen `--lod-height` pixels tall,
   `s = 2 * pixels * radius / (error * height)`, with `s` the bounding sphere's diameter as a fraction of the screen
@@ -189,11 +207,21 @@ gazeforge gates game --dense DIR --base DIR --face base|shape:NAME|FILE.npy --ob
 gazeforge gates path --dense DIR --base DIR --start FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
                      [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM]
 gazeforge gates facing --glb FILE.glb [--states neutral|all]
+gazeforge gates lids --glb FILE.glb --eyes EYES.json [--states all|neutral] [--front-deg 75] [--tolerance-mm 0]
 ```
 
 `facing` reads a `.glb` and counts, per mesh, triangles whose winding faces against the mean of their three exported
 vertex normals (a back-facing triangle a renderer culls); with `--states all` it also counts every morph target at
-weight 1 and fails on those too.
+weight 1 and fails on those too. `lids` applies the eyelid check of `export-glb --lids auto` to every head mesh of a
+`.glb` (vertices sharing a position counted once), in the neutral and, with `--states all` (the default), every morph
+target at weight 1.
+
+`game --triangles obj` reads a game mesh whose triangulation differs from the game base's (for example the finest LOD
+after `--facing repair`); the vertices must still be the base's. The `census` uses rule a-2: a visible triangle (outside
+the eye and nostril box) more than 60 degrees from the mean of its corners' dense normals fails, unless a dense triangle
+the decimation collapsed into it (all three of its owners among the triangle's corners) is itself more than 60 degrees
+from the mean of its own vertex normals, i.e. the fold is already in the dense shape. `front_over60_raw` keeps the count
+without that exception and `front_over60_dense_folded` the triangles it excused.
 
 `shell` compares two dense shapes: quad folds that appear, inner surfaces that come to face the front, and move
 roughness (vertices that move unlike their neighbours). `game` measures an exported game mesh against its dense face:

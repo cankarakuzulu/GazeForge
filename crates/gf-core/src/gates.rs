@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use gf_geom::Uv;
 use gf_geom::decimate::Decimated;
-use gf_geom::placement::{angle_weighted_normals, deviation_deg, triangle_references};
+use gf_geom::placement::{angle_weighted_normals, deviation_deg};
 use serde::Serialize;
 
 pub type Point = [f64; 3];
@@ -195,6 +195,8 @@ pub fn uv_health(game: &[Point], triangles: &[[u32; 3]], uvs: &[[Uv64; 3]]) -> U
     UvHealth { triangles: ratios.len(), flipped, zero_area, log_stretch_p50_p95_p99: spread, pass: flipped == 0 && zero_area == 0 }
 }
 
+pub const FOLD_DEG: f64 = 60.0;
+
 #[derive(Serialize, Clone, Debug)]
 pub struct Census {
     pub triangles: usize,
@@ -203,48 +205,125 @@ pub struct Census {
     pub box_over60: usize,
     pub front_over30: usize,
     pub front_over60: usize,
+    pub front_over60_raw: usize,
+    pub front_over60_dense_folded: usize,
     pub front_over90: usize,
     pub over60_invisible_to_min5_cap170: usize,
+    pub dense_folded_triangles: usize,
+    pub dense_front_over60: usize,
     pub worst_visible: Vec<(usize, f64)>,
+    pub worst_visible_raw: Vec<(usize, f64)>,
+    pub rule: &'static str,
     pub pass: bool,
 }
 
+pub struct DenseFolds {
+    pub folded_triangles: usize,
+    pub front_over60: usize,
+    singles: BTreeSet<u32>,
+    pairs: BTreeSet<[u32; 2]>,
+    triples: BTreeSet<[u32; 3]>,
+}
+
+impl DenseFolds {
+    pub fn new(dense_face: &[Point], dense_triangles: &[[u32; 3]], normals: &[Point], owner: &[u32], tip: Point) -> DenseFolds {
+        let mut f = DenseFolds { folded_triangles: 0, front_over60: 0, singles: BTreeSet::new(), pairs: BTreeSet::new(), triples: BTreeSet::new() };
+        for tri in dense_triangles {
+            let p = tri.map(|i| dense_face[i as usize]);
+            let n = tri.map(|i| normals[i as usize]);
+            let reference = unit(add(add(n[0], n[1]), n[2]), 1e-30);
+            if deviation_deg(p, reference) <= FOLD_DEG {
+                continue;
+            }
+            f.folded_triangles += 1;
+            f.front_over60 += in_front(from_tip_mm(centroid(p), tip)) as usize;
+            let mut o = tri.map(|i| owner[i as usize]);
+            o.sort_unstable();
+            match (o[0] == o[1], o[1] == o[2]) {
+                (true, true) => {
+                    f.singles.insert(o[0]);
+                }
+                (true, false) => {
+                    f.pairs.insert([o[0], o[2]]);
+                }
+                (false, true) => {
+                    f.pairs.insert([o[0], o[1]]);
+                }
+                (false, false) => {
+                    f.triples.insert(o);
+                }
+            }
+        }
+        f
+    }
+
+    pub fn footprint_folded(&self, tri: [u32; 3]) -> bool {
+        let mut t = tri;
+        t.sort_unstable();
+        t.iter().any(|v| self.singles.contains(v))
+            || [[t[0], t[1]], [t[0], t[2]], [t[1], t[2]]].iter().any(|e| self.pairs.contains(e))
+            || self.triples.contains(&t)
+    }
+}
+
 pub fn census(dense_face: &[Point], dense_triangles: &[[u32; 3]], mesh: &Decimated, game: &[Point], tip: Point) -> Census {
+    census_on(dense_face, dense_triangles, mesh, &mesh.triangles, game, tip)
+}
+
+pub fn census_on(dense_face: &[Point], dense_triangles: &[[u32; 3]], mesh: &Decimated, triangles: &[[u32; 3]], game: &[Point], tip: Point) -> Census {
     let normals = angle_weighted_normals(dense_face, dense_triangles);
     let kept: Vec<Point> = mesh.kept.iter().map(|&d| normals[d as usize]).collect();
-    let refs = triangle_references(mesh, &kept);
+    let refs: Vec<Point> = triangles.iter().map(|t| unit(t.iter().fold([0.0; 3], |a, &g| add(a, kept[g as usize])), 1e-30)).collect();
+    let folds = DenseFolds::new(dense_face, dense_triangles, &normals, &mesh.owner, tip);
     let mut c = Census {
-        triangles: mesh.triangles.len(),
+        triangles: triangles.len(),
         over60: 0,
         flipped_over90: 0,
         box_over60: 0,
         front_over30: 0,
         front_over60: 0,
+        front_over60_raw: 0,
+        front_over60_dense_folded: 0,
         front_over90: 0,
         over60_invisible_to_min5_cap170: 0,
+        dense_folded_triangles: folds.folded_triangles,
+        dense_front_over60: folds.front_over60,
         worst_visible: Vec::new(),
+        worst_visible_raw: Vec::new(),
+        rule: "a-2: a visible triangle over 60 deg fails unless a dense triangle the decimation collapsed into it (all three owners among its corners) is itself over 60 deg against its own vertex normals",
         pass: false,
     };
     let mut front = Vec::new();
-    for (t, tri) in mesh.triangles.iter().enumerate() {
+    let mut counted = Vec::new();
+    for (t, tri) in triangles.iter().enumerate() {
         let p = tri.map(|i| game[i as usize]);
         let dev = deviation_deg(p, refs[t]);
         let rel = from_tip_mm(centroid(p), tip);
         let a = corner_angles_deg(p);
         let hidden = a[0].min(a[1]).min(a[2]) >= 5.0 && a[0].max(a[1]).max(a[2]) <= 170.0;
-        c.over60 += (dev > 60.0) as usize;
+        c.over60 += (dev > FOLD_DEG) as usize;
         c.flipped_over90 += (dev > 90.0) as usize;
-        c.box_over60 += (in_box(rel) && dev > 60.0) as usize;
-        c.over60_invisible_to_min5_cap170 += (hidden && dev > 60.0) as usize;
+        c.box_over60 += (in_box(rel) && dev > FOLD_DEG) as usize;
+        c.over60_invisible_to_min5_cap170 += (hidden && dev > FOLD_DEG) as usize;
         if in_front(rel) {
             c.front_over30 += (dev > 30.0) as usize;
-            c.front_over60 += (dev > 60.0) as usize;
             c.front_over90 += (dev > 90.0) as usize;
             front.push((t, round_to(dev, 1)));
+            if dev > FOLD_DEG {
+                c.front_over60_raw += 1;
+                if folds.footprint_folded(*tri) {
+                    c.front_over60_dense_folded += 1;
+                    continue;
+                }
+                c.front_over60 += 1;
+            }
+            counted.push((t, round_to(dev, 1)));
         }
     }
     front.sort_by(|a, b| b.1.total_cmp(&a.1));
-    c.worst_visible = front.into_iter().take(3).collect();
+    counted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    c.worst_visible_raw = front.into_iter().take(3).collect();
+    c.worst_visible = counted.into_iter().take(3).collect();
     c.pass = c.front_over60 == 0;
     c
 }
@@ -344,7 +423,7 @@ pub fn seams(
     game: &[Point],
     triangles: &[[u32; 3]],
     game_uvs: &[[Uv64; 3]],
-    base_uvs: &[[Uv; 3]],
+    (base_triangles, base_uvs): (&[[u32; 3]], &[[Uv; 3]]),
     dense: &DenseSurface,
     tip: Point,
     limit_mm: f64,
@@ -352,10 +431,14 @@ pub fn seams(
     let mut base_keys: HashMap<usize, Vec<Uv64>> = HashMap::new();
     let mut game_keys: HashMap<usize, Vec<Uv64>> = HashMap::new();
     let mut rounded: HashMap<usize, BTreeSet<(i64, i64)>> = HashMap::new();
-    for ((tri, g), b) in triangles.iter().zip(game_uvs).zip(base_uvs) {
+    for (tri, b) in base_triangles.iter().zip(base_uvs) {
+        for c in 0..3 {
+            base_keys.entry(tri[c] as usize).or_default().push([b[c][0] as f64, b[c][1] as f64]);
+        }
+    }
+    for (tri, g) in triangles.iter().zip(game_uvs) {
         for c in 0..3 {
             let v = tri[c] as usize;
-            base_keys.entry(v).or_default().push([b[c][0] as f64, b[c][1] as f64]);
             game_keys.entry(v).or_default().push(g[c]);
             rounded.entry(v).or_default().insert(((g[c][0] * 1e7).round() as i64, (g[c][1] * 1e7).round() as i64));
         }
@@ -366,7 +449,7 @@ pub fn seams(
     vertices.sort_unstable();
     for v in &vertices {
         let nb = key_clusters(base_keys.get_mut(v).unwrap());
-        let ng = key_clusters(game_keys.get_mut(v).unwrap());
+        let ng = game_keys.get_mut(v).map_or(0, |k| key_clusters(k));
         if ng < nb {
             lost.push(*v);
         } else if ng > nb {
@@ -382,7 +465,7 @@ pub fn seams(
     let mut off_chart = 0usize;
     let mut worst_miss = 0.0f64;
     for v in &vertices {
-        let keys = &rounded[v];
+        let Some(keys) = rounded.get(v) else { continue };
         if keys.len() < 2 {
             continue;
         }
@@ -803,5 +886,35 @@ mod tests {
         let v = [1.0, 2.0, 3.0, 4.0];
         assert_eq!(percentile(&v, 50.0), 2.5);
         assert!((percentile(&v, 95.0) - 3.85).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_dense_fold_excuses_only_the_game_triangles_it_collapsed_into() {
+        let mut p: Vec<Point> = Vec::new();
+        for j in 0..4 {
+            for i in 0..4 {
+                p.push([i as f64 * 0.001, j as f64 * 0.001, 0.0]);
+            }
+        }
+        let mut tris = Vec::new();
+        for j in 0..3u32 {
+            for i in 0..3u32 {
+                let a = j * 4 + i;
+                tris.push([a, a + 1, a + 5]);
+                tris.push([a, a + 5, a + 4]);
+            }
+        }
+        let owner: Vec<u32> = (0..16u32).map(|v| v % 4).collect();
+        let normals = angle_weighted_normals(&p, &tris);
+        let flat = DenseFolds::new(&p, &tris, &normals, &owner, [0.0, -1.0, 0.0]);
+        assert_eq!(flat.folded_triangles, 0);
+        assert!(!flat.footprint_folded([0, 1, 2]));
+        tris[0] = [0, 5, 1];
+        let normals = angle_weighted_normals(&p, &tris);
+        let folded = DenseFolds::new(&p, &tris, &normals, &owner, [0.0, -1.0, 0.0]);
+        assert_eq!(folded.folded_triangles, 1);
+        assert!(folded.footprint_folded([0, 1, 2]));
+        assert!(folded.footprint_folded([2, 0, 1]));
+        assert!(!folded.footprint_folded([1, 2, 3]));
     }
 }
