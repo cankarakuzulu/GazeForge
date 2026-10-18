@@ -171,7 +171,7 @@ pub static REGISTRY: &[CommandDef] = &[
         name: "photo.check",
         kind: Kind::Query,
         summary: "Reference-photo gate: measures head yaw, pitch and roll in a front and/or profile photo and checks the image (one face, face size, sharpness, clipped highlights and shadows, eyes open and mouth closed, plain background, declared profile side); a report per photo with each value, its limit and a reason on failure.",
-        limits: "A failed check is a report (pass false), not an error; photo.ingest and character.from_photos turn it into gate_failed. Limits are calibrated on renders of known rotation; profile roll is not observable in a side view and is not gated; profile expression is not measured.",
+        limits: "A failed check is a report (pass false), not an error; photo.ingest and character.from_photos turn it into gate_failed. Limits are calibrated on renders of known rotation (the report's calibration block gives each estimator's measured error and says where an axis misses the 3 degree target); the profile's yaw and roll come from this person's fitted head and need the front photo, and their sign is not observable; profile expression is not measured.",
         input: photo_gate::check_input,
         output: photo_gate::check_output,
         run: photo_gate::check,

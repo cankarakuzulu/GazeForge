@@ -69,7 +69,25 @@ fn run(input: &Value, dir: &Path) -> Result<Value, ApiError> {
             args[k] = v.clone();
         }
     }
-    photo::worker(input, "photo_gate.py", "check", args, dir)
+    let mut retries = 0;
+    loop {
+        match photo::worker(input, "photo_gate.py", "check", args.clone(), dir) {
+            Err(e) if retries < WORKER_RETRIES && died_without_result(&e) => retries += 1,
+            Ok(mut report) => {
+                if retries > 0 {
+                    report["worker_retries"] = json!(retries);
+                }
+                return Ok(report);
+            }
+            other => return other,
+        }
+    }
+}
+
+const WORKER_RETRIES: usize = 2;
+
+fn died_without_result(e: &ApiError) -> bool {
+    e.code == Code::WorkerFailed && e.message.contains("without a result")
 }
 
 pub fn check(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -152,6 +170,13 @@ mod tests {
         let ctx = Ctx { jobs_dir: PathBuf::from("."), exe: PathBuf::from("."), job_id: None };
         let err = check(&ctx, &json!({})).unwrap_err();
         assert_eq!(err.code, Code::InvalidInput);
+    }
+
+    #[test]
+    fn only_a_worker_that_died_without_a_result_is_retried() {
+        assert!(died_without_result(&ApiError::new(Code::WorkerFailed, "check exited Some(-1073740022) without a result")));
+        assert!(!died_without_result(&ApiError::new(Code::WorkerFailed, "check: the face landmarker model x does not exist")));
+        assert!(!died_without_result(&ApiError::new(Code::InvalidInput, "without a result")));
     }
 
     #[test]
