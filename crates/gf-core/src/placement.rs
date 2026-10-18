@@ -6,7 +6,7 @@ use gf_geom::lids::{self, Eye};
 use gf_geom::placement::{self as pl, FitSettings};
 use gf_geom::placement_f2::{self, F2Settings};
 use gf_geom::placement_f3::{self, F3Settings, F3Stats};
-use gf_geom::placement_f5::{self, F5Settings, F5Stats};
+use gf_geom::placement_f5::{self, F5Settings, F5Stats, F6Settings};
 pub use gf_geom::prepared::Prepared;
 use serde_json::{Map, Value, json};
 
@@ -24,6 +24,7 @@ pub const RELEASED: &[PlacementVersion] = &[
     PlacementVersion { name: "f3", version: 1 },
     PlacementVersion { name: "f4", version: 1 },
     PlacementVersion { name: "f5", version: 1 },
+    PlacementVersion { name: "f6", version: 1 },
 ];
 
 pub const DEFAULT: PlacementVersion = PlacementVersion { name: "f5", version: 1 };
@@ -90,6 +91,22 @@ pub struct F3 {
 pub struct F5 {
     pub settings: F5Settings,
     pub eyes: Vec<Eye>,
+}
+
+pub struct F6 {
+    pub settings: F6Settings,
+    pub eyes: Vec<Eye>,
+}
+
+pub fn f6_defaults(f5: F5Settings) -> F6Settings {
+    F6Settings {
+        f5: F5Settings { membrane: 0.05, smooth: 0.05, ..f5 },
+        sliver_deg: 6.0,
+        sliver_rounds: 32,
+        sliver_relax: 0.5,
+        sliver_seam: 0.25,
+        sliver_eye: [0.004, 0.008],
+    }
 }
 
 fn report(pairs: Vec<(&str, Value)>) -> Map<String, Value> {
@@ -225,6 +242,47 @@ impl Placement for F5 {
     }
 }
 
+impl F6 {
+    fn placed(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, game: Vec<[f64; 3]>, triangle_uvs: Vec<[Uv; 3]>, stats: F5Stats) -> Placed {
+        let lids = (!self.eyes.is_empty()).then(|| {
+            let front = self.settings.f5.eye_front_deg;
+            let (dense_area, dense_depth) = lids::penetration_area(positions, dense.triangles, &self.eyes, front, 2);
+            let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &self.eyes, front, 6);
+            json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
+                   "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
+        });
+        Placed {
+            game,
+            triangle_uvs: Some(triangle_uvs),
+            report: report(vec![
+                ("settings", json!(self.settings)),
+                ("eyes", json!(self.eyes.len())),
+                ("placement_stats", json!(stats)),
+                ("lids", json!(lids)),
+            ]),
+        }
+    }
+}
+
+impl Placement for F6 {
+    fn version(&self) -> PlacementVersion {
+        PlacementVersion { name: "f6", version: 1 }
+    }
+    fn place(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated) -> Placed {
+        let (game, triangle_uvs, stats) =
+            placement_f5::place_f6(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings);
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
+    }
+    fn place_prepared(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, prepared: &Prepared) -> Placed {
+        if !prepared.fits(positions.len(), dense.triangles.len(), base, self.settings.f5.uv_ring) {
+            return self.place(positions, dense, base);
+        }
+        let (game, triangle_uvs, stats) =
+            placement_f5::place_f6_prepared(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings, prepared);
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +300,7 @@ mod tests {
 
     #[test]
     fn unreleased_versions_are_refused() {
-        for bad in ["f3/2", "f5/2", "f6", "f3/x", "", "F3/1", "subset/0"] {
+        for bad in ["f3/2", "f5/2", "f6/2", "f7", "f3/x", "", "F3/1", "subset/0"] {
             assert!(PlacementVersion::parse(bad).is_err(), "{bad} accepted");
         }
     }
@@ -250,6 +308,6 @@ mod tests {
     #[test]
     fn the_released_list_is_append_only() {
         let names: Vec<String> = RELEASED.iter().map(|v| v.to_string()).collect();
-        assert_eq!(names[..7], ["subset/1", "optimal/1", "fit/1", "f2/1", "f3/1", "f4/1", "f5/1"]);
+        assert_eq!(names[..8], ["subset/1", "optimal/1", "fit/1", "f2/1", "f3/1", "f4/1", "f5/1", "f6/1"]);
     }
 }

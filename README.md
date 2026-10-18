@@ -52,14 +52,14 @@ Export a shape (the base, a target, or any positions over the dense order) at ga
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement f5|subset|optimal|fit|f2|f3|f4|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
+                     [--placement f5|f6|subset|optimal|fit|f2|f3|f4|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
-Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`, `f5/1`) and never changes once
+Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`, `f5/1`, `f6/1`) and never changes once
 released; a bare name means its latest version. `f5/1` is the default wherever no placement is named: a new character
 spec (and so `export-glb`, which places with the spec's placement), `export-obj` (whose default was `optimal` before),
 the designer, the image-to-character pipeline and `gates path`. A named placement runs exactly as released. With
-`--eyes`, `f3` and `f5` keep the placed eyelids outside the eyeballs. The output names the version it ran
+`--eyes`, `f3`, `f5` and `f6` keep the placed eyelids outside the eyeballs. The output names the version it ran
 (`placement_version`).
 
 `f5` is the continuous placement: a small change to the dense shape makes a proportionally small change to the game mesh.
@@ -69,6 +69,13 @@ the game-resolution subset, a weak pull toward the fixed correspondence, edge ve
 tangential membrane that keeps triangles open. Seam vertices move along those normals only; the eyelid lift uses smooth
 fades instead of cut-offs. There are no accept/reject steps, nearest-surface searches or data-dependent iteration counts
 in the positions (the linear solver stops at a relative residual of 1e-13).
+
+`f6` is `f5` with weaker edge and membrane terms (0.05 each) followed by a sliver nudge: wherever a triangle's height over
+one of its edges is below sin(6 deg) times that edge, its vertices are pushed apart along that height, 32 damped rounds.
+Each push grows continuously from zero at the threshold, so the output stays continuous in the input; boundary vertices
+never move, seam vertices move at a quarter of the rate and keep their texture coordinates, and the push fades out near
+the eyeballs when `--eyes` is given. The triangulation is unchanged. `f6` is opt-in (`--placement f6`); the default stays
+`f5/1`.
 
 Push a character's eyelid skin out of its eyeballs at dense resolution:
 

@@ -163,6 +163,29 @@ fn the_continuous_placement_exports_and_refuses_what_it_does_not_read() {
 }
 
 #[test]
+fn the_sliver_placement_exports_and_refuses_what_it_does_not_read() {
+    let root = fixture("f6");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f6", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["placement_version"], Value::String("f6/1".into()));
+    assert_eq!(value["settings"]["membrane"], serde_json::json!(0.05));
+    assert_eq!(value["settings"]["smooth"], serde_json::json!(0.05));
+    assert_eq!(value["settings"]["sliver_deg"], serde_json::json!(6.0));
+    assert!(value["placement_stats"]["slivers"]["below_after"].as_u64().is_some(), "{value}");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f6/1", "--f5-membrane", "0.2", "--f6-sliver-deg", "8", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["settings"]["membrane"], serde_json::json!(0.2));
+    assert_eq!(value["settings"]["sliver_deg"], serde_json::json!(8.0));
+    let (_, f5) = export(&root, "good.npy", &["--placement", "f5", "--tip-vertex", "0"]);
+    assert!(f5["placement_stats"].get("slivers").is_none(), "{f5}");
+    refused(export(&root, "good.npy", &["--placement", "f5", "--f6-sliver-deg", "6", "--tip-vertex", "0"]), "--f6-sliver-deg");
+    refused(export(&root, "good.npy", &["--placement", "f6", "--f3-rounds", "2", "--tip-vertex", "0"]), "--f3-rounds");
+    refused(export(&root, "good.npy", &["--placement", "f6", "--f6-sliver-relax", "0", "--tip-vertex", "0"]), "--f6-sliver-relax");
+    refused(export(&root, "good.npy", &["--placement", "f6", "--f6-sliver-eye", "8,4", "--tip-vertex", "0"]), "--f6-sliver-eye");
+    refused(export(&root, "good.npy", &["--placement", "f6/2", "--tip-vertex", "0"]), "f6/2");
+}
+
+#[test]
 fn bad_layout_options_are_refused() {
     let root = fixture("layout");
     let dense = root.join("dense");

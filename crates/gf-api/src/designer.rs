@@ -13,7 +13,7 @@ use gf_core::residual;
 use gf_geom::decimate::Decimated;
 use gf_geom::lids::ClearSettings;
 use gf_geom::placement_f3::{F3Settings, F4Settings};
-use gf_geom::placement_f5::F5Settings;
+use gf_geom::placement_f5::{F5Settings, F6Settings};
 use gf_io::character::{self as ch, MacroSource};
 use gf_io::dense::Dense;
 use gf_io::store::Store;
@@ -69,6 +69,10 @@ pub fn f5_defaults() -> F5Settings {
         eye_depth: [0.3, 0.6].map(|x: f64| x / 1000.0),
         eye_front_deg: 75.0,
     }
+}
+
+pub fn f6_defaults() -> F6Settings {
+    gp::f6_defaults(f5_defaults())
 }
 
 struct Loaded {
@@ -291,9 +295,10 @@ fn placer(version: PlacementVersion, eyes: Vec<gf_geom::lids::Eye>, draft: bool)
         "f3" => Box::new(gp::F3 { settings: f3, eyes }),
         "f4" => Box::new(gp::F3 { settings: F3Settings { f4: Some(f4_defaults()), ..f3 }, eyes }),
         "f5" => Box::new(gp::F5 { settings: f5_defaults(), eyes }),
+        "f6" => Box::new(gp::F6 { settings: f6_defaults(), eyes }),
         "subset" => Box::new(gp::Subset),
         "optimal" => Box::new(gp::Optimal { max_move: 3.0 / 1000.0 }),
-        other => return Err(ApiError::invalid(format!("designer.settle places with f3, f4, f5, subset or optimal, not {other}"))),
+        other => return Err(ApiError::invalid(format!("designer.settle places with f3, f4, f5, f6, subset or optimal, not {other}"))),
     })
 }
 

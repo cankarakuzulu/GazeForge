@@ -19,7 +19,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   build-base  --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy] [--min-angle 4] [--max-angle 170]
               [--max-turn 45] [--boundary-weight 100] [--improve-below 20] [--flip-flat 15]
               [--weights W.npy (per dense vertex, > 0, multiplies the collapse cost)] [--lods 8000,3000 (nested, into OUT/lod_N)]
-  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement f5|subset|optimal|fit|f2|f3|f4|NAME/VERSION]
+  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement f5|f6|subset|optimal|fit|f2|f3|f4|NAME/VERSION]
               [--tip-vertex 185894]
               optimal, fit, f2: [--max-move 3]
               fit, f2: [--fit-iterations 4] [--fit-smooth 0.1] [--fit-min-angle 5] [--fit-guard-steps 8] [--fit-repair-below 5] [--fit-trim 0]
@@ -35,6 +35,9 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
               f5 only: [--f5-tangential 0.01] [--f5-smooth 0.1] [--f5-membrane 0.1] [--f5-max-move 3]
               [--f5-uv-ring 2] [--f5-normals subset|dense] [--eyes EYES.json]
               [--f5-eye-front 75] [--f5-eye-clearance 0.05] [--f5-eye-depth 0.3,0.6]
+              f6 = f5 + a continuous sliver nudge: every f5 option (f6 defaults --f5-membrane 0.05 --f5-smooth 0.05),
+              and [--f6-sliver-deg 6] [--f6-sliver-rounds 32]
+              [--f6-sliver-relax 0.5] [--f6-sliver-seam 0.25] [--f6-sliver-eye 4,8]
   collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
               [--front-deg 75] [--smooth 4]
   store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
@@ -131,6 +134,7 @@ const F5_KEYS: &[&str] = &[
     "f5-eye-depth",
     "f5-eye-clearance",
 ];
+const F6_KEYS: &[&str] = &["f6-sliver-deg", "f6-sliver-rounds", "f6-sliver-relax", "f6-sliver-seam", "f6-sliver-eye"];
 const COLLIDE_KEYS: &[&str] = &["dense", "positions", "eyes", "out", "clearance", "front-deg", "smooth"];
 
 pub(crate) type Options = HashMap<String, String>;
@@ -262,6 +266,7 @@ pub(crate) fn placement_keys(name: &str) -> &'static [&'static [&'static str]] {
         "f2" => &[FIT_KEYS, F2_KEYS],
         "f3" => &[F3_KEYS],
         "f5" => &[F5_KEYS],
+        "f6" => &[F5_KEYS, F6_KEYS],
         _ => &[F3_KEYS, F4_KEYS],
     }
 }
@@ -270,6 +275,7 @@ pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dy
     Ok(match version.name {
         "f3" | "f4" => Box::new(f3_placement(opts, version.name)?),
         "f5" => Box::new(f5_placement(opts)?),
+        "f6" => Box::new(f6_placement(opts)?),
         "subset" => Box::new(gp::Subset),
         "optimal" => Box::new(gp::Optimal { max_move: number(opts, "max-move", 3.0)? / 1000.0 }),
         "fit" => Box::new(gp::Fit { settings: fit_settings(opts)? }),
@@ -284,7 +290,7 @@ fn export_obj(opts: &Options) -> Result<Value, String> {
     let default = gp::DEFAULT.to_string();
     let given = opts.get("placement").map(String::as_str).unwrap_or(&default);
     let version = PlacementVersion::parse(given)
-        .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4, f5 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
+        .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4, f5, f6 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
     let mut allowed: Vec<&[&str]> = vec![EXPORT_KEYS];
     allowed.extend_from_slice(placement_keys(version.name));
     only(opts, &format!("export-obj --placement {given}"), &allowed)?;
@@ -446,6 +452,36 @@ fn f5_placement(opts: &Options) -> Result<gp::F5, String> {
         None => Vec::new(),
     };
     Ok(gp::F5 { settings, eyes })
+}
+
+fn f6_placement(opts: &Options) -> Result<gp::F6, String> {
+    let gp::F5 { settings: f5, eyes } = f5_placement(opts)?;
+    let defaults = gp::f6_defaults(f5.clone());
+    let f5 = placement_f5::F5Settings {
+        membrane: number(opts, "f5-membrane", defaults.f5.membrane)?,
+        smooth: number(opts, "f5-smooth", defaults.f5.smooth)?,
+        ..f5
+    };
+    let settings = placement_f5::F6Settings {
+        f5,
+        sliver_deg: number(opts, "f6-sliver-deg", defaults.sliver_deg)?,
+        sliver_rounds: count(opts, "f6-sliver-rounds", defaults.sliver_rounds)?,
+        sliver_relax: number(opts, "f6-sliver-relax", defaults.sliver_relax)?,
+        sliver_seam: number(opts, "f6-sliver-seam", defaults.sliver_seam)?,
+        sliver_eye: pair(opts, "f6-sliver-eye", defaults.sliver_eye.map(|x| x * 1000.0))?.map(|x| x / 1000.0),
+        ..defaults
+    };
+    if !(0.0..30.0).contains(&settings.sliver_deg)
+        || !(settings.sliver_relax > 0.0 && settings.sliver_relax <= 1.0)
+        || !(0.0..=1.0).contains(&settings.sliver_seam)
+        || settings.sliver_eye[1] <= settings.sliver_eye[0]
+    {
+        return Err(format!(
+            "--f6-sliver-deg must be in [0, 30), --f6-sliver-relax in (0, 1], --f6-sliver-seam in [0, 1] and --f6-sliver-eye increasing, got {}, {}, {}, {:?}",
+            settings.sliver_deg, settings.sliver_relax, settings.sliver_seam, settings.sliver_eye
+        ));
+    }
+    Ok(gp::F6 { settings, eyes })
 }
 
 fn collide_lids(opts: &Options) -> Result<Value, String> {
