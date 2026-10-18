@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, registry};
+use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, photo_gate, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -162,10 +162,19 @@ pub static REGISTRY: &[CommandDef] = &[
         name: "photo.ingest",
         kind: Kind::Query,
         summary: "Stage 0 of image to character: read a front and a profile photo into a run directory and check facing (the front looks at the camera, the profile shows the declared side, both photos agree on proportions).",
-        limits: "A failed check is an error (gate_failed) and the run stops; nothing is averaged. A mirrored front photo of a symmetric face cannot be detected.",
-        input: photo::ingest_input,
+        limits: "A failed check is an error (gate_failed) and the run stops; nothing is averaged. A mirrored front photo of a symmetric face cannot be detected. The reference-photo gate (photo.check) runs first.",
+        input: photo_gate::ingest_input,
         output: photo::generic_output,
-        run: photo::ingest,
+        run: photo_gate::ingest,
+    },
+    CommandDef {
+        name: "photo.check",
+        kind: Kind::Query,
+        summary: "Reference-photo gate: measures head yaw, pitch and roll in a front and/or profile photo and checks the image (one face, face size, sharpness, clipped highlights and shadows, eyes open and mouth closed, plain background, declared profile side); a report per photo with each value, its limit and a reason on failure.",
+        limits: "A failed check is a report (pass false), not an error; photo.ingest and character.from_photos turn it into gate_failed. Limits are calibrated on renders of known rotation; profile roll is not observable in a side view and is not gated; profile expression is not measured.",
+        input: photo_gate::check_input,
+        output: photo_gate::check_output,
+        run: photo_gate::check,
     },
     CommandDef {
         name: "photo.landmarks",
@@ -235,9 +244,9 @@ pub static REGISTRY: &[CommandDef] = &[
         kind: Kind::Job,
         summary: "Image to character, stages 0 to 8 end to end: ingest and facing, landmarks, mesh, register, targets, residual, spec and glb export, texture, review sheet; logs per-stage times.",
         limits: "Stops at the first failing stage with that stage's error and the times so far.",
-        input: photo::from_photos_input,
+        input: photo_gate::from_photos_input,
         output: photo::generic_output,
-        run: photo::from_photos,
+        run: photo_gate::from_photos,
     },
 ];
 
