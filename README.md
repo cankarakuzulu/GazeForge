@@ -362,6 +362,18 @@ registry commands (so the CLI, HTTP and MCP all have them); the long ones are jo
 neck (clothing) is not fitted by default (`outline_regions`); the focal length is assumed (70 mm full-frame equivalent)
 unless `focal_px` is given; scale and placement are not observable from photos. No texture is projected on this path yet.
 
+**Dense shell (optional, `"dense_shell": true`).** The front and profile also go to an image-to-mesh server (`server` +
+`graph`, or `glb` to reuse a mesh, as on the mesh path); the mesh's outer shell (`mesh.multiview`; an untextured mesh is
+rendered as shaded clay for its landmarks) becomes an extra term of `fit.photos` (`shell`: the directory holding
+`shell_points.npy`, `shell_normals.npy`, `shell_landmarks.json`). The shell is placed by its landmarks, re-registered
+(similarity, trimmed ICP plus landmarks) every round, and pulls the visible vertices of `shell_regions` (default all but
+eyes and neck) along its normal, with a dead band (`shell_tolerance_mm`, default 2: a vertex closer than that is not
+pulled; one further away is pulled to the band's edge) and `shell_weight` (default 3). The generator is whatever the graph
+runs; a generator whose licence restricts territories or users can only be used as a bring-your-own graph, never as a
+default. Limits: a generated surface is a few millimetres off the true one, so the term helps a face far from the base
+and hurts one close to it; the shell's landmarks come from MediaPipe on a clay render of the mesh and can fail on a
+noisy surface (the run then stops with `worker_failed`); results that fail the shell gates are refused as before.
+
 **Mesh path (`"fit": "mesh"`).** A generated multi-view mesh is the fit target:
 
 | stage | command | what it does and measures |

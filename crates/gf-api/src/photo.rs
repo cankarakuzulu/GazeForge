@@ -1092,7 +1092,8 @@ pub fn from_photos_input() -> Value {
                 "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion tolerance (default 0.12)"},
                 "fit": {"type": "string", "enum": ["photos", "mesh"], "description": "fit the targets directly to the photos (default: landmarks and outlines of every photo through solved cameras) or to a generated mesh (stages 2-5)"},
                 "extras": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}}, "required": ["path"], "additionalProperties": false}, "description": "any number of extra views (three-quarters, the other side, slightly up or down): each is checked for quality and its pose is solved"},
-                "fit_options": {"type": "object", "description": "fit.photos options (weights, rounds, focal_px, outline_regions, landmarks, prior_scope)"}
+                "fit_options": {"type": "object", "description": "fit.photos options (weights, rounds, focal_px, outline_regions, landmarks, prior_scope)"},
+                "dense_shell": {"type": "boolean", "description": "direct fit only: also make a dense mesh from the front and profile (server + graph, or glb) and fit its outer shell as an extra surface term (fit.photos shell)"}
             })),
             merged(store_props(), base_table_prop()),
         ),
