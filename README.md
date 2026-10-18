@@ -340,6 +340,54 @@ default because its alignment drifts with the fit; the photos carry no absolute 
 mesh's hair is not separated from the skull, which is why the skull is held to the base; the texture is not delit unless
 albedo images are passed to `texture.project` (`front_albedo`, `profile_albedo`); eyes, teeth and hair are not built.
 
+#### Reference photos
+
+The fit assumes two photos taken like a passport pair: a straight front view and a true side view, with the head neither
+turned (yaw), nodded (pitch) nor tilted toward a shoulder (roll). A photo that breaks this is rejected before any work
+starts, because a turned or tilted head is read as a different face shape. What makes a photo acceptable:
+
+- one person, face filling a good part of the frame, in focus, evenly lit (no blown highlights or crushed shadows);
+- a neutral expression: eyes open, mouth closed;
+- a plain background that the head stands out from;
+- the front photo looks straight into the lens; the profile shows the declared side at 90 degrees, the camera at head height.
+
+`photo.check` (a query, so the CLI, HTTP and MCP all have it) measures this and returns a report per photo: every check
+with its measured value, its limit and, on failure, a plain reason. `photo.ingest` and `character.from_photos` run the same
+checks first and stop with `gate_failed`, naming every failed check; `thresholds` overrides a limit by name and `allow`
+records a named failure as allowed instead of stopping.
+
+```
+gazeforge call photo.check --input '{"front": "FRONT.png", "profile": "PROFILE.png", "profile_side": "right"}'
+```
+
+| check | how it is measured | default limit |
+|---|---|---|
+| front yaw | MediaPipe's facial transformation matrix, referred to the base mesh rendered straight on | 3 deg |
+| front roll | PnP of 30 stable landmarks against the base mesh's own landmark positions (a 70 mm full-frame-equivalent lens is assumed) | 3 deg |
+| front pitch | the mean of the transformation matrix's pitch and that PnP's pitch | 5.5 deg |
+| profile pitch | trimmed ICP similarity fit of the silhouette's front edge (forehead to chin) to the base's straight profile; a poor fit counts as unmeasured and fails | 3 deg |
+| profile yaw | the landmarker finds no face in a true side view; a face it does find means the view is turned toward the camera, and its reading is mapped to degrees | 15 deg |
+| one face | face count from the landmarker (front); no face outside the subject's head (profile) | exactly one |
+| face size | forehead to chin (front), nasion to chin (profile), in pixels | 300 px, 170 px |
+| sharpness | Laplacian variance on the face region scaled to 256 px height | 81.9 front, 31.3 profile |
+| exposure | share of face pixels at or above 250 (highlights) and at or below 5 (shadows) | 2 % each |
+| expression (front) | MediaPipe blendshapes: the larger eye-blink score; the jaw-open score | 0.162; 0.4 |
+| background | 95th percentile colour distance (Lab) of the background from its median; face-to-background contrast | 20; 26.6 front, 22.7 profile |
+| profile side | the nose bump of the silhouette is on the declared side (the facing check) | must match |
+
+The limits come from renders of the base and four training faces at known rotations (0, 2, 4, 8 and 15 degrees on each
+axis and in combinations, front and right profile, eyes in place); `workers/photo_gate_model.json` holds the calibration.
+A pose limit is never tighter than its estimator's 95th-percentile error there plus 1 degree, with 3 degrees as the target.
+What the method cannot do, measured on those renders:
+
+- front pitch: face shape alone moves single-photo pitch estimates by up to about 5 degrees (95th-percentile error 4.2), so
+  its limit is 5.5 degrees and a nod of 8 degrees can pass on some faces;
+- profile yaw: a view turned away from the camera, or turned toward it by less than about 10 to 15 degrees, is not
+  detected; the profile's silhouette barely changes with yaw;
+- profile roll (a tilt toward the shoulder, seen from the side) is not observable and is not gated; the front photo's roll is;
+- expression is measured on the front photo only; the jaw-open score also rises on a long chin with the mouth closed;
+- the facing check (unchanged) can reject a straight profile of a narrow face.
+
 ### Data layout
 
 A dense base directory holds `manifest.json`, `positions.npy`, `face_sizes.npy`, `corner_vertices.npy`,
