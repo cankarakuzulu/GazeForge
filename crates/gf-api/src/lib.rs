@@ -7,6 +7,7 @@ pub mod designer;
 pub mod error;
 pub mod jobs;
 pub mod photo;
+pub mod photo_fit;
 pub mod photo_gate;
 mod process;
 pub mod schema;
