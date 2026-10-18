@@ -1,0 +1,6 @@
+target/
+target-*/
+data/
+out/
+__pycache__/
+*.blend1
