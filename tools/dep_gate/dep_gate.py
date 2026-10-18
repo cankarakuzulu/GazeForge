@@ -36,7 +36,7 @@ ALLOWED = {
     "gf-wasm": ["gf-geom"],
 }
 PURE = ["gf-geom", "gf-core"]
-WASM = "gf-geom"
+WASM = ["gf-geom", "gf-wasm"]
 FRONT_DOORS = ["gf-cli", "gf-http", "gf-mcp"]
 KEEP_BUILT = ["gf-core", "gf-io", "gf-api"]
 
@@ -77,13 +77,15 @@ def gate_edges(args):
 
 def gate_clippy(args):
     cmd = [args["cargo"], "clippy"] + sum((["-p", p] for p in PURE), []) + ["--all-features", "--all-targets", "--", "-D", "warnings"]
-    env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(args["target_dir"], "clippy"))
+    toolchain = os.path.dirname(os.path.abspath(args["cargo"])) if os.path.dirname(args["cargo"]) else ""
+    path = os.pathsep.join(p for p in (toolchain, os.environ.get("PATH", "")) if p)
+    env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(args["target_dir"], "clippy"), PATH=path)
     code, _, err = run(cmd, args["root"], env)
     return {"pass": code == 0, "command": " ".join(cmd[1:]), "errors": errors_of(err)}
 
 
 def gate_wasm(args):
-    cmd = [args["cargo"], "build", "-p", WASM, "--target", "wasm32-unknown-unknown"]
+    cmd = [args["cargo"], "build"] + sum((["-p", p] for p in WASM), []) + ["--target", "wasm32-unknown-unknown"]
     env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(args["target_dir"], "wasm"))
     code, _, err = run(cmd, args["root"], env)
     return {"pass": code == 0, "command": " ".join(cmd[1:]), "errors": errors_of(err)}

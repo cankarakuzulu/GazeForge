@@ -178,6 +178,7 @@ name = "gf-api"
 version = "0.1.0"
 dependencies = [
  "gf-core",
+ "gf-geom",
  "gf-io",
  "serde",
  "serde_json",
@@ -226,6 +227,13 @@ dependencies = [
  "ndarray-npy",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gf-wasm"
+version = "0.1.0"
+dependencies = [
+ "gf-geom",
 ]
 
 [[package]]

@@ -340,22 +340,22 @@ impl Fit<'_> {
 
     fn relax(&self, game: &mut [[f64; 3]], subset: &[[f64; 3]], eyes: &[Eye], settings: &F3Settings, stats: &mut F3Stats) {
         let away = self.away(subset, eyes, settings);
+        let every: Vec<usize> = (0..game.len()).collect();
         for _ in 0..settings.relax_steps {
-            let moves: Vec<Option<[f64; 3]>> = (0..game.len())
-                .map(|g| {
-                    if self.fixed[g] || self.neighbours[g].is_empty() {
-                        return None;
-                    }
-                    let sliver = self.sliver_step(game, g, settings).map(|d| d.map(|x| x * away[g]));
-                    let b = self.back_off(game, g, settings);
-                    if sliver.is_none() && b <= 0.0 {
-                        return None;
-                    }
-                    let d = sliver.unwrap_or([0.0; 3]);
-                    let back = sub(subset[g], game[g]);
-                    Some([0, 1, 2].map(|k| d[k] + back[k] * settings.backoff_step * b))
-                })
-                .collect();
+            let view: &[[f64; 3]] = game;
+            let moves: Vec<Option<[f64; 3]>> = crate::map_each(&every, |g| {
+                if self.fixed[g] || self.neighbours[g].is_empty() {
+                    return None;
+                }
+                let sliver = self.sliver_step(view, g, settings).map(|d| d.map(|x| x * away[g]));
+                let b = self.back_off(view, g, settings);
+                if sliver.is_none() && b <= 0.0 {
+                    return None;
+                }
+                let d = sliver.unwrap_or([0.0; 3]);
+                let back = sub(subset[g], view[g]);
+                Some([0, 1, 2].map(|k| d[k] + back[k] * settings.backoff_step * b))
+            });
             let mut moved = 0;
             for (g, m) in moves.iter().enumerate() {
                 if let Some(m) = m {
@@ -486,14 +486,13 @@ pub fn place(
     stats.median_move_mm = moves[moves.len() / 2] * 1000.0;
     stats.max_move_mm = moves[moves.len() - 1] * 1000.0;
 
-    let derived: Vec<Option<Uv>> = (0..count)
-        .map(|g| {
-            if fixed[g] {
-                return None;
-            }
-            surface.closest_on_patch(g as u32, game[g], key[g]?).map(|hit| surface.uv(hit))
-        })
-        .collect();
+    let every: Vec<usize> = (0..count).collect();
+    let derived: Vec<Option<Uv>> = crate::map_each(&every, |g| {
+        if fixed[g] {
+            return None;
+        }
+        surface.closest_on_patch(g as u32, game[g], key[g]?).map(|hit| surface.uv(hit))
+    });
     stats.uv_keys_derived = derived.iter().filter(|d| d.is_some()).count();
     stats.uv_seed_misses = (0..count).filter(|&g| !fixed[g] && derived[g].is_none()).count();
     let mut use_derived: Vec<bool> = derived.iter().map(|d| d.is_some()).collect();

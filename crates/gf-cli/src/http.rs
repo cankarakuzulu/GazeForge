@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use gf_api::{ApiError, Ctx};
@@ -62,6 +63,98 @@ fn loopback(authority: &str) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "[::1]")
 }
 
+struct Served {
+    status: u16,
+    content_type: &'static str,
+    body: Vec<u8>,
+    immutable: bool,
+}
+
+fn content_type(name: &str) -> Option<&'static str> {
+    Some(match name.rsplit('.').next()? {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "wasm" => "application/wasm",
+        "png" => "image/png",
+        "json" => "application/json",
+        _ => return None,
+    })
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+            continue;
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query(path: &str, key: &str) -> Option<String> {
+    let (_, q) = path.split_once('?')?;
+    q.split('&').find_map(|pair| pair.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| percent_decode(v)))
+}
+
+fn not_found(message: String) -> Served {
+    let envelope = gf_api::envelope("http", Err(ApiError::not_found(message)));
+    Served { status: 404, content_type: "application/json", body: gf_api::text(&envelope).into_bytes(), immutable: false }
+}
+
+fn static_file(web: &Path, rest: &str) -> Served {
+    let rest = if rest.is_empty() { "index.html" } else { rest };
+    let safe = rest.split('/').all(|s| !s.is_empty() && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)));
+    let Some(kind) = content_type(rest).filter(|_| safe) else {
+        return not_found(format!("no designer file {rest}"));
+    };
+    match std::fs::read(web.join(rest)) {
+        Ok(body) => Served { status: 200, content_type: kind, body, immutable: false },
+        Err(_) => not_found(format!("{} has no {rest}; start the server with --web DIR (the folder holding index.html)", web.display())),
+    }
+}
+
+fn blob(path: &str, hex: &str) -> Served {
+    let Some(store) = query(path, "store") else {
+        return not_found("GET /v1/blob/<sha256 hex>?store=<store path>".into());
+    };
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+        return not_found(format!("{hex} is not a sha256 hex digest"));
+    }
+    match std::fs::read(Path::new(&store).join("blobs").join(&hex[..2]).join(hex)) {
+        Ok(body) => Served { status: 200, content_type: "application/octet-stream", body, immutable: true },
+        Err(_) => not_found(format!("no blob {hex} in {store}")),
+    }
+}
+
+fn serve_route(ctx: &Ctx, web: &Path, request: &Request) -> Served {
+    let path = request.path.split('?').next().unwrap_or("");
+    let allowed = loopback(&request.host) && request.origin.as_deref().is_none_or(loopback);
+    if allowed && request.method == "GET" {
+        if path == "/" || path == "/designer" {
+            return Served { status: 200, content_type: "text/html; charset=utf-8", body: b"<meta http-equiv=\"refresh\" content=\"0; url=/designer/\">".to_vec(), immutable: false };
+        }
+        if let Some(rest) = path.strip_prefix("/designer/") {
+            return static_file(web, rest);
+        }
+        if let Some(hex) = path.strip_prefix("/v1/blob/") {
+            return blob(&request.path, hex);
+        }
+    }
+    let envelope = route(ctx, request);
+    Served { status: gf_api::http_status(&envelope), content_type: "application/json", body: gf_api::text(&envelope).into_bytes(), immutable: false }
+}
+
 fn route(ctx: &Ctx, request: &Request) -> Value {
     if !loopback(&request.host) || request.origin.as_deref().is_some_and(|o| !loopback(o)) {
         return gf_api::envelope("http", Err(ApiError::invalid("only loopback hosts and origins are served")));
@@ -102,32 +195,50 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn handle(ctx: &Ctx, mut stream: TcpStream) {
-    let envelope = match read_request(&mut stream) {
-        Ok(request) => route(ctx, &request),
-        Err(e) => gf_api::envelope("http", Err(ApiError::invalid(e))),
+fn handle(ctx: &Ctx, web: &Path, mut stream: TcpStream) {
+    let served = match read_request(&mut stream) {
+        Ok(request) => serve_route(ctx, web, &request),
+        Err(e) => {
+            let envelope = gf_api::envelope("http", Err(ApiError::invalid(e)));
+            Served { status: gf_api::http_status(&envelope), content_type: "application/json", body: gf_api::text(&envelope).into_bytes(), immutable: false }
+        }
     };
-    let body = gf_api::text(&envelope);
-    let status = gf_api::http_status(&envelope);
+    let status = served.status;
+    let cache = if served.immutable { "Cache-Control: public, max-age=31536000, immutable\r\n" } else { "" };
     let head = format!(
-        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{cache}Connection: close\r\n\r\n",
         reason(status),
-        body.len()
+        served.content_type,
+        served.body.len()
     );
-    let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body.as_bytes())).and_then(|_| stream.flush());
+    let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&served.body)).and_then(|_| stream.flush());
+}
+
+fn serve_args(args: &[String]) -> Result<(u16, PathBuf), String> {
+    let usage = || "usage: gazeforge serve [--port 7878]".to_string();
+    let (mut port, mut web) = (7878u16, None);
+    let mut rest = args;
+    while let [flag, value, tail @ ..] = rest {
+        match flag.as_str() {
+            "--port" => port = value.parse::<u16>().map_err(|_| format!("--port must be 0 to 65535, got {value}"))?,
+            "--web" => web = Some(PathBuf::from(value)),
+            _ => return Err(usage()),
+        }
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        return Err(usage());
+    }
+    let web = web.or_else(|| std::env::var_os("GAZEFORGE_WEB").map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("web"));
+    Ok((port, web))
 }
 
 pub fn serve(args: &[String]) -> ExitCode {
-    let port = match args {
-        [] => Ok(7878u16),
-        [flag, value] if flag == "--port" => value.parse::<u16>().map_err(|_| format!("--port must be 0 to 65535, got {value}")),
-        _ => Err("usage: gazeforge serve [--port 7878]".to_string()),
-    };
     let fail = |message: String| {
         println!("{}", json!({"ok": false, "command": "serve", "error": {"code": "invalid_input", "message": message}}));
         ExitCode::from(2)
     };
-    let port = match port {
+    let (port, web) = match serve_args(args) {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
@@ -140,8 +251,8 @@ pub fn serve(args: &[String]) -> ExitCode {
     println!("{}", json!({"ok": true, "command": "serve", "listening": address, "jobs_dir": ctx.jobs_dir.display().to_string()}));
     let _ = std::io::stdout().flush();
     for stream in listener.incoming().flatten() {
-        let ctx = ctx.clone();
-        std::thread::spawn(move || handle(&ctx, stream));
+        let (ctx, web) = (ctx.clone(), web.clone());
+        std::thread::spawn(move || handle(&ctx, &web, stream));
     }
     ExitCode::SUCCESS
 }

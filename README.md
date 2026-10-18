@@ -30,6 +30,7 @@ The workspace is layered, and every edge points down: `gf-geom` (pure maths: no 
 `wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
 catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
 `gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
+`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only.
 `python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
 against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
 `-D warnings`, the wasm32 build, and a build of `gf-core`, `gf-io` and `gf-api` in a copy of the workspace without its
@@ -226,6 +227,37 @@ after the kill. Elsewhere the worker gets its own process group, which is killed
 `GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled
 through another that uses the same directory.
 
+### Designer
+
+A browser page served by `gazeforge serve`: sliders for the 290 head targets (cheek, chin, ears, eyebrows, eyes,
+forehead, head, mouth, neck, nose) with search, a category filter and reset (double-click resets one slider), the macro
+sliders (head only: the similarity is stripped and the neck seam pinned) when a macro definition file is given, a 3D view
+(orbit, wheel zoom, front / 30 / 85 degree cameras, clay or normal shading), the `character.measure` measurements of the
+settled character, and saving the character as a spec file.
+
+```
+gazeforge serve --port 7878 --web web       # --web: the folder holding index.html (default ./web, or GAZEFORGE_WEB)
+http://127.0.0.1:7878/designer/?store=STORE[&spec=FACE.gfchar.json][&macro=MACRO_JSON][&eyes=EYES.json][&out=SAVE.gfchar.json]
+```
+
+While a slider is dragged the page shows a preview, labelled approximate: the last settled game mesh plus each changed
+target's exact delta at the game vertices, computed in WebAssembly (`gf-wasm`, which also recomputes the vertex normals).
+On release (150 ms debounce) the server settles the character (weights and macros -> dense -> the spec's placement ->
+game mesh), and the settled mesh replaces the preview and becomes the base of the next one. Under the default placement
+the settled mesh can differ from the preview, because the placement re-fits game vertices along the surface. Macro
+sliders preview with a one-sided slope fetched when the drag starts (`designer.macro_delta`).
+
+Everything heavy stays on the server: the dense pack, the catalog and the placement never reach the browser. The page
+downloads one preview pack per target set (game triangles plus each target's i16 delta at the game vertices and a scale,
+a content-addressed store blob, cached by hash) and the settled positions. The commands, usable from every front door:
+`designer.sliders`, `designer.pack`, `designer.settle`, `designer.macro_delta`, `designer.save`. The served process keeps
+one pack, catalog and game base in memory between settles. `GET /v1/blob/<sha256>?store=STORE` serves a store blob.
+
+Building the page's kernel: `cargo build --release -p gf-wasm --target wasm32-unknown-unknown`, then copy
+`target/wasm32-unknown-unknown/release/gf_wasm.wasm` to `web/gf_wasm.wasm` (`CARGO_PROFILE_RELEASE_DEBUG=0` keeps it
+small). The page uses WebGL2 and no third-party scripts. On some Windows machines Chrome's default graphics backend gives
+no WebGL context; `--use-angle=gl` does.
+
 ### Data layout
 
 A dense base directory holds `manifest.json`, `positions.npy`, `face_sizes.npy`, `corner_vertices.npy`,
@@ -256,7 +288,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M0 | Pilot: the Rust core reads the dense base and targets and builds the shared ~20k-vertex game base; a sculpt maps onto it by index | per-region error against the dense sculpt within budget; no sliver triangles outside the eye and nostril areas; no UV flips; a painted look-development render passes review |
 | M1 | Core: the character spec (JSON: target weights, head-only macros, residual), evaluation and placement onto the game base, shape and game-mesh gates (folds, inner surfaces, move roughness, triangle quality, UV flips, orientation, seams, path continuity), glTF export with blend shapes and the nested LOD chain | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect |
 | M2 | Interfaces: CLI, local HTTP API and an MCP server, all over one core | an AI agent completes "make a character with a wide nose" through each of the three |
-| M3 | Browser designer: sliders and a live 3D view, the core compiled to WASM, heavy jobs on the server | slider response under 16 ms on the 20k base |
+| M3 | Browser designer: sliders and a live 3D view, a WASM preview kernel over the pure maths crate, heavy jobs on the server | slider response under 16 ms on the 20k base |
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game |
 
