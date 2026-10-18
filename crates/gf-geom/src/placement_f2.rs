@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::decimate::Decimated;
-use crate::dense::Uv;
+use crate::Uv;
 use crate::placement::{self as pl, FitSettings, PlacementStats};
 use crate::quadric;
 use crate::uv_chart::{self, FlipGuard, Surface, UvStats};

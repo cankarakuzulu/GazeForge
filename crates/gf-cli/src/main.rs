@@ -2,16 +2,21 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use gf_core::decimate::{self, Decimated, Settings};
-use gf_core::dense::{self, Dense};
-use gf_core::{game_base, lids, obj, placement, placement_f2, placement_f3};
+use gf_core::placement::{self as gp, DenseMesh, Placement, PlacementVersion};
+use gf_geom::decimate::{self, Decimated, Settings};
+use gf_geom::{lids, placement, placement_f2, placement_f3};
+use gf_io::dense::{self, Dense};
+use gf_io::{game_base, obj};
 use serde_json::{Value, json};
+
+mod data_cmds;
+mod mesh_cmds;
 
 const USAGE: &str = "gazeforge <command> [--key value ...]
   build-base  --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy] [--min-angle 4] [--max-angle 170]
               [--max-turn 45] [--boundary-weight 100] [--improve-below 20] [--flip-flat 15]
               [--weights W.npy (per dense vertex, > 0, multiplies the collapse cost)] [--lods 8000,3000 (nested, into OUT/lod_N)]
-  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement optimal|fit|f2|f3|subset]
+  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement optimal|fit|f2|f3|f4|subset|NAME/VERSION]
               [--tip-vertex 185894]
               optimal, fit, f2: [--max-move 3]
               fit, f2: [--fit-iterations 4] [--fit-smooth 0.1] [--fit-min-angle 5] [--fit-guard-steps 8] [--fit-repair-below 5] [--fit-trim 0]
@@ -26,6 +31,26 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
               [--f4-backoff dense|subset] [--f4-plane game|dense]
   collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
               [--front-deg 75] [--smooth 4]
+  store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
+  store import-catalog --store DIR --targets DIR --pack sha256:...
+  store import-game --store DIR --base DIR --pack sha256:...
+  character create --store DIR --pack sha256:... --catalog sha256:... --out FILE [--game sha256:...] [--placement f3/1]
+              [--name NAME] [--weights JSON|@FILE] [--macro MACRO_JSON [--sliders JSON|@FILE] [--macro-mode gf|mpfb] [--head-scale 1]]
+              [--residual-from FACE.npy [--quantum-mm 0.005]]
+  character validate --store DIR --spec FILE [--macro MACRO_JSON]
+  character evaluate --store DIR --spec FILE --out DENSE.npy [--macro MACRO_JSON] [--precision f32|f64]
+  macro weights --macro MACRO_JSON --sliders JSON|@FILE [--targets TARGETS_ROOT] [--mode gf|mpfb] [--floor 0.01|none]
+  macro labels --macro MACRO_JSON --slider NAME --values VALUES.npy --out TABLE.npy [--mode gf|mpfb]
+  export-glb  --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json] [--sparse auto|always|never]
+              [--lod-screen 0.25,0.1] [the options of the spec's placement, e.g. --eyes EYES.json]
+  gates shell --dense DIR --before base|shape:NAME|FILE.npy --after base|shape:NAME|FILE.npy [--fold-tolerance 10]
+              [--inner-tolerance 15] [--rough-mm 0.02] [--rough-rel 0.05] [--rough-tolerance 200]
+  gates game  --dense DIR --base DIR --face base|shape:NAME|FILE.npy --obj GAME.obj [--gates triq,uv,census,seams]
+              [--tip-vertex 185894] [--seam-limit-mm 0.05]
+  gates path  --dense DIR --base DIR --start base|shape:NAME|FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
+              [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM (a planted forward jump, to prove the gate)]
+  A gate that fails prints its report with \"ok\": false and exits non-zero.
+JSON|@FILE: inline JSON, or @ and a path to a JSON file. MACRO_JSON is read from the user's MakeHuman/MPFB install.
 An option the command does not read is refused; numbers must be finite and not negative; input positions must be finite.
 Every command prints one JSON object on stdout; a non-zero exit code means it failed.";
 
@@ -85,7 +110,7 @@ const F3_KEYS: &[&str] = &[
 const F4_KEYS: &[&str] = &["f4-target", "f4-passes", "f4-step", "f4-gain", "f4-fold", "f4-backoff", "f4-plane"];
 const COLLIDE_KEYS: &[&str] = &["dense", "positions", "eyes", "out", "clearance", "front-deg", "smooth"];
 
-type Options = HashMap<String, String>;
+pub(crate) type Options = HashMap<String, String>;
 
 fn options(args: &[String]) -> Result<Options, String> {
     let mut out = HashMap::new();
@@ -100,7 +125,7 @@ fn options(args: &[String]) -> Result<Options, String> {
     Ok(out)
 }
 
-fn only(opts: &Options, command: &str, allowed: &[&[&str]]) -> Result<(), String> {
+pub(crate) fn only(opts: &Options, command: &str, allowed: &[&[&str]]) -> Result<(), String> {
     let mut unknown: Vec<&str> = opts.keys().map(String::as_str).filter(|k| !allowed.iter().any(|set| set.contains(k))).collect();
     if unknown.is_empty() {
         return Ok(());
@@ -113,11 +138,11 @@ fn only(opts: &Options, command: &str, allowed: &[&[&str]]) -> Result<(), String
     Err(format!("unknown option for {command}: {}; it accepts {}", flags(&unknown), flags(&accepted)))
 }
 
-fn need<'a>(opts: &'a Options, key: &str) -> Result<&'a str, String> {
+pub(crate) fn need<'a>(opts: &'a Options, key: &str) -> Result<&'a str, String> {
     opts.get(key).map(String::as_str).ok_or_else(|| format!("missing --{key}"))
 }
 
-fn number(opts: &Options, key: &str, default: f64) -> Result<f64, String> {
+pub(crate) fn number(opts: &Options, key: &str, default: f64) -> Result<f64, String> {
     let Some(text) = opts.get(key) else {
         return Ok(default);
     };
@@ -131,7 +156,7 @@ fn number(opts: &Options, key: &str, default: f64) -> Result<f64, String> {
     Ok(value)
 }
 
-fn count(opts: &Options, key: &str, default: usize) -> Result<usize, String> {
+pub(crate) fn count(opts: &Options, key: &str, default: usize) -> Result<usize, String> {
     let value = number(opts, key, default as f64)?;
     if value.fract() != 0.0 || value > u32::MAX as f64 {
         return Err(format!("--{key} must be a whole number, got {}", opts.get(key).map_or("", String::as_str)));
@@ -170,7 +195,10 @@ fn build_base(opts: &Options) -> Result<Value, String> {
         Some(path) => Some(dense.vertex_weights(path)?),
         None => None,
     };
-    let mut levels = decimate::decimate_levels(shapes, &dense.triangles, &dense.triangle_uvs, &settings, weights.as_deref(), &lods);
+    let started = std::time::Instant::now();
+    let clock = || started.elapsed().as_secs_f64();
+    let mut levels =
+        decimate::decimate_levels(shapes, &dense.triangles, &dense.triangle_uvs, &settings, weights.as_deref(), &lods, Some(&clock));
     let result = levels.remove(0);
     game_base::save(out, &result)?;
     let mut coarser = Vec::new();
@@ -203,48 +231,66 @@ fn lod_targets(opts: &Options, finest: usize) -> Result<Vec<usize>, String> {
     Ok(out)
 }
 
-fn export_obj(opts: &Options) -> Result<Value, String> {
-    let placement = opts.get("placement").map(String::as_str).unwrap_or("optimal");
-    let allowed: &[&[&str]] = match placement {
-        "subset" => &[EXPORT_KEYS],
-        "optimal" => &[EXPORT_KEYS, OPTIMAL_KEYS],
-        "fit" => &[EXPORT_KEYS, FIT_KEYS],
-        "f2" => &[EXPORT_KEYS, FIT_KEYS, F2_KEYS],
-        "f3" => &[EXPORT_KEYS, F3_KEYS],
-        "f4" => &[EXPORT_KEYS, F3_KEYS, F4_KEYS],
-        other => return Err(format!("--placement must be optimal, fit, f2, f3, f4 or subset, got {other}")),
-    };
-    only(opts, &format!("export-obj --placement {placement}"), allowed)?;
-    let tip_vertex = count(opts, "tip-vertex", dense::NOSE_TIP_VERTEX)?;
-    if placement == "f3" || placement == "f4" {
-        return export_f3(opts, tip_vertex, placement);
+pub(crate) fn placement_keys(name: &str) -> &'static [&'static [&'static str]] {
+    match name {
+        "subset" => &[],
+        "optimal" => &[OPTIMAL_KEYS],
+        "fit" => &[FIT_KEYS],
+        "f2" => &[FIT_KEYS, F2_KEYS],
+        "f3" => &[F3_KEYS],
+        _ => &[F3_KEYS, F4_KEYS],
     }
-    let max_move = number(opts, "max-move", 3.0)? / 1000.0;
-    let fit = fit_settings(opts)?;
-    let f2 = if placement == "f2" { Some(f2_settings(opts, &fit)?) } else { None };
+}
+
+pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dyn Placement>, String> {
+    Ok(match version.name {
+        "f3" | "f4" => Box::new(f3_placement(opts, version.name)?),
+        "subset" => Box::new(gp::Subset),
+        "optimal" => Box::new(gp::Optimal { max_move: number(opts, "max-move", 3.0)? / 1000.0 }),
+        "fit" => Box::new(gp::Fit { settings: fit_settings(opts)? }),
+        _ => {
+            let (settings, uv_mode) = f2_settings(opts, &fit_settings(opts)?)?;
+            Box::new(gp::F2 { settings, surface_uvs: uv_mode == "surface" })
+        }
+    })
+}
+
+fn export_obj(opts: &Options) -> Result<Value, String> {
+    let given = opts.get("placement").map(String::as_str).unwrap_or("optimal");
+    let version = PlacementVersion::parse(given)
+        .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
+    let mut allowed: Vec<&[&str]> = vec![EXPORT_KEYS];
+    allowed.extend_from_slice(placement_keys(version.name));
+    only(opts, &format!("export-obj --placement {given}"), &allowed)?;
+    let tip_vertex = count(opts, "tip-vertex", dense::NOSE_TIP_VERTEX)?;
+    let placer = placer(opts, version)?;
     let out = Path::new(need(opts, "out")?);
     let dense = Dense::load(Path::new(need(opts, "dense")?))?;
     let base = game_base::load(Path::new(need(opts, "base")?))?;
     let positions = dense.positions_from(need(opts, "positions")?)?;
     let tip = dense.nose_tip(&positions, tip_vertex)?;
-    if let Some((settings, uv_mode)) = f2 {
-        return export_f2(&dense, &base, &positions, out, settings, uv_mode, tip);
+    let placed = placer.place(&positions, &DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs }, &base);
+    match placed.triangle_uvs {
+        Some(triangle_uvs) => {
+            let character = Decimated {
+                kept: base.kept.clone(),
+                owner: base.owner.clone(),
+                triangles: base.triangles.clone(),
+                triangle_uvs,
+                stats: Default::default(),
+            };
+            obj::write(out, &placed.game, &character)?;
+        }
+        None => obj::write(out, &placed.game, &base)?,
     }
-    let (game, stats) = match placement {
-        "subset" => (base.kept.iter().map(|&d| positions[d as usize]).collect::<Vec<_>>(), None),
-        "optimal" => {
-            let (game, stats) = placement::optimal(&positions, &dense.triangles, &base, max_move);
-            (game, Some(stats))
-        }
-        _ => {
-            let (game, stats) = placement::fit(&positions, &dense.triangles, &base, &fit);
-            (game, Some(stats))
-        }
-    };
-    obj::write(out, &game, &base)?;
-    let measure = placement::measure(&positions, &dense.triangles, &base, &game, tip);
-    Ok(json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
-              "triangles": base.triangles.len(), "placement": placement, "placement_stats": stats, "measure": measure}))
+    let measure = placement::measure(&positions, &dense.triangles, &base, &placed.game, tip);
+    let mut value = json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
+                           "triangles": base.triangles.len(), "placement": version.name,
+                           "placement_version": placer.version().to_string(), "measure": measure});
+    for (k, v) in placed.report {
+        value[k] = v;
+    }
+    Ok(value)
 }
 
 fn fit_settings(opts: &Options) -> Result<placement::FitSettings, String> {
@@ -278,31 +324,6 @@ fn f2_settings(opts: &Options, fit: &placement::FitSettings) -> Result<(placemen
         return Err(format!("--f2-uvs must be surface or subset, got {uv_mode}"));
     }
     Ok((settings, uv_mode.to_string()))
-}
-
-fn export_f2(
-    dense: &Dense,
-    base: &Decimated,
-    positions: &[[f64; 3]],
-    out: &Path,
-    settings: placement_f2::F2Settings,
-    uv_mode: String,
-    tip: [f64; 3],
-) -> Result<Value, String> {
-    let (game, uvs, stats) = placement_f2::place(positions, &dense.triangles, &dense.triangle_uvs, base, &settings);
-    let triangle_uvs = if uv_mode == "surface" { uvs } else { base.triangle_uvs.clone() };
-    let character = Decimated {
-        kept: base.kept.clone(),
-        owner: base.owner.clone(),
-        triangles: base.triangles.clone(),
-        triangle_uvs,
-        stats: Default::default(),
-    };
-    obj::write(out, &game, &character)?;
-    let measure = placement::measure(positions, &dense.triangles, base, &game, tip);
-    Ok(json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
-              "triangles": base.triangles.len(), "placement": "f2", "uvs": uv_mode, "settings": settings,
-              "placement_stats": stats, "measure": measure}))
 }
 
 fn pair(opts: &Options, key: &str, default: [f64; 2]) -> Result<[f64; 2], String> {
@@ -347,9 +368,9 @@ fn f3_settings(opts: &Options) -> Result<placement_f3::F3Settings, String> {
     })
 }
 
-fn export_f3(opts: &Options, tip_vertex: usize, placement: &str) -> Result<Value, String> {
+fn f3_placement(opts: &Options, name: &str) -> Result<gp::F3, String> {
     let mut settings = f3_settings(opts)?;
-    if placement == "f4" {
+    if name == "f4" {
         settings.f4 = Some(placement_f3::F4Settings {
             target_deg: number(opts, "f4-target", 10.0)?,
             passes: count(opts, "f4-passes", 12)?,
@@ -368,30 +389,11 @@ fn export_f3(opts: &Options, tip_vertex: usize, placement: &str) -> Result<Value
             },
         });
     }
-    let out = Path::new(need(opts, "out")?);
     let eyes = match opts.get("eyes") {
-        Some(path) => lids::load_eyes(Path::new(path))?,
+        Some(path) => gf_io::load_eyes(Path::new(path))?,
         None => Vec::new(),
     };
-    let dense = Dense::load(Path::new(need(opts, "dense")?))?;
-    let base = game_base::load(Path::new(need(opts, "base")?))?;
-    let positions = dense.positions_from(need(opts, "positions")?)?;
-    let tip = dense.nose_tip(&positions, tip_vertex)?;
-    let (game, triangle_uvs, stats) =
-        placement_f3::place(&positions, &dense.triangles, &dense.triangle_uvs, &base, &eyes, &settings);
-    let character = Decimated { kept: base.kept.clone(), owner: base.owner.clone(), triangles: base.triangles.clone(), triangle_uvs, stats: Default::default() };
-    obj::write(out, &game, &character)?;
-    let measure = placement::measure(&positions, &dense.triangles, &base, &game, tip);
-    let lids = (!eyes.is_empty()).then(|| {
-        let front = settings.clear.front_deg;
-        let (dense_area, dense_depth) = lids::penetration_area(&positions, &dense.triangles, &eyes, front, 2);
-        let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &eyes, front, 6);
-        json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
-               "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
-    });
-    Ok(json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
-              "triangles": base.triangles.len(), "placement": placement, "settings": settings, "eyes": eyes.len(),
-              "placement_stats": stats, "lids": lids, "measure": measure}))
+    Ok(gp::F3 { settings, eyes })
 }
 
 fn collide_lids(opts: &Options) -> Result<Value, String> {
@@ -402,7 +404,7 @@ fn collide_lids(opts: &Options) -> Result<Value, String> {
         smooth_iterations: count(opts, "smooth", 4)?,
     };
     let out = Path::new(need(opts, "out")?);
-    let eyes = lids::load_eyes(Path::new(need(opts, "eyes")?))?;
+    let eyes = gf_io::load_eyes(Path::new(need(opts, "eyes")?))?;
     let dense = Dense::load(Path::new(need(opts, "dense")?))?;
     let positions = dense.positions_from(need(opts, "positions")?)?;
     let (moved, stats) = lids::collide_dense(&positions, &dense.triangles, &eyes, &settings);
@@ -418,6 +420,17 @@ fn run(args: &[String]) -> Result<Value, String> {
         Some("build-base") => options(&args[1..]).and_then(|o| build_base(&o)),
         Some("export-obj") => options(&args[1..]).and_then(|o| export_obj(&o)),
         Some("collide-lids") => options(&args[1..]).and_then(|o| collide_lids(&o)),
+        Some("export-glb") => options(&args[1..]).and_then(|o| mesh_cmds::export_glb(&o)),
+        Some("gates") => match args.get(1).map(String::as_str) {
+            Some("shell") => options(&args[2..]).and_then(|o| mesh_cmds::gates_shell(&o)),
+            Some("game") => options(&args[2..]).and_then(|o| mesh_cmds::gates_game(&o)),
+            Some("path") => options(&args[2..]).and_then(|o| mesh_cmds::gates_path(&o)),
+            _ => Err(USAGE.to_string()),
+        },
+        Some(group @ ("store" | "character" | "macro")) => match args.get(1) {
+            Some(verb) => options(&args[2..]).and_then(|o| data_cmds::run(group, verb, &o)),
+            None => Err(USAGE.to_string()),
+        },
         _ => Err(USAGE.to_string()),
     }
 }
@@ -427,7 +440,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(value) => {
             println!("{value}");
-            ExitCode::SUCCESS
+            if value.get("ok") == Some(&Value::Bool(false)) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
         }
         Err(error) => {
             println!("{}", json!({"ok": false, "error": error}));

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
 
 use crate::decimate::Decimated;
@@ -124,13 +122,12 @@ impl Eye {
     }
 }
 
-pub fn load_eyes(path: &Path) -> Result<Vec<Eye>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let file: EyeFile = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn eyes_from_json(text: &str) -> Result<Vec<Eye>, String> {
+    let file: EyeFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
     if file.eyes.is_empty() {
-        return Err(format!("{}: no eyes", path.display()));
+        return Err("no eyes".into());
     }
-    file.eyes.iter().map(Eye::new).collect::<Result<Vec<_>, _>>().map_err(|e| format!("{}: {e}", path.display()))
+    file.eyes.iter().map(Eye::new).collect::<Result<Vec<_>, _>>()
 }
 
 #[derive(Clone, Serialize)]

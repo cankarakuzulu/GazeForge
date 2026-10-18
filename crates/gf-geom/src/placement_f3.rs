@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::decimate::Decimated;
-use crate::dense::Uv;
+use crate::Uv;
 use crate::lids::{self, ClearSettings, ClearStats, Eye};
 use crate::placement::{self as pl, Sparse};
 use crate::quadric::{dot, length, sub};
