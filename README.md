@@ -139,6 +139,39 @@ those without it. Morph targets are written as sparse accessors when that is sma
 lists the morph names and targets (with how many game vertices each moves), each LOD's node, vertex count and screen
 size, the spec hash and the sha256 of the `.glb`.
 
+Game-ready options (each is opt-in; without them the output is unchanged):
+
+```
+                     [--morph-dir DIR] [--morph-floor MM] [--facing keep|repair] [--lod-screen measured
+                     [--lod-pixels 1] [--lod-height 1080]] [--rig none|head --rig-jaw TARGET --eyes EYES.json]
+```
+
+- `--morph-dir DIR` resolves a morph id `ID` as `DIR/ID.npz` (sparse `indices` + `deltas` on the dense topology) before
+  the catalog, so an expression set such as the ARKit-52 face units can be exported without being in the catalog. The
+  morph name is the id's last path part.
+- `--morph-floor MM` zeroes morph position deltas shorter than `MM` (and normal deltas under 1e-3), which lets sparse
+  accessors pay where the placement moves far vertices by a negligible amount.
+- `--facing repair` flips edges of triangles that face against their own vertex normals (folds a coarse LOD triangle
+  picks up from the character's shape). A flip is taken only off UV seams, only when both new triangles face with their
+  vertex normals in the neutral state, never adds a back-facing triangle in any morph state, and never makes a sliver
+  thinner than the pair it replaces (or 5 degrees). Vertices, positions and morph deltas are untouched, so the LODs stay
+  nested; only the triangulation changes. The sidecar records the counts before and after per LOD.
+- `--lod-screen measured` chooses each LOD's screen size from the largest distance between the finest LOD's vertices
+  and that LOD's surface: switch when that error projects to `--lod-pixels` on a screen `--lod-height` pixels tall,
+  `s = 2 * pixels * radius / (error * height)`, with `s` the bounding sphere's diameter as a fraction of the screen
+  height. The sidecar carries the errors, the radius and the formula, so an engine converts `s` to a distance for its
+  own field of view: `d = radius / (s * tan(vfov / 2))`.
+- `--rig head` adds a glTF skin with joints `neck` (root), `head`, `jaw`, `eye_L`, `eye_R`, translation-only, with
+  inverse bind matrices that invert each joint chain exactly. Skin weights are computed per game vertex from the dense
+  base: the jaw weight is the jaw target's displacement (`--rig-jaw`, e.g. a jaw-open unit) projected on the rotation
+  about the hinge fitted to that same target; the neck weight is 1 on the neck seam (so a body's neck joint drives the
+  seam exactly) and falls to 0 at half the chin-to-seam distance; the head takes the rest. Joint positions follow the
+  character (the seam centroid, the fitted hinge moved with the face, the eye centres from `--eyes`), and two eyeball
+  spheres `Eye_L` / `Eye_R` are children of the eye joints.
+
+Morphs carry no UVs in glTF, so every LOD keeps the neutral character's UVs; the sidecar records, per morph, how far the
+placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_lod0`).
+
 #### Gates
 
 ```
@@ -146,7 +179,12 @@ gazeforge gates shell --dense DIR --before base|shape:NAME|FILE.npy --after base
 gazeforge gates game --dense DIR --base DIR --face base|shape:NAME|FILE.npy --obj GAME.obj [--gates triq,uv,census,seams]
 gazeforge gates path --dense DIR --base DIR --start FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
                      [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM]
+gazeforge gates facing --glb FILE.glb [--states neutral|all]
 ```
+
+`facing` reads a `.glb` and counts, per mesh, triangles whose winding faces against the mean of their three exported
+vertex normals (a back-facing triangle a renderer culls); with `--states all` it also counts every morph target at
+weight 1 and fails on those too.
 
 `shell` compares two dense shapes: quad folds that appear, inner surfaces that come to face the front, and move
 roughness (vertices that move unlike their neighbours). `game` measures an exported game mesh against its dense face:

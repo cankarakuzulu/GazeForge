@@ -18,7 +18,29 @@ use crate::{Options, count, need, number, only, placement_keys, placer};
 const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
 const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm"];
 const PATH_KEYS: &[&str] = &["dense", "base", "start", "delta", "steps", "placement", "pop-limit", "plant"];
-const GLB_KEYS: &[&str] = &["store", "spec", "macro", "out", "morphs", "sparse", "lod-screen"];
+const GLB_KEYS: &[&str] = &[
+    "store",
+    "spec",
+    "macro",
+    "out",
+    "morphs",
+    "sparse",
+    "lod-screen",
+    "lod-pixels",
+    "lod-height",
+    "facing",
+    "rig",
+    "rig-jaw",
+    "morph-dir",
+    "morph-floor",
+];
+const FACING_ROUNDS: usize = 8;
+const UNTANGLE_ITERATIONS: usize = 200;
+const UNTANGLE_MAX_MM: f64 = 2.0;
+const WEIGHT_STEPS: f64 = 65536.0;
+const EYE_RINGS: u32 = 16;
+const EYE_SEGMENTS: u32 = 24;
+const NORMAL_FLOOR: f32 = 1e-3;
 const GAME_GATES: &[&str] = &["triq", "uv", "census", "seams"];
 
 fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
@@ -176,12 +198,85 @@ struct Level<'a> {
     mesh: &'a Decimated,
     map: Vec<u32>,
     uvs: Vec<[Uv; 3]>,
+    triangles: Vec<[u32; 3]>,
 }
 
 fn lod_state(level: &Level, game0: &[Point]) -> (Vec<Point>, Vec<Point>) {
     let game: Vec<Point> = level.map.iter().map(|&j| game0[j as usize]).collect();
-    let normals = gm::game_normals(&game, &level.mesh.triangles);
+    let normals = gm::game_normals(&game, &level.triangles);
     (game, normals)
+}
+
+fn uv_slip(neutral: &[[Uv; 3]], moved: &[[Uv; 3]]) -> Value {
+    let mut d: Vec<f64> = neutral
+        .iter()
+        .zip(moved)
+        .flat_map(|(a, b)| (0..3).map(move |c| (((a[c][0] - b[c][0]) as f64).powi(2) + ((a[c][1] - b[c][1]) as f64).powi(2)).sqrt()))
+        .collect();
+    d.sort_by(f64::total_cmp);
+    let n = d.len().max(1);
+    json!({"corners": d.len(), "over_1e-4": d.iter().filter(|x| **x > 1e-4).count(), "max_uv": d.last().copied().unwrap_or(0.0),
+           "p99_uv": d.get(((n - 1) as f64 * 0.99) as usize).copied().unwrap_or(0.0),
+           "max_texels_2048": d.last().copied().unwrap_or(0.0) * 2048.0})
+}
+
+fn neck_loop(triangles: &[[u32; 3]], game: &[Point]) -> Result<Vec<u32>, String> {
+    let loops = gf_core::rig::boundary_loops(triangles);
+    let mean_up = |l: &Vec<u32>| l.iter().map(|&v| game[v as usize][2]).sum::<f64>() / l.len() as f64;
+    loops.into_iter().min_by(|a, b| mean_up(a).total_cmp(&mean_up(b))).ok_or_else(|| "the game base has no open boundary for the neck".to_string())
+}
+
+fn mean_point(points: impl Iterator<Item = Point>) -> Point {
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for p in points {
+        for k in 0..3 {
+            sum[k] += p[k];
+        }
+        n += 1.0;
+    }
+    sum.map(|s| s / n)
+}
+
+pub fn gates_facing(opts: &Options) -> Result<Value, String> {
+    only(opts, "gates facing", &[&["glb", "states"]])?;
+    let path = need(opts, "glb")?;
+    let states = opts.get("states").map(String::as_str).unwrap_or("neutral");
+    if !matches!(states, "neutral" | "all") {
+        return Err(format!("--states must be neutral or all, got {states}"));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let (_, meshes) = gltf::read_glb(&bytes)?;
+    let mut failed = Vec::new();
+    let mut rows = Vec::new();
+    for mesh in &meshes {
+        if mesh.normals.is_empty() {
+            continue;
+        }
+        let tris: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let to64 = |v: &[[f32; 3]]| -> Vec<Point> { v.iter().map(|p| p.map(f64::from)).collect() };
+        let count = |p: &[Point], n: &[Point]| tris.iter().filter(|t| gm::facing_dot(p, n, t) < 0.0).count();
+        let (p0, n0) = (to64(&mesh.positions), to64(&mesh.normals));
+        let neutral = count(&p0, &n0);
+        let mut morph_counts = serde_json::Map::new();
+        let mut worst = 0usize;
+        for (k, m) in mesh.morphs.iter().enumerate() {
+            let p: Vec<Point> = p0.iter().zip(&m.positions).map(|(a, d)| [0, 1, 2].map(|i| a[i] + d[i] as f64)).collect();
+            let n: Vec<Point> = n0.iter().zip(&m.normals).map(|(a, d)| [0, 1, 2].map(|i| a[i] + d[i] as f64)).collect();
+            let c = count(&p, &n);
+            worst = worst.max(c);
+            morph_counts.insert(mesh.morph_names.get(k).cloned().unwrap_or_else(|| k.to_string()), json!(c));
+        }
+        if neutral > 0 || (states == "all" && worst > 0) {
+            failed.push(mesh.name.clone());
+        }
+        rows.push(json!({"mesh": mesh.name, "triangles": tris.len(), "against_vertex_normals": neutral,
+                         "morph_states_worst": worst, "morph_states": morph_counts}));
+    }
+    if rows.is_empty() {
+        return Err(format!("{path}: no mesh with normals to check"));
+    }
+    Ok(verdict("gates facing", json!({"facing": rows}), failed, json!({"glb": path, "states": states})))
 }
 
 fn delta(a: Point, b: Point) -> [f32; 3] {
@@ -208,11 +303,45 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let catalog = store.load_catalog(&spec.base.catalog)?;
     let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
     let (manifest, base) = store.load_game(&game_ref)?;
+    let facing = opts.get("facing").map(String::as_str).unwrap_or("keep");
+    if !matches!(facing, "keep" | "repair") {
+        return Err(format!("--facing must be keep or repair, got {facing}"));
+    }
+    let rigged = match opts.get("rig").map(String::as_str).unwrap_or("none") {
+        "none" => false,
+        "head" => true,
+        other => return Err(format!("--rig must be none or head, got {other}")),
+    };
+    let morph_dir = opts.get("morph-dir").map(Path::new);
+    let floor_m = if opts.contains_key("morph-floor") { Some(number(opts, "morph-floor", 0.0)? / 1000.0) } else { None };
+    let measured = opts.get("lod-screen").map(String::as_str) == Some("measured");
+    let lod_pixels = number(opts, "lod-pixels", 1.0)?;
+    let lod_height = number(opts, "lod-height", 1080.0)?;
+    if !measured && (opts.contains_key("lod-pixels") || opts.contains_key("lod-height")) {
+        return Err("--lod-pixels and --lod-height go with --lod-screen measured".into());
+    }
+    if measured && (lod_pixels <= 0.0 || lod_height <= 0.0) {
+        return Err("--lod-pixels and --lod-height must be positive".into());
+    }
+    let extended = facing == "repair" || rigged || measured || morph_dir.is_some() || floor_m.is_some();
+    let load = |id: &str| -> Result<gf_core::catalog::SparseTarget, String> {
+        if let Some(dir) = morph_dir {
+            let path = dir.join(format!("{id}.npz"));
+            if path.exists() {
+                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let target = gf_io::store::sparse_from_npz(&bytes).map_err(|e| format!("{id}: {e}"))?;
+                target.check(positions.len()).map_err(|e| format!("{id}: {e}"))?;
+                return Ok(target);
+            }
+        }
+        store.load_target(&catalog, id)
+    };
     let screens: Vec<f64> = match opts.get("lod-screen") {
+        _ if measured => Vec::new(),
         Some(text) => text.split(',').map(|s| s.trim().parse::<f64>().map_err(|_| format!("--lod-screen takes numbers, got {text}"))).collect::<Result<_, _>>()?,
         None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or(0.02)).collect(),
     };
-    if screens.len() != manifest.lods.len() || screens.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s >= 1.0) {
+    if !measured && (screens.len() != manifest.lods.len() || screens.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s >= 1.0)) {
         return Err(format!("--lod-screen needs {} numbers in (0, 1), one per LOD below the finest", manifest.lods.len()));
     }
     let ids = match opts.get("morphs") {
@@ -228,31 +357,143 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         names.push(name);
     }
     let dmesh = DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs };
-    let neutral = placement.place(&positions, &dmesh, &base);
+    let mut neutral = placement.place(&positions, &dmesh, &base);
     let uvs0 = neutral.triangle_uvs.clone().unwrap_or_else(|| base.triangle_uvs.clone());
     let mut morph_games = Vec::new();
+    let mut slips = Vec::new();
     for id in &ids {
-        let target = store.load_target(&catalog, id)?;
+        let target = load(id)?;
         let mut moved = positions.clone();
         target.add_scaled(1.0, &mut moved);
-        morph_games.push(placement.place(&moved, &dmesh, &base).game);
+        let placed = placement.place(&moved, &dmesh, &base);
+        if extended {
+            slips.push(match (&neutral.triangle_uvs, &placed.triangle_uvs) {
+                (Some(a), Some(b)) => uv_slip(a, b),
+                _ => json!({"corners": 0, "note": "the placement keeps the base UVs: no slip"}),
+            });
+        }
+        morph_games.push(placed.game);
     }
     let mut coarse = Vec::new();
     for lod in &manifest.lods {
         coarse.push(store.load_game(&lod.game)?.1);
     }
-    let mut levels = vec![Level { name: "Head_LOD0".into(), map: (0..base.kept.len() as u32).collect(), uvs: uvs0.clone(), mesh: &base }];
+    let mut levels = vec![Level {
+        name: "Head_LOD0".into(),
+        map: (0..base.kept.len() as u32).collect(),
+        uvs: uvs0.clone(),
+        mesh: &base,
+        triangles: base.triangles.clone(),
+    }];
     let mut lod_uv_report = Vec::new();
     for (i, mesh) in coarse.iter().enumerate() {
         let map = gm::lod_map(&base, mesh)?;
         let (uvs, unmatched, worst) = gm::lod_uvs(&base, &uvs0, mesh, &map);
         lod_uv_report.push(json!({"lod": i + 1, "corners_without_a_matching_chart": unmatched, "worst_chart_distance": worst}));
-        levels.push(Level { name: format!("Head_LOD{}", i + 1), mesh, map, uvs });
+        levels.push(Level { name: format!("Head_LOD{}", i + 1), mesh, map, uvs, triangles: mesh.triangles.clone() });
+    }
+    let mut facing_report = Vec::new();
+    if facing == "repair" {
+        for level in levels.iter_mut() {
+            let pick = |g: &[Point]| -> Vec<Point> { level.map.iter().map(|&j| g[j as usize]).collect() };
+            let states: Vec<Vec<Point>> = std::iter::once(&neutral.game).chain(&morph_games).map(|g| pick(g)).collect();
+            let refs: Vec<&[Point]> = states.iter().map(Vec::as_slice).collect();
+            let repair = gm::repair_facing(&refs, &mut level.triangles, &mut level.uvs, FACING_ROUNDS);
+            facing_report.push(json!({"node": level.name, "against_neutral_before": repair.against_before[0],
+                                      "against_neutral_after": repair.against_after[0],
+                                      "against_morph_states_before_worst": repair.against_before[1..].iter().max().copied().unwrap_or(0),
+                                      "against_morph_states_after_worst": repair.against_after[1..].iter().max().copied().unwrap_or(0),
+                                      "flips": repair.flips, "flips_relaxed": repair.flips_relaxed, "rounds": repair.rounds,
+                                      "refused_seam": repair.refused_seam, "refused_check": repair.refused_check,
+                                      "refused_neutral": repair.refused_neutral, "refused_states": repair.refused_states,
+                                      "refused_angle": repair.refused_angle}));
+        }
+        let lod_refs: Vec<(&[u32], &[[u32; 3]])> = levels.iter().map(|l| (l.map.as_slice(), l.triangles.as_slice())).collect();
+        let (shift, untangled) = gm::untangle(&neutral.game, &lod_refs, UNTANGLE_ITERATIONS, UNTANGLE_MAX_MM / 1000.0);
+        for game in std::iter::once(&mut neutral.game).chain(morph_games.iter_mut()) {
+            for (p, d) in game.iter_mut().zip(&shift) {
+                for k in 0..3 {
+                    p[k] += d[k];
+                }
+            }
+        }
+        facing_report.push(json!({"untangle": untangled, "note": "positions of the vertices of triangles still facing against their vertex normals after the flips move toward their one-ring centroids in every LOD that has them; every morph state moves by the same amount, so morph deltas are unchanged"}));
+    }
+    let mut screens = screens;
+    let mut lod_selection = Value::Null;
+    if measured {
+        let fine = &neutral.game;
+        let lo = (0..3).map(|k| fine.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min)).collect::<Vec<_>>();
+        let hi = (0..3).map(|k| fine.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max)).collect::<Vec<_>>();
+        let centre = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]));
+        let radius = fine.iter().map(|p| (0..3).map(|k| (p[k] - centre[k]).powi(2)).sum::<f64>().sqrt()).fold(0.0, f64::max);
+        let mut rows = Vec::new();
+        let mut previous = 1.0f64;
+        for level in levels.iter().skip(1) {
+            let coarse_points: Vec<Point> = level.map.iter().map(|&j| fine[j as usize]).collect();
+            let owner: Vec<u32> = base.kept.iter().map(|&d| level.mesh.owner[d as usize]).collect();
+            let error = gm::lod_error(fine, &owner, &coarse_points, &level.triangles);
+            let raw = gm::screen_size(error.max_mm / 1000.0, radius, lod_pixels, lod_height);
+            let chosen = raw.min(previous * 0.999).clamp(1e-4, 0.999);
+            previous = chosen;
+            screens.push(chosen);
+            rows.push(json!({"node": level.name, "error_to_lod0": error, "screen_size_raw": raw, "screen_size": chosen}));
+        }
+        lod_selection = json!({
+            "method": "switch to a coarser LOD when its largest distance to the finest LOD's vertices projects to at most `pixels` on a screen `screen_height_px` tall",
+            "screen_size": "the bounding sphere's diameter as a fraction of the screen height: s = 2 * pixels * radius / (error * screen_height_px); distance d = radius / (s * tan(vfov / 2))",
+            "pixels": lod_pixels, "screen_height_px": lod_height, "bounding_radius_m": radius,
+            "bounding_centre_gltf_m": gm::to_gltf(centre), "lods": rows});
+    }
+    let mut rig_meta = Value::Null;
+    let mut rig_data: Option<(gltf::Rig, Vec<[f64; 3]>)> = None;
+    if rigged {
+        use gf_core::rig;
+        let eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
+        if eyes.len() != 2 {
+            return Err(format!("--rig head needs two eyes, the eyes file has {}", eyes.len()));
+        }
+        let jaw = load(opts.get("rig-jaw").ok_or("--rig head needs --rig-jaw TARGET (a jaw-open target)")?)?;
+        let hinge = rig::fit_hinge(&dense.positions, &jaw)?;
+        let share = rig::jaw_share(&dense.positions, &jaw, &hinge);
+        let seam = neck_loop(&base.triangles, &neutral.game)?;
+        let (weights, skin_report) = rig::game_weights(&dense.positions, &base.kept, &seam, &share, &hinge);
+        let neck = mean_point(seam.iter().map(|&g| neutral.game[g as usize]));
+        let hinge_now = rig::character_hinge(&dense.positions, &positions, &hinge);
+        let (left, right) = if eyes[0].centre[0] >= eyes[1].centre[0] { (&eyes[0], &eyes[1]) } else { (&eyes[1], &eyes[0]) };
+        let joints = rig::joints(neck, hinge_now, left.centre, right.centre);
+        let attachments = [("Eye_L", 3usize, left.radius), ("Eye_R", 4usize, right.radius)]
+            .iter()
+            .map(|&(name, joint, radius)| {
+                let s = rig::sphere(radius, EYE_RINGS, EYE_SEGMENTS);
+                gltf::Attachment {
+                    name: name.into(),
+                    joint,
+                    positions: s.positions.iter().map(|p| gm::to_gltf(*p)).collect(),
+                    normals: s.normals.iter().map(|p| gm::to_gltf(*p)).collect(),
+                    indices: s.indices,
+                }
+            })
+            .collect();
+        let rig_value = gltf::Rig {
+            names: rig::JOINTS.iter().map(|s| s.to_string()).collect(),
+            parents: rig::PARENTS.to_vec(),
+            global: joints.iter().map(|p| gm::to_gltf(*p)).collect(),
+            attachments,
+        };
+        rig_meta = json!({
+            "joints": rig::JOINTS.iter().zip(rig::PARENTS).zip(&rig_value.global)
+                .map(|((n, p), g)| json!({"name": n, "parent": p.map(|i| rig::JOINTS[i]), "position_gltf_m": g})).collect::<Vec<_>>(),
+            "jaw_target": opts.get("rig-jaw"), "hinge_fit_on_base": hinge, "skin": skin_report,
+            "weights": "per game vertex from the dense base: jaw = the jaw target's displacement projected on the fitted hinge rotation (clamped 0..1), neck = 1 on the neck seam falling (smoothstep) to 0 at half the chin-to-seam distance, head = the rest",
+            "eyes": "Eye_L / Eye_R spheres (radius from the eyes file) are children of eye_L / eye_R",
+            "bind": "joints are translation-only; each inverse bind matrix is the negated sum of the joint chain's local translations"});
+        rig_data = Some((rig_value, weights));
     }
     let mut lods = Vec::new();
     let mut lod_meta = Vec::new();
     for (i, level) in levels.iter().enumerate() {
-        let surface = gm::split_seams(&level.mesh.triangles, &level.uvs);
+        let surface = gm::split_seams(&level.triangles, &level.uvs);
         let (game, normals) = lod_state(level, &neutral.game);
         let pick = |v: &[Point]| -> Vec<Point> { surface.source.iter().map(|&g| v[g as usize]).collect() };
         let (gp, gn) = (pick(&game), pick(&normals));
@@ -260,14 +501,38 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         for mg in &morph_games {
             let (eg, en) = lod_state(level, mg);
             let (ep, enn) = (pick(&eg), pick(&en));
-            morphs.push(MorphData {
-                positions: gp.iter().zip(&ep).map(|(a, b)| delta(*a, *b)).collect(),
-                normals: gn.iter().zip(&enn).map(|(a, b)| delta(*a, *b)).collect(),
-            });
+            let mut positions_delta: Vec<[f32; 3]> = gp.iter().zip(&ep).map(|(a, b)| delta(*a, *b)).collect();
+            let mut normals_delta: Vec<[f32; 3]> = gn.iter().zip(&enn).map(|(a, b)| delta(*a, *b)).collect();
+            if let Some(floor) = floor_m {
+                let length = |v: &[f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                for (p, q) in positions_delta.iter_mut().zip(normals_delta.iter_mut()) {
+                    if (length(p) as f64) < floor {
+                        *p = [0.0; 3];
+                    }
+                    if length(q) < NORMAL_FLOOR {
+                        *q = [0.0; 3];
+                    }
+                }
+            }
+            morphs.push(MorphData { positions: positions_delta, normals: normals_delta });
         }
         lod_meta.push(json!({"node": level.name, "game_vertices": level.mesh.kept.len(), "vertices": surface.source.len(),
-                             "triangles": level.mesh.triangles.len(),
+                             "triangles": level.triangles.len(),
                              "screen_size": if i == 0 { 1.0 } else { screens[i - 1] }}));
+        let skin = rig_data.as_ref().map(|(_, weights)| {
+            let w: Vec<[f32; 4]> = surface
+                .source
+                .iter()
+                .map(|&g| {
+                    let x = weights[level.map[g as usize] as usize];
+                    let q = |v: f64| ((v * WEIGHT_STEPS).round() / WEIGHT_STEPS) as f32;
+                    let neck = q(x[0]);
+                    let jaw = q(x[2]).min(1.0 - neck);
+                    [neck, 1.0 - neck - jaw, jaw, 0.0]
+                })
+                .collect();
+            gltf::SkinData { joints: vec![[0, 1, 2, 0]; w.len()], weights: w }
+        });
         lods.push(Lod {
             name: level.name.clone(),
             positions: gp.iter().map(|p| gm::to_gltf(*p)).collect(),
@@ -275,6 +540,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             uvs: surface.uvs.clone(),
             indices: surface.indices,
             morphs,
+            skin,
         });
     }
     let morph_meta: Vec<Value> = ids
@@ -290,13 +556,13 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let tool = format!("gazeforge {}", env!("CARGO_PKG_VERSION"));
     let extras = json!({"spec": spec.revision(), "pack": spec.base.pack, "game_base": game_ref,
                         "placement": placement.version().to_string(), "tool": tool});
-    let (bytes, report) = gltf::glb(&lods, &names, mode, extras.clone(), &tool)?;
+    let (bytes, report) = gltf::glb_rigged(&lods, &names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let stem = file_name.strip_suffix(".glb").unwrap_or(&file_name).to_string();
     let sidecar_path = out.with_file_name(format!("{stem}.gazeforge.json"));
-    let sidecar = json!({
+    let mut sidecar = json!({
         "format": "gazeforge.sidecar/1",
         "glb": file_name,
         "glb_sha256": digest,
@@ -307,10 +573,27 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         "morphs": morph_meta,
         "morph_definition": "F(c + e) - F(c): the placed game positions of the character with the target at weight 1, minus without",
     });
+    if extended {
+        for (m, slip) in sidecar["morphs"].as_array_mut().into_iter().flatten().zip(&slips) {
+            m["uv_slip_lod0"] = slip.clone();
+        }
+        sidecar["uv_policy"] = json!("neutral: every LOD carries the neutral character's UVs and glTF morphs carry no UVs, so under a morph the texture rides with the vertices; uv_slip_lod0 is how far F's own re-derived UVs for that morph at weight 1 sit from the neutral ones");
+        sidecar["morph_floor_mm"] = json!(floor_m.map(|f| f * 1000.0));
+        sidecar["morph_normal_floor"] = json!(floor_m.map(|_| NORMAL_FLOOR));
+        sidecar["facing"] = json!({"mode": facing, "lods": facing_report});
+        sidecar["lod_selection"] = lod_selection.clone();
+        sidecar["rig"] = rig_meta.clone();
+    }
     let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
     std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
-    Ok(json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
+    let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
               "glb_sha256": digest, "bytes": bytes.len(), "placement_version": placement.version().to_string(),
               "spec_revision": extras["spec"], "evaluation": evaluation, "lods": report, "lod_uvs": lod_uv_report,
-              "morphs": sidecar["morphs"], "seconds": started.elapsed().as_secs_f64()}))
+              "morphs": sidecar["morphs"], "seconds": started.elapsed().as_secs_f64()});
+    if extended {
+        result["facing"] = sidecar["facing"].clone();
+        result["lod_selection"] = lod_selection;
+        result["rig"] = rig_meta;
+    }
+    Ok(result)
 }

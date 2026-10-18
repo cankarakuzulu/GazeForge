@@ -7,6 +7,7 @@ pub mod head;
 pub mod macros;
 pub mod measure;
 pub mod placement;
+pub mod rig;
 pub mod residual;
 
 pub use gf_geom;

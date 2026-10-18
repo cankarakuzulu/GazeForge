@@ -23,6 +23,11 @@ pub struct MorphData {
     pub normals: Vec<[f32; 3]>,
 }
 
+pub struct SkinData {
+    pub joints: Vec<[u8; 4]>,
+    pub weights: Vec<[f32; 4]>,
+}
+
 pub struct Lod {
     pub name: String,
     pub positions: Vec<[f32; 3]>,
@@ -30,10 +35,49 @@ pub struct Lod {
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
     pub morphs: Vec<MorphData>,
+    pub skin: Option<SkinData>,
+}
+
+pub struct Attachment {
+    pub name: String,
+    pub joint: usize,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+}
+
+pub struct Rig {
+    pub names: Vec<String>,
+    pub parents: Vec<Option<usize>>,
+    pub global: Vec<[f32; 3]>,
+    pub attachments: Vec<Attachment>,
+}
+
+impl Rig {
+    pub fn local(&self) -> Vec<[f32; 3]> {
+        (0..self.names.len())
+            .map(|j| match self.parents[j] {
+                Some(p) => [0, 1, 2].map(|k| self.global[j][k] - self.global[p][k]),
+                None => self.global[j],
+            })
+            .collect()
+    }
+
+    pub fn engine_global(&self) -> Vec<[f32; 3]> {
+        let local = self.local();
+        let mut out = local.clone();
+        for j in 0..self.names.len() {
+            if let Some(p) = self.parents[j] {
+                out[j] = [0, 1, 2].map(|k| out[p][k] + local[j][k]);
+            }
+        }
+        out
+    }
 }
 
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
+const UNSIGNED_BYTE: u32 = 5121;
 const FLOAT: u32 = 5126;
 const UNSIGNED_SHORT: u32 = 5123;
 const UNSIGNED_INT: u32 = 5125;
@@ -82,6 +126,12 @@ impl Builder {
             accessor["max"] = json!(hi);
         }
         self.accessors.push(accessor);
+        self.accessors.len() - 1
+    }
+
+    fn raw(&mut self, bytes: &[u8], target: Option<u32>, component: u32, count: usize, kind: &str) -> usize {
+        let view = self.view(bytes, target);
+        self.accessors.push(json!({"bufferView": view, "componentType": component, "count": count, "type": kind}));
         self.accessors.len() - 1
     }
 
@@ -137,6 +187,10 @@ impl Builder {
 }
 
 pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, generator: &str) -> Result<(Vec<u8>, Value), String> {
+    glb_rigged(lods, morph_names, mode, extras, generator, None)
+}
+
+pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, generator: &str, rig: Option<&Rig>) -> Result<(Vec<u8>, Value), String> {
     let mut b = Builder::default();
     let mut meshes = Vec::new();
     let mut nodes = Vec::new();
@@ -170,6 +224,15 @@ pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, ge
                                      "normal": q_kind, "normal_entries": q_entries}));
         }
         let mut primitive = json!({"attributes": {"POSITION": position, "NORMAL": normal, "TEXCOORD_0": uv}, "indices": indices, "mode": 4});
+        if let Some(skin) = &lod.skin {
+            if rig.is_none() || skin.joints.len() != n || skin.weights.len() != n {
+                return Err(format!("{}: skin data without a rig or with the wrong vertex count", lod.name));
+            }
+            let joint_bytes: Vec<u8> = skin.joints.iter().flatten().copied().collect();
+            let weight_bytes: Vec<u8> = skin.weights.iter().flat_map(|w| w.iter().flat_map(|x| x.to_le_bytes())).collect();
+            primitive["attributes"]["JOINTS_0"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
+            primitive["attributes"]["WEIGHTS_0"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
+        }
         let mut mesh = json!({"name": lod.name});
         if !targets.is_empty() {
             primitive["targets"] = json!(targets);
@@ -178,17 +241,62 @@ pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, ge
         }
         mesh["primitives"] = json!([primitive]);
         meshes.push(mesh);
-        nodes.push(json!({"name": lod.name, "mesh": meshes.len() - 1}));
+        let mut node = json!({"name": lod.name, "mesh": meshes.len() - 1});
+        if lod.skin.is_some() {
+            node["skin"] = json!(0);
+        }
+        nodes.push(node);
         report.push(json!({"node": lod.name, "vertices": n, "triangles": lod.indices.len() / 3,
                            "index_type": if short { "u16" } else { "u32" }, "morphs": morph_report}));
+    }
+    let mut roots: Vec<usize> = (0..nodes.len()).collect();
+    let mut skins = Vec::new();
+    if let Some(rig) = rig {
+        let first = nodes.len();
+        let local = rig.local();
+        let engine = rig.engine_global();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); rig.names.len()];
+        for (j, parent) in rig.parents.iter().enumerate() {
+            match parent {
+                Some(p) => children[*p].push(first + j),
+                None => roots.push(first + j),
+            }
+        }
+        let attachment_first = first + rig.names.len();
+        for (a, attachment) in rig.attachments.iter().enumerate() {
+            children.get_mut(attachment.joint).ok_or("an attachment names a joint the rig does not have")?.push(attachment_first + a);
+        }
+        for j in 0..rig.names.len() {
+            let mut node = json!({"name": rig.names[j], "translation": local[j]});
+            if !children[j].is_empty() {
+                node["children"] = json!(children[j]);
+            }
+            nodes.push(node);
+        }
+        for attachment in &rig.attachments {
+            let short = attachment.positions.len() <= u16::MAX as usize;
+            let position = b.floats(&attachment.positions, Some(ARRAY_BUFFER), true);
+            let normal = b.floats(&attachment.normals, Some(ARRAY_BUFFER), false);
+            let indices = b.indices(&attachment.indices, short);
+            meshes.push(json!({"name": attachment.name, "primitives": [{"attributes": {"POSITION": position, "NORMAL": normal}, "indices": indices, "mode": 4}]}));
+            nodes.push(json!({"name": attachment.name, "mesh": meshes.len() - 1}));
+        }
+        let matrices: Vec<u8> = engine
+            .iter()
+            .flat_map(|t| [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -t[0], -t[1], -t[2], 1.0])
+            .flat_map(|x| x.to_le_bytes())
+            .collect();
+        let ibm = b.raw(&matrices, None, FLOAT, rig.names.len(), "MAT4");
+        skins.push(json!({"name": "head_rig", "inverseBindMatrices": ibm, "joints": (first..first + rig.names.len()).collect::<Vec<_>>(),
+                          "skeleton": first + rig.parents.iter().position(|p| p.is_none()).unwrap_or(0)}));
     }
     while b.bin.len() % 4 != 0 {
         b.bin.push(0);
     }
-    let document = json!({
+    let mut document = json!({
         "asset": {"version": "2.0", "generator": generator},
         "scene": 0,
-        "scenes": [{"name": "GazeForge", "nodes": (0..nodes.len()).collect::<Vec<_>>(), "extras": {"gazeforge": extras.clone()}}],
+        "scenes": [{"name": "GazeForge", "nodes": roots, "extras": {"gazeforge": extras.clone()}}],
         "nodes": nodes,
         "meshes": meshes,
         "accessors": b.accessors,
@@ -196,6 +304,9 @@ pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, ge
         "buffers": [{"byteLength": b.bin.len()}],
         "extras": {"gazeforge": extras},
     });
+    if !skins.is_empty() {
+        document["skins"] = json!(skins);
+    }
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
     while text.len() % 4 != 0 {
         text.push(b' ');
@@ -215,6 +326,103 @@ pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, ge
     Ok((out, json!(report)))
 }
 
+pub struct ReadMesh {
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    pub morph_names: Vec<String>,
+    pub morphs: Vec<MorphData>,
+}
+
+fn accessor_bytes<'a>(doc: &Value, bin: &'a [u8], view: &Value, offset: u64, length: usize) -> Result<&'a [u8], String> {
+    let start = view["byteOffset"].as_u64().unwrap_or(0) as usize + offset as usize;
+    let _ = doc;
+    bin.get(start..start + length).ok_or_else(|| "an accessor runs past the binary chunk".to_string())
+}
+
+fn read_vec3(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<[f32; 3]>, String> {
+    let a = &doc["accessors"][index as usize];
+    if a["componentType"].as_u64() != Some(FLOAT as u64) || a["type"] != "VEC3" {
+        return Err(format!("accessor {index} is not a float VEC3"));
+    }
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize;
+    let floats = |bytes: &[u8]| -> Vec<[f32; 3]> {
+        bytes.chunks_exact(12).map(|c| [0, 4, 8].map(|o| f32::from_le_bytes(c[o..o + 4].try_into().unwrap()))).collect()
+    };
+    let mut out = match a.get("bufferView").and_then(Value::as_u64) {
+        Some(v) => {
+            let view = &doc["bufferViews"][v as usize];
+            if view.get("byteStride").and_then(Value::as_u64).is_some_and(|s| s != 12) {
+                return Err(format!("accessor {index} is interleaved; only tightly packed data is read"));
+            }
+            floats(accessor_bytes(doc, bin, view, a["byteOffset"].as_u64().unwrap_or(0), count * 12)?)
+        }
+        None => vec![[0.0; 3]; count],
+    };
+    if let Some(sparse) = a.get("sparse") {
+        let n = sparse["count"].as_u64().ok_or("a sparse accessor has no count")? as usize;
+        let iv = &doc["bufferViews"][sparse["indices"]["bufferView"].as_u64().ok_or("sparse indices have no view")? as usize];
+        let width = if sparse["indices"]["componentType"].as_u64() == Some(UNSIGNED_SHORT as u64) { 2 } else { 4 };
+        let ib = accessor_bytes(doc, bin, iv, sparse["indices"]["byteOffset"].as_u64().unwrap_or(0), n * width)?;
+        let vv = &doc["bufferViews"][sparse["values"]["bufferView"].as_u64().ok_or("sparse values have no view")? as usize];
+        let values = floats(accessor_bytes(doc, bin, vv, sparse["values"]["byteOffset"].as_u64().unwrap_or(0), n * 12)?);
+        for (k, value) in values.into_iter().enumerate() {
+            let i = if width == 2 { u16::from_le_bytes([ib[2 * k], ib[2 * k + 1]]) as usize } else { u32::from_le_bytes(ib[4 * k..4 * k + 4].try_into().unwrap()) as usize };
+            *out.get_mut(i).ok_or("a sparse index is out of range")? = value;
+        }
+    }
+    Ok(out)
+}
+
+fn read_indices(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<u32>, String> {
+    let a = &doc["accessors"][index as usize];
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize;
+    let view = &doc["bufferViews"][a["bufferView"].as_u64().ok_or("indices have no view")? as usize];
+    let offset = a["byteOffset"].as_u64().unwrap_or(0);
+    match a["componentType"].as_u64().map(|c| c as u32) {
+        Some(UNSIGNED_SHORT) => Ok(accessor_bytes(doc, bin, view, offset, count * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as u32).collect()),
+        Some(UNSIGNED_INT) => Ok(accessor_bytes(doc, bin, view, offset, count * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()),
+        _ => Err(format!("accessor {index}: indices must be u16 or u32")),
+    }
+}
+
+pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
+    let word = |at: usize| -> Result<u32, String> {
+        Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
+    };
+    if word(0)? != 0x4654_6C67 || word(4)? != 2 {
+        return Err("not a glTF 2.0 binary".into());
+    }
+    let json_len = word(12)? as usize;
+    let doc: Value = serde_json::from_slice(bytes.get(20..20 + json_len).ok_or("the JSON chunk is truncated")?).map_err(|e| e.to_string())?;
+    let bin_len = word(20 + json_len)? as usize;
+    let bin = bytes.get(28 + json_len..28 + json_len + bin_len).ok_or("the binary chunk is truncated")?;
+    let mut meshes = Vec::new();
+    for mesh in doc["meshes"].as_array().ok_or("the glb has no meshes")? {
+        let primitive = &mesh["primitives"][0];
+        let attribute = |name: &str| primitive["attributes"][name].as_u64();
+        let positions = read_vec3(&doc, bin, attribute("POSITION").ok_or("a primitive has no POSITION")?)?;
+        let normals = match attribute("NORMAL") {
+            Some(i) => read_vec3(&doc, bin, i)?,
+            None => Vec::new(),
+        };
+        let indices = read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?;
+        let mut morphs = Vec::new();
+        for target in primitive["targets"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let p = read_vec3(&doc, bin, target["POSITION"].as_u64().ok_or("a morph target has no POSITION")?)?;
+            let q = match target["NORMAL"].as_u64() {
+                Some(i) => read_vec3(&doc, bin, i)?,
+                None => vec![[0.0; 3]; p.len()],
+            };
+            morphs.push(MorphData { positions: p, normals: q });
+        }
+        let morph_names = mesh["extras"]["targetNames"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        meshes.push(ReadMesh { name: mesh["name"].as_str().unwrap_or("").to_string(), positions, normals, indices, morph_names, morphs });
+    }
+    Ok((doc, meshes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +435,32 @@ mod tests {
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
             indices: vec![0, 1, 2, 2, 1, 3],
             morphs: vec![MorphData { positions: morph, normals: vec![[0.0; 3]; 4] }],
+            skin: None,
         }
+    }
+
+    #[test]
+    fn a_rigged_glb_reads_back_and_its_bind_matrices_invert_the_joints() {
+        let mut skinned = lod(vec![[0.0, 0.0, 0.5], [0.0; 3], [0.0; 3], [0.0; 3]]);
+        skinned.skin = Some(SkinData { joints: vec![[0, 1, 0, 0]; 4], weights: vec![[0.25, 0.75, 0.0, 0.0]; 4] });
+        let rig = Rig {
+            names: vec!["neck".into(), "head".into()],
+            parents: vec![None, Some(0)],
+            global: vec![[0.1, 1.3, 0.0], [0.1, 1.5, 0.01]],
+            attachments: vec![Attachment { name: "Eye".into(), joint: 1, positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                                           normals: vec![[0.0, 0.0, 1.0]; 3], indices: vec![0, 1, 2] }],
+        };
+        let (bytes, _) = glb_rigged(&[skinned], &["m".into()], Sparse::Always, json!({}), "test", Some(&rig)).unwrap();
+        let (doc, meshes) = read_glb(&bytes).unwrap();
+        assert_eq!(meshes.len(), 2);
+        assert_eq!(meshes[0].morphs[0].positions[0], [0.0, 0.0, 0.5]);
+        assert_eq!(meshes[0].positions[3], [1.0, 1.0, 0.0]);
+        assert_eq!(doc["nodes"][0]["skin"], 0);
+        assert_eq!(doc["skins"][0]["joints"], json!([1, 2]));
+        assert_eq!(doc["nodes"][2]["children"], json!([3]));
+        assert_eq!(doc["scenes"][0]["nodes"], json!([0, 1]));
+        let engine = rig.engine_global();
+        assert_eq!([0, 1, 2].map(|k| engine[1][k] + -engine[1][k]), [0.0; 3]);
     }
 
     fn document(bytes: &[u8]) -> Value {
