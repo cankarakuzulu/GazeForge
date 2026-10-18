@@ -28,10 +28,12 @@ The binary is `target/release/gazeforge`.
 
 The workspace is layered, and every edge points down: `gf-geom` (pure maths: no IO, no threads, no clocks; builds for
 `wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
-catalog, character spec, evaluation, residual codec, macros; no IO) <- `gf-io` (formats and the store) <- `gf-cli`.
+catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
+`gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
 `python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
 against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
-`-D warnings`, the wasm32 build, and a build of `gf-core` and `gf-io` in a copy of the workspace without its front doors.
+`-D warnings`, the wasm32 build, and a build of `gf-core`, `gf-io` and `gf-api` in a copy of the workspace without its
+front doors.
 
 ## Usage
 
@@ -63,7 +65,7 @@ gazeforge collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes E
 ```
 
 An option a command does not read is refused, and numbers and input positions must be finite. Run `gazeforge` without
-arguments for the full option list.
+arguments for the full option list of the argv commands; `gazeforge commands` lists the registry commands (below).
 
 #### Store
 
@@ -154,6 +156,75 @@ triangles facing away from the face's own dense normals (`census`), and seam ver
 under them barely moves; `--plant` adds a forward jump to one vertex at one step to prove the gate fires. `shell` and
 `game` assert the world frame first (-Y forward, +Z up); `path` measures distances only. A gate that fails prints its
 report with `"ok": false` and exits non-zero.
+
+### One registry, three front doors
+
+The commands an agent uses live in one registry (`gf-api`). Each has a name, a kind (query, mutation or job), an input
+JSON schema, an output shape, its limits, and one handler. The CLI, the HTTP API and the MCP server all call that
+handler and return the same envelope, byte for byte (`crates/gf-cli/tests/conformance.rs` checks this):
+
+```
+{"ok":true,"command":"character.measure","result":{...}}
+{"ok":false,"command":"character.create","error":{"code":"invalid_input","message":"...","retryable":false,"details":{...},"hint":"..."}}
+```
+
+| code | CLI exit | HTTP |
+|---|---|---|
+| internal | 1 | 500 |
+| invalid_input | 2 | 400 |
+| not_found | 3 | 404 |
+| gate_failed | 4 | 422 |
+| worker_failed | 5 | 502 |
+| cancelled | 6 | 499 |
+| conflict | 7 | 409 |
+
+Commands: `commands.list`, `store.list`, `catalog.list`, `character.create`, `character.validate`, `character.evaluate`,
+`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, and `debug.slow` (a deliberately slow job that exists
+to prove cancel). `commands.list` returns every schema; the argv commands above are unchanged.
+
+`character.measure` evaluates a spec and reports straight-line distances in millimetres between landmark vertices of
+the dense base, with the base's value and the difference: nose width at the alae, nose length (nasion to tip), nose
+height (nasion to subnasale), face width at the cheekbones, and eye spacing (inner and outer corners). The landmarks are
+dense vertex indices chosen once on the base by a stated rule; the rules are in the command's input schema. A target
+that slides the widest point along the surface is still measured at the base's vertex. `pairs` measures other vertex
+pairs instead.
+
+**CLI:**
+
+```
+gazeforge commands
+gazeforge call character.measure --input '{"store": "STORE", "spec": "FACE.gfchar.json"}'
+gazeforge call character.create --input @create.json
+```
+
+**HTTP** (127.0.0.1 only; requests with a non-loopback Host or Origin are refused):
+
+```
+gazeforge serve [--port 7878]          # prints {"ok":true,"command":"serve","listening":"127.0.0.1:7878",...}
+GET  /v1/commands                      # the commands.list envelope
+POST /v1/<command>                     # JSON body = the command's input; status from the table above
+GET  /v1/jobs/<id>                     # jobs.status
+```
+
+**MCP** over stdio (`gazeforge mcp`: `initialize`, `tools/list`, `tools/call`, `ping`). Each command is a tool whose name
+has its dots turned into underscores (`character_measure`); the tool result is the same envelope as text, with `isError`
+set when `ok` is false. A client configuration:
+
+```json
+{
+  "mcpServers": {
+    "gazeforge": {"type": "stdio", "command": "/path/to/gazeforge", "args": ["mcp"]}
+  }
+}
+```
+
+**Jobs.** `jobs.submit {"command": NAME, "input": {...}}` runs a command in a worker process and returns at once;
+`jobs.status {"id", "wait_s"}` reads its record (`queued`, `running`, `done`, `failed`, `cancelled`, with the result
+when done); `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
+Object that is killed as a whole and closed on exit; the record's `worker_processes_left` is the job object's own count
+after the kill. Elsewhere the worker gets its own process group, which is killed, and that count is null. Jobs live in
+`GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled
+through another that uses the same directory.
 
 ### Data layout
 

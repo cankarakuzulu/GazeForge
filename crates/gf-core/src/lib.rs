@@ -5,6 +5,7 @@ pub mod character;
 pub mod hash;
 pub mod head;
 pub mod macros;
+pub mod measure;
 pub mod placement;
 pub mod residual;
 

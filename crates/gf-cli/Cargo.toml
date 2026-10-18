@@ -9,6 +9,7 @@ name = "gazeforge"
 path = "src/main.rs"
 
 [dependencies]
+gf-api = { path = "../gf-api" }
 gf-core = { path = "../gf-core" }
 gf-geom = { path = "../gf-geom", features = ["parallel"] }
 gf-io = { path = "../gf-io" }

@@ -174,9 +174,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gf-api"
+version = "0.1.0"
+dependencies = [
+ "gf-core",
+ "gf-io",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gf-cli"
 version = "0.1.0"
 dependencies = [
+ "gf-api",
  "gf-core",
  "gf-geom",
  "gf-io",
