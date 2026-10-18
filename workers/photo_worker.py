@@ -208,6 +208,85 @@ def analyse_profile(img):
             "keys": profile_keys(rs, top, bottom)}
 
 
+def similarity2(src, dst):
+    ms, md = src.mean(0), dst.mean(0)
+    a, b = src - ms, dst - md
+    u, sv, vt = np.linalg.svd(b.T @ a / len(a))
+    d = np.diag([1.0, np.sign(np.linalg.det(u @ vt))])
+    r = u @ d @ vt
+    s = (sv * np.diag(d)).sum() / max((a ** 2).sum() / len(a), 1e-12)
+    return r, s, md - s * r @ ms
+
+
+def curve_segment(prof):
+    keys = prof["keys"] or {}
+    n, c = keys.get("nasion"), keys.get("chin")
+    if not n or not c or c[1] - n[1] < 10:
+        return None, None
+    h = c[1] - n[1]
+    right = prof["right"]
+    rows = range(max(int(n[1] - 0.6 * h), 0), min(int(c[1] + 0.1 * h), len(right)))
+    pts = np.array([[right[v], -float(v)] for v in rows if not np.isnan(right[v])])
+    return (pts if len(pts) >= 20 else None), {"nasion": [n[0], -n[1]], "height": h}
+
+
+def curve_fit(prof, template):
+    p, meta = curve_segment(prof)
+    if p is None:
+        return None
+    q = np.array(template["profile_curve"], float)
+    s0 = meta["height"] / template["profile_curve_height"]
+    best = None
+    for start in (-20.0, -10.0, 0.0, 10.0, 20.0):
+        a = np.radians(start)
+        r = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        s = s0
+        t = np.array(meta["nasion"]) - s * r @ np.array(template["profile_curve_nasion"])
+        for _ in range(30):
+            qt = s * (r @ q.T).T + t
+            d = ((p[:, None, :] - qt[None, :, :]) ** 2).sum(2)
+            j = d.argmin(1)
+            dist = d[np.arange(len(p)), j]
+            keep = dist <= np.percentile(dist, 80)
+            r, s, t = similarity2(q[j[keep]], p[keep])
+        qt = s * (r @ q.T).T + t
+        dist = np.sqrt(((p[:, None, :] - qt[None, :, :]) ** 2).sum(2).min(1))
+        rms = float(np.sqrt((np.sort(dist)[: int(0.8 * len(dist))] ** 2).mean()))
+        if best is None or rms < best[1]:
+            best = (float(np.degrees(np.arctan2(r[1, 0], r[0, 0]))), rms, s / s0)
+    return {"deg": best[0], "rms_rel": best[1] / meta["height"], "scale_ratio": best[2]}
+
+
+def profile_template():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "photo_gate_model.json")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def profile_facing(upright, prof, side, template):
+    r, l = prof["bump_right_px"], prof["bump_left_px"]
+    floor = 0.01 * (prof["bottom"] - prof["top"])
+    other = "left" if side == "right" else "right"
+    if r > 2.0 * l and r > floor:
+        return side
+    if l > 2.0 * r and l > floor:
+        return other
+    if template is None:
+        return "unknown"
+    mirrored = analyse_profile(cv2.flip(upright, 1))
+    own = curve_fit(prof, template)
+    flip = curve_fit(mirrored, template) if mirrored is not None else None
+    a = own["rms_rel"] if own else float("inf")
+    b = flip["rms_rel"] if flip else float("inf")
+    if a < 0.5 * b:
+        return side
+    if b < 0.5 * a:
+        return other
+    return "unknown"
+
+
 def ingest(args):
     run = args["run"]
     side = args.get("profile_side", "right")
@@ -235,13 +314,7 @@ def ingest(args):
     if prof is None:
         failures.append("no silhouette found in the profile photo")
     else:
-        r, l = prof["bump_right_px"], prof["bump_left_px"]
-        floor = 0.01 * (prof["bottom"] - prof["top"])
-        facing = "unknown"
-        if r > 2.0 * l and r > floor:
-            facing = side
-        elif l > 2.0 * r and l > floor:
-            facing = "left" if side == "right" else "right"
+        facing = profile_facing(upright, prof, side, profile_template())
         if facing != side:
             failures.append(f"the profile photo shows the {facing} side, but {side} was declared (mirrored or mislabelled)")
         keys = prof["keys"] or {}

@@ -356,6 +356,13 @@ with its measured value, its limit and, on failure, a plain reason. `photo.inges
 checks first and stop with `gate_failed`, naming every failed check; `thresholds` overrides a limit by name and `allow`
 records a named failure as allowed instead of stopping.
 
+The report's `calibration` block holds the measured error of every estimator and the limit chosen from it; where an axis
+cannot reach the 3 degree target (front pitch, profile yaw, profile roll), it says so there. The mouth check measures the gap
+between the inner lips against the face height. Two estimators are built but switched off in `workers/photo_gate_model.json`
+because they measured worse on the calibration renders: `fit_head` (fit this person's head to the front landmarks and the
+profile's keys, then measure the front pose against it) and `profile_out_of_plane` (read the profile's turn and tilt from
+that head's silhouette over a grid of yaw and roll).
+
 ```
 gazeforge call photo.check --input '{"front": "FRONT.png", "profile": "PROFILE.png", "profile_side": "right"}'
 ```

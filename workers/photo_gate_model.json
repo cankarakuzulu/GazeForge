@@ -1619,7 +1619,7 @@
  },
  "thresholds": {
   "front_yaw_deg": 3.0,
-  "front_pitch_deg": 5.5,
+  "front_pitch_deg": 3.75,
   "front_roll_deg": 3.0,
   "profile_yaw_deg": 15.0,
   "profile_pitch_deg": 3.0,
@@ -1632,31 +1632,79 @@
   "max_clipped_highlights": 0.02,
   "max_clipped_shadows": 0.02,
   "max_eye_blink": 0.162,
-  "max_jaw_open": 0.4,
   "max_background_spread": 20.0,
   "front_min_contrast": 26.6,
-  "profile_min_contrast": 22.7
+  "profile_min_contrast": 22.7,
+  "max_lip_gap": 0.078
  },
  "calibration_summary": {
+  "renders": "base and five training shapes at 0, +-3, +-5, +-8 deg per axis and in pairs, 70 mm plus 50 and 135 mm lenses",
   "front_yaw": {
-   "p95_deg": 1.73,
+   "estimator": "landmark transform",
+   "p50_deg": 0.31,
+   "p95_deg": 1.2,
+   "max_deg": 3.04,
    "limit_deg": 3.0
   },
   "front_pitch": {
-   "p95_deg": 4.16,
-   "limit_deg": 5.5
+   "estimator": "mean of landmark transform and PnP on 30 base landmarks",
+   "p50_deg": 1.39,
+   "p95_deg": 3.9,
+   "max_deg": 5.03,
+   "limit_deg": 3.75,
+   "target_met": false,
+   "note": "face shape alone moves this reading by up to about 3.7 deg on straight renders; 38 of 48 single-axis renders at 5 or 8 deg are rejected"
+  },
+  "front_pitch_fitted_head": {
+   "estimator": "PnP on this person's fitted head (front landmarks + profile keys)",
+   "p50_deg": 1.72,
+   "p95_deg": 4.05,
+   "max_deg": 5.54,
+   "shipped": false
   },
   "front_roll": {
-   "p95_deg": 0.71,
+   "estimator": "PnP on 30 base landmarks",
+   "p50_deg": 0.22,
+   "p95_deg": 0.75,
+   "max_deg": 1.05,
    "limit_deg": 3.0
   },
   "profile_pitch": {
-   "p95_deg": 1.77,
+   "estimator": "silhouette curve fit",
+   "p50_deg": 0.45,
+   "p95_deg": 2.11,
+   "max_deg": 3.09,
    "limit_deg": 3.0
   },
   "profile_yaw": {
-   "p95_deg": 12.0,
-   "limit_deg": 15.0
+   "estimator": "landmark detection (a face found means turned toward the camera)",
+   "limit_deg": 15.0,
+   "target_met": false,
+   "note": "below about 10 to 20 deg the silhouette and the detector do not separate a turned profile from a straight one"
+  },
+  "profile_roll": {
+   "limit_deg": null,
+   "target_met": false,
+   "note": "not gated: the fitted head's silhouette grid read straight renders as turned up to 10 deg"
+  },
+  "mouth": {
+   "measure": "inner-lip gap over face height",
+   "closed_max_within_3_deg": 0.0726,
+   "open_min": 0.0843,
+   "limit": 0.078
   }
- }
+ },
+ "front_estimator": {
+  "yaw": "transform",
+  "pitch": "base",
+  "roll": "base"
+ },
+ "fit_offset": {
+  "yaw": 0.0,
+  "pitch": 0.0,
+  "roll": 0.0
+ },
+ "profile_edge_rms_scale_m": 0.002,
+ "fit_head": false,
+ "profile_out_of_plane": false
 }

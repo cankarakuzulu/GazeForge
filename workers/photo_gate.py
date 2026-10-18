@@ -17,7 +17,12 @@ Estimators and their measured limits (photo_gate_model.json holds the calibratio
 - profile pitch: a trimmed ICP similarity fit of the silhouette's front edge (forehead to chin) to the base's straight profile.
 - profile yaw: the landmarker finds no face in a true side view; when it finds one, the view is turned toward the camera and
   its reading is used. Below that detector's floor, and for views turned away from the camera, yaw is not measured.
-- profile roll is not observable in a side view and is reported as unmeasured, never as zero.
+- profile roll is reported as unmeasured, never as zero.
+- model switches: "fit_head" fits this person's head (photo_gate_fit.py) and reports PnP against it beside each front axis
+  ("front_estimator" picks the gated value per axis: "base", "transform" or "fit"); "profile_out_of_plane" reads profile yaw
+  and roll as magnitudes from that head's silhouette over a grid. Both are off: on calibration renders neither beat the
+  shipped estimators (photo_gate_model.json, calibration_summary).
+- mouth: the inner-lip gap (landmarks 13 and 14) over the face height (10 to 152).
 """
 import json
 import math
@@ -28,6 +33,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import photo_gate_fit as pf
 import photo_worker as pw
 
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "photo_gate_model.json")
@@ -114,76 +120,60 @@ def pnp_pose(pts, ref, size):
     return {ax: a[ax] - ref["pnp_offset"][ax] for ax in a}, rms
 
 
-def front_pose(face, ref, size):
+def front_pose(face, ref, size, shape=None, keys=None):
     pts = face["points"]
     span = float(np.linalg.norm(pts[263, :2] - pts[33, :2]))
     a = angles(A_FRONT.T @ orthonormal(face["matrix"][:3, :3]) @ np.array(ref["reference"]).T @ A_FRONT)
-    b, rms = pnp_pose(pts, ref, size)
     conf = float(min(1.0, span / 60.0))
-    out = {"yaw": {"deg": a["yaw"], "confidence": conf, "estimator": "landmark transform"}}
-    if b is None:
-        out["pitch"] = {"deg": None, "confidence": 0.0, "estimator": "mean of landmark transform and PnP on 30 base landmarks"}
-        out["roll"] = {"deg": None, "confidence": 0.0, "estimator": "PnP on 30 base landmarks"}
+    if shape is None:
+        b, rms = pnp_pose(pts, ref, size)
+        out = {"yaw": {"deg": a["yaw"], "confidence": conf, "estimator": "landmark transform"}}
+        if b is None:
+            out["pitch"] = {"deg": None, "confidence": 0.0, "estimator": "mean of landmark transform and PnP on 30 base landmarks"}
+            out["roll"] = {"deg": None, "confidence": 0.0, "estimator": "PnP on 30 base landmarks"}
+            return out
+        fit = conf * math.exp(-rms / (0.05 * span))
+        out["pitch"] = {"deg": 0.5 * (a["pitch"] + b["pitch"]), "confidence": fit, "reprojection_px": rms,
+                        "estimator": "mean of landmark transform and PnP on 30 base landmarks", "transform": a["pitch"], "pnp": b["pitch"]}
+        out["roll"] = {"deg": b["roll"], "confidence": fit, "estimator": "PnP on 30 base landmarks", "reprojection_px": rms}
         return out
-    fit = conf * math.exp(-rms / (0.05 * span))
-    out["pitch"] = {"deg": 0.5 * (a["pitch"] + b["pitch"]), "confidence": fit, "reprojection_px": rms,
-                    "estimator": "mean of landmark transform and PnP on 30 base landmarks", "transform": a["pitch"], "pnp": b["pitch"]}
-    out["roll"] = {"deg": b["roll"], "confidence": fit, "estimator": "PnP on 30 base landmarks", "reprojection_px": rms}
+    res = pf.fit(shape, pts, keys, size)
+    name = "PnP on this person's fitted head (front landmarks" + (" + profile keys)" if res and res["keys_used"] else " only)")
+    if res is None:
+        return {ax: {"deg": None, "confidence": 0.0, "estimator": name} for ax in ("yaw", "pitch", "roll")}
+    fit = conf * math.exp(-res["rms_px"] / (0.05 * span)) * (1.0 if res["keys_used"] else 0.5)
+    off = ref.get("fit_offset", {})
+    out = {}
+    base = None
+    for ax in ("yaw", "pitch", "roll"):
+        use = ref.get("front_estimator", {}).get(ax, "fit")
+        if use == "transform":
+            out[ax] = {"deg": a[ax], "confidence": conf, "estimator": "landmark transform", "fitted_head": res[ax] - off.get(ax, 0.0)}
+        elif use == "base":
+            base = base or front_pose(face, ref, size)
+            out[ax] = {**base[ax], "fitted_head": res[ax] - off.get(ax, 0.0)}
+        else:
+            out[ax] = {"deg": res[ax] - off.get(ax, 0.0), "confidence": fit, "estimator": name, "reprojection_px": res["rms_px"],
+                       "transform": a[ax]}
+    out["fit"] = {"targets_moved": int((res["weights"] > 0.01).sum()), "profile_keys": res["keys_used"], "points": res["points"],
+                  "camera": res["camera"], "k": pf.camera(size, pf_focal())}
     return out
 
 
-def similarity(src, dst):
-    ms, md = src.mean(0), dst.mean(0)
-    a, b = src - ms, dst - md
-    u, sv, vt = np.linalg.svd(b.T @ a / len(a))
-    d = np.diag([1.0, np.sign(np.linalg.det(u @ vt))])
-    r = u @ d @ vt
-    s = (sv * np.diag(d)).sum() / max((a ** 2).sum() / len(a), 1e-12)
-    return r, s, md - s * r @ ms
-
-
-def curve_segment(prof):
-    keys = prof["keys"] or {}
-    n, c = keys.get("nasion"), keys.get("chin")
-    if not n or not c or c[1] - n[1] < 10:
-        return None, None
-    h = c[1] - n[1]
-    right = prof["right"]
-    rows = range(max(int(n[1] - 0.6 * h), 0), min(int(c[1] + 0.1 * h), len(right)))
-    pts = np.array([[right[v], -float(v)] for v in rows if not np.isnan(right[v])])
-    return (pts if len(pts) >= 20 else None), {"nasion": [n[0], -n[1]], "height": h}
+def pf_focal():
+    return FOCAL_RATIO
 
 
 def curve_pitch(prof, ref):
-    p, meta = curve_segment(prof)
-    if p is None:
+    fit = pw.curve_fit(prof, ref)
+    if fit is None:
         return None
-    q = np.array(ref["profile_curve"], float)
-    s0 = meta["height"] / ref["profile_curve_height"]
-    best = None
-    for start in (-20.0, -10.0, 0.0, 10.0, 20.0):
-        a = math.radians(start)
-        r = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
-        s = s0
-        t = np.array(meta["nasion"]) - s * r @ np.array(ref["profile_curve_nasion"])
-        for _ in range(30):
-            qt = s * (r @ q.T).T + t
-            d = ((p[:, None, :] - qt[None, :, :]) ** 2).sum(2)
-            j = d.argmin(1)
-            dist = d[np.arange(len(p)), j]
-            keep = dist <= np.percentile(dist, 80)
-            r, s, t = similarity(q[j[keep]], p[keep])
-        qt = s * (r @ q.T).T + t
-        dist = np.sqrt(((p[:, None, :] - qt[None, :, :]) ** 2).sum(2).min(1))
-        rms = float(np.sqrt((np.sort(dist)[: int(0.8 * len(dist))] ** 2).mean()))
-        if best is None or rms < best[1]:
-            best = (math.degrees(math.atan2(r[1, 0], r[0, 0])), rms, s / s0)
-    return {"deg": best[0] - ref["profile_pitch_offset"], "rms_rel": best[1] / meta["height"], "scale_ratio": best[2]}
+    return {**fit, "deg": fit["deg"] - ref["profile_pitch_offset"]}
 
 
-def profile_pose(prof, ref, detected):
+def profile_pose(prof, ref, detected, oop=None):
     out = {"yaw": {"deg": None, "confidence": 0.0}, "pitch": {"deg": None, "confidence": 0.0},
-           "roll": {"deg": None, "confidence": 0.0, "note": "not observable in a side view; the front photo carries roll"}}
+           "roll": {"deg": None, "confidence": 0.0, "note": "not measured: a side view's silhouette does not resolve a small roll"}}
     cp = curve_pitch(prof, ref)
     if cp is not None:
         conf = float(math.exp(-cp["rms_rel"] / ref["profile_curve_rms_scale"]))
@@ -197,6 +187,16 @@ def profile_pose(prof, ref, detected):
     else:
         out["yaw"] = {"deg": 0.0, "confidence": 0.5, "estimator": "no face found by the landmarker",
                       "note": f"within about {floor:g} deg of a true side view toward the camera; turned-away views are not measured"}
+    if oop is not None:
+        conf = float(math.exp(-oop["rms"] / ref.get("profile_edge_rms_scale_m", 0.002)))
+        sign = "the sign is not observable (a symmetric head gives the same silhouette turned either way)"
+        grid = {"estimator": "fitted head's silhouette over a yaw-roll grid", "confidence": conf, "edge_rms_mm": 1000 * oop["rms"],
+                "straight_edge_rms_mm": 1000 * oop["straight_rms"], "note": sign}
+        if detected is None:
+            out["yaw"] = {**grid, "deg": abs(oop["yaw"])}
+        else:
+            out["yaw"]["fitted_head_deg"] = abs(oop["yaw"])
+        out["roll"] = {**grid, "deg": abs(oop["roll"])}
     return out
 
 
@@ -269,7 +269,7 @@ def pose_checks(view, pose, t, conf_min):
     return out
 
 
-def check_front(path, det, ref, t):
+def check_front(path, det, ref, t, shape=None, keys=None):
     img = pw.read_image(path)
     h, w = img.shape[:2]
     faces = faces_in(det, img)
@@ -281,7 +281,12 @@ def check_front(path, det, ref, t):
         return report
     face = faces[0]
     pts = face["points"]
-    pose = front_pose(face, ref, (w, h))
+    pose = front_pose(face, ref, (w, h), shape, keys)
+    fit = pose.pop("fit", None)
+    if fit is not None:
+        fit["rows"] = shape.row
+        report["fitted_head"] = {"targets_moved": fit["targets_moved"], "profile_keys": fit["profile_keys"]}
+        report["_fitted"] = (shape, fit["points"])
     report["pose"] = {k: {kk: (round(vv, 3) if isinstance(vv, float) else vv) for kk, vv in v.items()} for k, v in pose.items()}
     checks += pose_checks("front", pose, t, t["min_pose_confidence"])
     height = float(np.linalg.norm(pts[152, :2] - pts[10, :2]))
@@ -300,9 +305,12 @@ def check_front(path, det, ref, t):
     blink = max(bs.get("eyeBlinkLeft", 0.0), bs.get("eyeBlinkRight", 0.0))
     checks.append(check("front.eyes_open", round(blink, 3), blink <= t["max_eye_blink"], f"eye blink <= {t['max_eye_blink']:g}",
                         f"the eyes look closed or narrowed (blink score {blink:.2f})"))
-    jaw = bs.get("jawOpen", 0.0)
-    checks.append(check("front.mouth_closed", round(jaw, 3), jaw <= t["max_jaw_open"], f"jaw open <= {t['max_jaw_open']:g}",
-                        f"the mouth looks open (jaw-open score {jaw:.2f}); a neutral, closed mouth is needed"))
+    gap = float(np.linalg.norm(pts[14, :2] - pts[13, :2]))
+    rel = gap / max(height, 1e-6)
+    checks.append(check("front.mouth_closed", round(rel, 4), rel <= t["max_lip_gap"], f"lip gap <= {t['max_lip_gap']:g} of the face height",
+                        f"the mouth looks open (inner lips {gap:.0f} px apart, {100 * rel:.1f} % of the face height); "
+                        "a neutral, closed mouth is needed"))
+    report["mouth"] = {"lip_gap_px": round(gap, 2), "jaw_open_score": round(bs.get("jawOpen", 0.0), 3)}
     sil = pw.silhouette(img)
     spread, contrast = background(img, sil, mask)
     checks.append(check("front.background", round(spread, 2), spread <= t["max_background_spread"],
@@ -314,22 +322,20 @@ def check_front(path, det, ref, t):
     return report
 
 
-def check_profile(path, side, det, ref, t):
+def read_profile(path, side):
     img = pw.read_image(path)
-    h, w = img.shape[:2]
     upright = img if side == "right" else cv2.flip(img, 1)
-    prof = pw.analyse_profile(upright)
+    return img, upright, pw.analyse_profile(upright)
+
+
+def check_profile(path, side, det, ref, t, loaded=None, fitted=None):
+    img, upright, prof = loaded or read_profile(path, side)
+    h, w = img.shape[:2]
     report = {"path": path, "size": [w, h], "side": side}
     if prof is None:
         report["checks"] = [check("profile.silhouette", None, False, "found", "no head silhouette was found (is the background plain?)")]
         return report
-    r, l = prof["bump_right_px"], prof["bump_left_px"]
-    floor = 0.01 * (prof["bottom"] - prof["top"])
-    facing = "unknown"
-    if r > 2.0 * l and r > floor:
-        facing = side
-    elif l > 2.0 * r and l > floor:
-        facing = "left" if side == "right" else "right"
+    facing = pw.profile_facing(upright, prof, side, ref)
     checks = [check("profile.facing", facing, facing == side, f"shows the {side} side",
                     f"the profile shows the {facing} side, but {side} was declared (mirrored or mislabelled)")]
     mask = prof["mask"]
@@ -352,7 +358,11 @@ def check_profile(path, side, det, ref, t):
     checks.append(check("profile.face_height", round(height, 1), height >= t["profile_min_face_px"], f">= {t['profile_min_face_px']:g} px",
                         f"the face is {height:.0f} px from nasion to chin; at least {t['profile_min_face_px']:g} px is needed"
                         if height else "the profile points (nasion, chin) were not found"))
-    pose = profile_pose(prof, ref, own)
+    oop = None
+    if fitted is not None and ref.get("profile_out_of_plane", True):
+        seg, _ = pw.curve_segment(prof)
+        oop = pf.out_of_plane(fitted[0], fitted[1], pf.photo_keys(prof), seg)
+    pose = profile_pose(prof, ref, own, oop)
     report["pose"] = {k: {kk: (round(vv, 3) if isinstance(vv, float) else vv) for kk, vv in v.items()} for k, v in pose.items()}
     checks += pose_checks("profile", pose, t, t["min_pose_confidence"])
     fm = np.zeros(mask.shape, bool)
@@ -387,10 +397,15 @@ def run_check(args):
     allow = set(args.get("allow") or [])
     det = landmarker(args["landmarker"])
     photos = {}
+    side = args.get("profile_side", "right")
+    loaded = read_profile(args["profile"], side) if args.get("profile") else None
     if args.get("front"):
-        photos["front"] = check_front(args["front"], det, ref, t)
+        keys = pf.photo_keys(loaded[2]) if loaded and loaded[2] is not None else None
+        photos["front"] = check_front(args["front"], det, ref, t, pf.Shape() if ref.get("fit_head") else None, keys)
+    fitted = photos["front"].pop("_fitted", None) if "front" in photos else None
     if args.get("profile"):
-        photos["profile"] = check_profile(args["profile"], args.get("profile_side", "right"), det, ref, t)
+        photos["profile"] = check_profile(args["profile"], side, det, ref, t, loaded, fitted)
+    det.close()
     if not photos:
         pw.fail("give a front photo, a profile photo or both", "invalid_input")
     failures, allowed = [], []
