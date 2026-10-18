@@ -3,9 +3,10 @@ use serde::Serialize;
 use crate::Uv;
 use crate::decimate::Decimated;
 use crate::lids::Eye;
-use crate::placement as pl;
+use crate::placement::{self as pl, Csr};
+use crate::prepared::Prepared;
 use crate::quadric::{dot, length, sub};
-use crate::uv_chart::Surface;
+use crate::uv_chart::{self, Surface};
 
 #[derive(Clone, Serialize)]
 pub struct F5Settings {
@@ -97,32 +98,29 @@ fn inverse(m: &Block) -> Block {
     c.map(|x| x / det)
 }
 
-struct Blocks {
-    cols: Vec<Vec<u32>>,
+struct Blocks<'a> {
+    cols: &'a [Vec<u32>],
     vals: Vec<Vec<Block>>,
 }
 
-impl Blocks {
-    fn new(edges: &[(u32, u32)], count: usize) -> Blocks {
-        let mut cols: Vec<Vec<u32>> = (0..count as u32).map(|i| vec![i]).collect();
-        for &(a, b) in edges {
-            cols[a as usize].push(b);
-            cols[b as usize].push(a);
-        }
-        let vals = cols.iter().map(|c| vec![[0.0; 9]; c.len()]).collect();
-        Blocks { cols, vals }
+pub(crate) fn block_pattern(edges: &[(u32, u32)], count: usize) -> Vec<Vec<u32>> {
+    let mut cols: Vec<Vec<u32>> = (0..count as u32).map(|i| vec![i]).collect();
+    for &(a, b) in edges {
+        cols[a as usize].push(b);
+        cols[b as usize].push(a);
     }
+    cols
+}
 
-    fn add(&mut self, r: u32, c: u32, m: &Block) {
-        let k = self.cols[r as usize].iter().position(|&x| x == c).unwrap();
-        let v = &mut self.vals[r as usize][k];
-        for i in 0..9 {
-            v[i] += m[i];
-        }
+fn add_block(v: &mut Block, m: &Block) {
+    for i in 0..9 {
+        v[i] += m[i];
     }
+}
 
+impl Blocks<'_> {
     fn mul(&self, x: &[[f64; 3]], y: &mut [[f64; 3]]) {
-        for (r, out) in y.iter_mut().enumerate() {
+        let rows: Vec<[f64; 3]> = crate::map_range(y.len(), |r| {
             let mut s = [0.0; 3];
             for (&c, m) in self.cols[r].iter().zip(&self.vals[r]) {
                 let p = apply(m, x[c as usize]);
@@ -130,8 +128,9 @@ impl Blocks {
                     s[k] += p[k];
                 }
             }
-            *out = s;
-        }
+            s
+        });
+        y.copy_from_slice(&rows);
     }
 }
 
@@ -240,114 +239,136 @@ struct System<'a> {
     fixed: &'a [bool],
     subset: &'a [[f64; 3]],
     edges: &'a [(u32, u32)],
+    rows: &'a Csr,
+    edge_rows: &'a Csr,
+    pattern: &'a [Vec<u32>],
     tangential: f64,
     smooth: f64,
     membrane: Vec<Block>,
 }
 
 impl System<'_> {
-    fn solve(&self, fixed_at: &[[f64; 3]]) -> (Vec<[f64; 3]>, usize) {
+    fn matrix(&self) -> (Blocks<'_>, f64) {
         let count = self.subset.len();
-        let mut a = Blocks::new(self.edges, count);
-        let mut rhs = vec![[0.0f64; 3]; count];
-        for i in 0..self.points.len() {
-            let t = self.foot.triangle[i];
-            if t == u32::MAX {
-                continue;
+        let mut vals: Vec<Vec<Block>> = crate::map_range(count, |g| {
+            let cols = &self.pattern[g];
+            let mut v = vec![[0.0; 9]; cols.len()];
+            if self.fixed[g] {
+                return v;
             }
-            let w = self.foot.weights[i];
-            let tri = self.mesh.triangles[t as usize];
-            let m = outer_plus(self.normals[i], self.tangential);
-            let mut target = self.points[i];
-            for s in 0..3 {
-                if self.fixed[tri[s] as usize] {
-                    for k in 0..3 {
-                        target[k] -= w[s] * fixed_at[tri[s] as usize][k];
-                    }
-                }
-            }
-            let pulled = apply(&m, target);
-            for r in 0..3 {
-                if self.fixed[tri[r] as usize] || w[r] == 0.0 {
-                    continue;
-                }
-                for k in 0..3 {
-                    rhs[tri[r] as usize][k] += w[r] * pulled[k];
-                }
+            let at = |c: u32| cols.iter().position(|&x| x == c).unwrap();
+            for &e in self.rows.row(g) {
+                let (i, r) = ((e / 3) as usize, (e % 3) as usize);
+                let w = self.foot.weights[i];
+                let tri = self.mesh.triangles[self.foot.triangle[i] as usize];
+                let m = outer_plus(self.normals[i], self.tangential);
                 for s in 0..3 {
                     if !self.fixed[tri[s] as usize] && w[s] != 0.0 {
-                        a.add(tri[r], tri[s], &scaled(&m, w[r] * w[s]));
+                        add_block(&mut v[at(tri[s])], &scaled(&m, w[r] * w[s]));
                     }
                 }
             }
-        }
-        for &(p, q) in self.edges {
-            let e = sub(self.subset[p as usize], self.subset[q as usize]);
-            let (fp, fq) = (self.fixed[p as usize], self.fixed[q as usize]);
             let diagonal = scaled(&IDENTITY, self.smooth);
             let off = scaled(&IDENTITY, -self.smooth);
-            if !fp {
-                a.add(p, p, &diagonal);
-                for k in 0..3 {
-                    rhs[p as usize][k] += self.smooth * (e[k] + if fq { fixed_at[q as usize][k] } else { 0.0 });
-                }
-                if !fq {
-                    a.add(p, q, &off);
-                }
-            }
-            if !fq {
-                a.add(q, q, &diagonal);
-                for k in 0..3 {
-                    rhs[q as usize][k] += self.smooth * (-e[k] + if fp { fixed_at[p as usize][k] } else { 0.0 });
-                }
-                if !fp {
-                    a.add(q, p, &off);
+            for &e in self.edge_rows.row(g) {
+                let (p, q) = self.edges[(e / 2) as usize];
+                let other = if e % 2 == 0 { q } else { p };
+                add_block(&mut v[0], &diagonal);
+                if !self.fixed[other as usize] {
+                    add_block(&mut v[at(other)], &off);
                 }
             }
-        }
-        for (&(p, q), projector) in self.edges.iter().zip(&self.membrane) {
-            let (fp, fq) = (self.fixed[p as usize], self.fixed[q as usize]);
-            let negative = scaled(projector, -1.0);
-            if !fp {
-                a.add(p, p, projector);
-                if fq {
-                    let pulled = apply(projector, fixed_at[q as usize]);
-                    for k in 0..3 {
-                        rhs[p as usize][k] += pulled[k];
+            if !self.membrane.is_empty() {
+                for &e in self.edge_rows.row(g) {
+                    let projector = &self.membrane[(e / 2) as usize];
+                    let (p, q) = self.edges[(e / 2) as usize];
+                    let other = if e % 2 == 0 { q } else { p };
+                    add_block(&mut v[0], projector);
+                    if !self.fixed[other as usize] {
+                        add_block(&mut v[at(other)], &scaled(projector, -1.0));
                     }
-                } else {
-                    a.add(p, q, &negative);
                 }
             }
-            if !fq {
-                a.add(q, q, projector);
-                if fp {
-                    let pulled = apply(projector, fixed_at[p as usize]);
-                    for k in 0..3 {
-                        rhs[q as usize][k] += pulled[k];
-                    }
-                } else {
-                    a.add(q, p, &negative);
-                }
-            }
-        }
-        let scale: Vec<f64> = (0..count).map(|g| (a.vals[g][0][0] + a.vals[g][0][4] + a.vals[g][0][8]) / 3.0).collect();
+            v
+        });
+        let scale: Vec<f64> = (0..count).map(|g| (vals[g][0][0] + vals[g][0][4] + vals[g][0][8]) / 3.0).collect();
         let free = (0..count).filter(|&g| !self.fixed[g]).count().max(1);
         let mean_diagonal = (0..count).filter(|&g| !self.fixed[g]).map(|g| scale[g]).sum::<f64>() / free as f64;
         let epsilon = 1e-6 * mean_diagonal;
         for g in 0..count {
             if self.fixed[g] {
-                a.vals[g][0] = IDENTITY;
-                rhs[g] = fixed_at[g];
+                vals[g][0] = IDENTITY;
                 continue;
             }
-            a.add(g as u32, g as u32, &scaled(&IDENTITY, epsilon));
-            for k in 0..3 {
-                rhs[g][k] += epsilon * self.subset[g][k];
-            }
+            add_block(&mut vals[g][0], &scaled(&IDENTITY, epsilon));
         }
+        (Blocks { cols: self.pattern, vals }, epsilon)
+    }
+
+    fn rhs(&self, fixed_at: &[[f64; 3]], epsilon: f64) -> Vec<[f64; 3]> {
+        crate::map_range(self.subset.len(), |g| {
+            if self.fixed[g] {
+                return fixed_at[g];
+            }
+            let mut b = [0.0f64; 3];
+            for &e in self.rows.row(g) {
+                let (i, r) = ((e / 3) as usize, (e % 3) as usize);
+                let w = self.foot.weights[i];
+                let tri = self.mesh.triangles[self.foot.triangle[i] as usize];
+                let m = outer_plus(self.normals[i], self.tangential);
+                let mut target = self.points[i];
+                for s in 0..3 {
+                    if self.fixed[tri[s] as usize] {
+                        for k in 0..3 {
+                            target[k] -= w[s] * fixed_at[tri[s] as usize][k];
+                        }
+                    }
+                }
+                let pulled = apply(&m, target);
+                for k in 0..3 {
+                    b[k] += w[r] * pulled[k];
+                }
+            }
+            for &e in self.edge_rows.row(g) {
+                let (p, q) = self.edges[(e / 2) as usize];
+                let d = sub(self.subset[p as usize], self.subset[q as usize]);
+                if e % 2 == 0 {
+                    let fq = self.fixed[q as usize];
+                    for k in 0..3 {
+                        b[k] += self.smooth * (d[k] + if fq { fixed_at[q as usize][k] } else { 0.0 });
+                    }
+                } else {
+                    let fp = self.fixed[p as usize];
+                    for k in 0..3 {
+                        b[k] += self.smooth * (-d[k] + if fp { fixed_at[p as usize][k] } else { 0.0 });
+                    }
+                }
+            }
+            if !self.membrane.is_empty() {
+                for &e in self.edge_rows.row(g) {
+                    let projector = &self.membrane[(e / 2) as usize];
+                    let (p, q) = self.edges[(e / 2) as usize];
+                    let far = if e % 2 == 0 { q } else { p };
+                    if self.fixed[far as usize] {
+                        let pulled = apply(projector, fixed_at[far as usize]);
+                        for k in 0..3 {
+                            b[k] += pulled[k];
+                        }
+                    }
+                }
+            }
+            for k in 0..3 {
+                b[k] += epsilon * self.subset[g][k];
+            }
+            b
+        })
+    }
+
+    fn solve(&self, a: &Blocks, epsilon: f64, fixed_at: &[[f64; 3]]) -> (Vec<[f64; 3]>, usize) {
+        let count = self.subset.len();
+        let rhs = self.rhs(fixed_at, epsilon);
         let mut x: Vec<[f64; 3]> = (0..count).map(|g| if self.fixed[g] { fixed_at[g] } else { self.subset[g] }).collect();
-        let iterations = conjugate_gradient(&a, &rhs, &mut x);
+        let iterations = conjugate_gradient(a, &rhs, &mut x);
         (x, iterations)
     }
 
@@ -362,43 +383,27 @@ impl System<'_> {
         Some(sub(at, self.points[i]))
     }
 
-    fn seam_offsets(&self, game: &[[f64; 3]], seam: &[bool], kept_normals: &[[f64; 3]]) -> Vec<f64> {
-        let count = game.len();
-        let mut num = vec![0.0f64; count];
-        let mut den = vec![0.0f64; count];
-        for i in 0..self.points.len() {
-            let Some(r) = self.residual(game, i) else { continue };
-            let w = self.foot.weights[i];
-            let tri = self.mesh.triangles[self.foot.triangle[i] as usize];
-            for s in 0..3 {
-                let g = tri[s] as usize;
-                if seam[g] {
-                    num[g] += w[s] * dot(r, kept_normals[g]);
-                    den[g] += w[s] * w[s];
-                }
+    fn seam_offsets(&self, game: &[[f64; 3]], seam: &[bool], kept_normals: &[[f64; 3]], seam_rows: &Csr) -> Vec<f64> {
+        crate::map_range(game.len(), |g| {
+            if !seam[g] {
+                return 0.0;
             }
-        }
-        (0..count).map(|g| if seam[g] && den[g] > 0.0 { -num[g] / den[g] } else { 0.0 }).collect()
+            let (mut num, mut den) = (0.0f64, 0.0f64);
+            for &e in seam_rows.row(g) {
+                let (i, s) = ((e / 3) as usize, (e % 3) as usize);
+                let Some(r) = self.residual(game, i) else { continue };
+                let w = self.foot.weights[i];
+                num += w[s] * dot(r, kept_normals[g]);
+                den += w[s] * w[s];
+            }
+            if den > 0.0 { -num / den } else { 0.0 }
+        })
     }
 }
 
 fn smoothstep(x: f64, range: [f64; 2]) -> f64 {
     let t = ((x - range[0]) / (range[1] - range[0]).max(1e-12)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-fn seam_vertices(mesh: &Decimated) -> Vec<bool> {
-    let mut keys: Vec<Vec<(u32, u32)>> = vec![Vec::new(); mesh.kept.len()];
-    for (tri, uvs) in mesh.triangles.iter().zip(&mesh.triangle_uvs) {
-        for c in 0..3 {
-            let key = (uvs[c][0].to_bits(), uvs[c][1].to_bits());
-            let list = &mut keys[tri[c] as usize];
-            if !list.contains(&key) {
-                list.push(key);
-            }
-        }
-    }
-    keys.iter().map(|k| k.len() > 1).collect()
 }
 
 #[derive(Default, Serialize)]
@@ -482,10 +487,21 @@ pub fn place(
     eyes: &[Eye],
     settings: &F5Settings,
 ) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
+    let prepared = Prepared::new(positions.len(), dense_triangles, dense_uvs, mesh, settings.uv_ring);
+    place_prepared(positions, dense_triangles, dense_uvs, mesh, eyes, settings, &prepared)
+}
+
+pub fn place_prepared(
+    positions: &[[f64; 3]],
+    dense_triangles: &[[u32; 3]],
+    dense_uvs: &[[Uv; 3]],
+    mesh: &Decimated,
+    eyes: &[Eye],
+    settings: &F5Settings,
+    prepared: &Prepared,
+) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
     let count = mesh.kept.len();
-    let boundary = pl::boundary_vertices(mesh);
-    let seam: Vec<bool> = seam_vertices(mesh).iter().zip(&boundary).map(|(&s, &b)| s && !b).collect();
-    let fixed: Vec<bool> = (0..count).map(|g| boundary[g] || seam[g]).collect();
+    let (boundary, seam, fixed) = (&prepared.boundary, &prepared.seam, &prepared.fixed);
     let mut stats = F5Stats {
         vertices: count,
         boundary: boundary.iter().filter(|&&b| b).count(),
@@ -493,15 +509,13 @@ pub fn place(
         ..Default::default()
     };
     let points = positions;
-    let dense_normals = pl::angle_weighted_normals(points, dense_triangles);
-    let vtris = pl::vertex_triangles(mesh, count);
-    let rings = pl::ring_triangles(mesh, &vtris);
-    let foot = footprint(points.len(), dense_triangles, dense_uvs, mesh, &rings);
-    drop(rings);
+    let dense_normals = pl::angle_weighted_normals_with(points, dense_triangles, &prepared.corners);
+    let parts = prepared.f5_parts(dense_triangles, dense_uvs, mesh);
+    let foot = &parts.foot;
     stats.footprint_points = foot.triangle.iter().filter(|&&t| t != u32::MAX).count();
     stats.footprint_outside = foot.outside;
     let subset: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| points[d as usize]).collect();
-    let edges = pl::unique_edges(mesh);
+    let edges = &prepared.edges;
     let mut vertex_normals = vec![[0.0f64; 3]; count];
     for tri in &mesh.triangles {
         let n = pl::triangle_normal(tri.map(|i| subset[i as usize]));
@@ -517,30 +531,31 @@ pub fn place(
         mesh.kept.iter().map(|&d| dense_normals[d as usize]).collect()
     };
     let data_normals: Vec<[f64; 3]> = if settings.subset_normals {
-        (0..points.len())
-            .map(|i| {
-                let t = foot.triangle[i];
-                if t == u32::MAX {
-                    return [0.0; 3];
-                }
-                let w = foot.weights[i];
-                let tri = mesh.triangles[t as usize];
-                let n = [0, 1, 2].map(|k| w[0] * vertex_normals[tri[0] as usize][k] + w[1] * vertex_normals[tri[1] as usize][k] + w[2] * vertex_normals[tri[2] as usize][k]);
-                let l = length(n).max(1e-30);
-                n.map(|x| x / l)
-            })
-            .collect()
+        crate::map_range(points.len(), |i| {
+            let t = foot.triangle[i];
+            if t == u32::MAX {
+                return [0.0; 3];
+            }
+            let w = foot.weights[i];
+            let tri = mesh.triangles[t as usize];
+            let n = [0, 1, 2].map(|k| w[0] * vertex_normals[tri[0] as usize][k] + w[1] * vertex_normals[tri[1] as usize][k] + w[2] * vertex_normals[tri[2] as usize][k]);
+            let l = length(n).max(1e-30);
+            n.map(|x| x / l)
+        })
     } else {
         dense_normals.clone()
     };
     let system = System {
         points,
         normals: &data_normals,
-        foot: &foot,
+        foot,
         mesh,
-        fixed: &fixed,
+        fixed,
         subset: &subset,
-        edges: &edges,
+        edges,
+        rows: &parts.rows,
+        edge_rows: &prepared.edge_rows,
+        pattern: &parts.pattern,
         tangential: settings.tangential,
         smooth: settings.smooth,
         membrane: if settings.membrane > 0.0 {
@@ -556,53 +571,46 @@ pub fn place(
             Vec::new()
         },
     };
+    let (a, epsilon) = system.matrix();
     let mut fixed_at = subset.clone();
-    let (first, iterations) = system.solve(&fixed_at);
+    let (first, iterations) = system.solve(&a, epsilon, &fixed_at);
     stats.solver_iterations.push(iterations);
-    let h = system.seam_offsets(&first, &seam, &kept_normals);
+    let h = system.seam_offsets(&first, seam, &kept_normals, &parts.seam_rows);
     for g in 0..count {
         if seam[g] {
             fixed_at[g] = [0, 1, 2].map(|k| subset[g][k] + h[g] * kept_normals[g][k]);
             stats.seam_offset_max_mm = stats.seam_offset_max_mm.max(h[g].abs() * 1000.0);
         }
     }
-    let (mut game, iterations) = system.solve(&fixed_at);
+    let (mut game, iterations) = system.solve(&a, epsilon, &fixed_at);
     stats.solver_iterations.push(iterations);
+    let gaps: Vec<Option<(f64, f64)>> = crate::map_range(points.len(), |i| system.residual(&game, i).map(|r| (length(r), dot(r, dense_normals[i]).abs())));
     let (mut gap, mut normal_gap, mut n) = (0.0, 0.0, 0usize);
-    for i in 0..points.len() {
-        if let Some(r) = system.residual(&game, i) {
-            gap += length(r);
-            normal_gap += dot(r, dense_normals[i]).abs();
-            n += 1;
-        }
+    for (l, d) in gaps.iter().flatten() {
+        gap += l;
+        normal_gap += d;
+        n += 1;
     }
     stats.point_gap_mm = gap / n.max(1) as f64 * 1000.0;
     stats.normal_gap_mm = normal_gap / n.max(1) as f64 * 1000.0;
     drop(dense_normals);
     stats.clamped = pl::clamp_moves(&mut game, &subset, settings.max_move);
     if !eyes.is_empty() {
-        stats.clear = Some(lift_vertices(&mut game, &subset, mesh, &fixed, eyes, settings));
+        stats.clear = Some(lift_vertices(&mut game, &subset, mesh, fixed, eyes, settings));
     }
     let mut moves: Vec<f64> = game.iter().zip(&subset).map(|(a, b)| length(sub(*a, *b))).collect();
     moves.sort_by(f64::total_cmp);
     stats.median_move_mm = moves[moves.len() / 2] * 1000.0;
     stats.max_move_mm = moves[moves.len() - 1] * 1000.0;
 
-    let surface = Surface::new(points, dense_triangles, dense_uvs, mesh, settings.uv_ring);
-    let mut key: Vec<Option<Uv>> = vec![None; count];
-    for (tri, uvs) in mesh.triangles.iter().zip(&mesh.triangle_uvs) {
-        for c in 0..3 {
-            key[tri[c] as usize].get_or_insert(uvs[c]);
+    let surface = Surface::with_topology(points, dense_triangles, dense_uvs, mesh, &prepared.surface);
+    let spheres = uv_chart::triangle_spheres(points, dense_triangles);
+    let derived: Vec<Option<Uv>> = crate::map_range(count, |g| {
+        if fixed[g] {
+            return None;
         }
-    }
-    let derived: Vec<Option<Uv>> = (0..count)
-        .map(|g| {
-            if fixed[g] {
-                return None;
-            }
-            surface.closest_on_patch(g as u32, game[g], key[g]?).map(|hit| surface.uv(hit))
-        })
-        .collect();
+        surface.closest_in(prepared.patches.row(g), game[g], &spheres).map(|hit| surface.uv(hit))
+    });
     stats.uv_keys_derived = derived.iter().filter(|d| d.is_some()).count();
     stats.uv_seed_misses = (0..count).filter(|&g| !fixed[g] && derived[g].is_none()).count();
     let mut use_derived: Vec<bool> = derived.iter().map(|d| d.is_some()).collect();

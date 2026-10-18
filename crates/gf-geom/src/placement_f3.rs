@@ -3,9 +3,10 @@ use serde::Serialize;
 use crate::decimate::Decimated;
 use crate::Uv;
 use crate::lids::{self, ClearSettings, ClearStats, Eye};
-use crate::placement::{self as pl, Sparse};
+use crate::placement::{self as pl, Buckets};
+use crate::prepared::Prepared;
 use crate::quadric::{dot, length, sub};
-use crate::uv_chart::Surface;
+use crate::uv_chart::{self, Surface};
 
 #[derive(Clone, Serialize)]
 pub struct F3Settings {
@@ -68,90 +69,134 @@ pub struct F3Stats {
 
 type Hits = Vec<(u32, [f64; 3], f64)>;
 
-fn solve(points: &[[f64; 3]], hits: &Hits, mesh: &Decimated, fixed: &[bool], fixed_at: &[[f64; 3]], subset: &[[f64; 3]], edges: &[(u32, u32)], smooth: f64) -> Vec<[f64; 3]> {
-    let count = mesh.kept.len();
-    let mut a = Sparse::new(mesh, count);
-    let mut rhs = vec![[0.0f64; 3]; count];
-    for (i, &(t, w, _)) in hits.iter().enumerate() {
+struct Matrix<'a> {
+    cols: &'a [Vec<u32>],
+    vals: Vec<Vec<f64>>,
+    epsilon: f64,
+}
+
+fn hit_rows(hits: &Hits, mesh: &Decimated, count: usize) -> Buckets {
+    Buckets::build(count, hits.len(), |i, push| {
+        let t = hits[i].0;
         if t == u32::MAX {
-            continue;
+            return;
         }
         let tri = mesh.triangles[t as usize];
-        let mut target = points[i];
-        for s in 0..3 {
-            if fixed[tri[s] as usize] {
-                for k in 0..3 {
-                    target[k] -= w[s] * fixed_at[tri[s] as usize][k];
-                }
-            }
-        }
         for r in 0..3 {
-            if fixed[tri[r] as usize] {
-                continue;
-            }
-            for k in 0..3 {
-                rhs[tri[r] as usize][k] += w[r] * target[k];
-            }
+            push(tri[r] as usize, (i * 3 + r) as u32);
+        }
+    })
+}
+
+fn matrix<'a>(hits: &Hits, rows: &Buckets, mesh: &Decimated, prepared: &Prepared, pattern: &'a [Vec<u32>], smooth: f64) -> Matrix<'a> {
+    let fixed = &prepared.fixed;
+    let count = fixed.len();
+    let mut vals: Vec<Vec<f64>> = crate::map_range(count, |g| {
+        let cols = &pattern[g];
+        let mut v = vec![0.0f64; cols.len()];
+        if fixed[g] {
+            return v;
+        }
+        let at = |c: u32| cols.iter().position(|&x| x == c).unwrap();
+        for e in rows.row(g) {
+            let (i, r) = ((e / 3) as usize, (e % 3) as usize);
+            let (t, w, _) = hits[i];
+            let tri = mesh.triangles[t as usize];
             for s in 0..3 {
                 if !fixed[tri[s] as usize] {
-                    a.add(tri[r], tri[s], w[r] * w[s]);
+                    v[at(tri[s])] += w[r] * w[s];
                 }
             }
         }
-    }
-    for &(p, q) in edges {
-        let e = sub(subset[p as usize], subset[q as usize]);
-        let (fp, fq) = (fixed[p as usize], fixed[q as usize]);
-        if !fp {
-            a.add(p, p, smooth);
-            for k in 0..3 {
-                rhs[p as usize][k] += smooth * (e[k] + if fq { fixed_at[q as usize][k] } else { 0.0 });
-            }
-            if !fq {
-                a.add(p, q, -smooth);
+        for &e in prepared.edge_rows.row(g) {
+            let (p, q) = prepared.edges[(e / 2) as usize];
+            let other = if e % 2 == 0 { q } else { p };
+            v[0] += smooth;
+            if !fixed[other as usize] {
+                v[at(other)] += -smooth;
             }
         }
-        if !fq {
-            a.add(q, q, smooth);
-            for k in 0..3 {
-                rhs[q as usize][k] += smooth * (-e[k] + if fp { fixed_at[p as usize][k] } else { 0.0 });
-            }
-            if !fp {
-                a.add(q, p, -smooth);
-            }
-        }
-    }
-    let mean_diagonal = (0..count).map(|r| a.vals[r][0]).sum::<f64>() / count as f64;
+        v
+    });
+    let mean_diagonal = (0..count).map(|r| vals[r][0]).sum::<f64>() / count as f64;
     let epsilon = 1e-6 * mean_diagonal;
     for g in 0..count {
         if fixed[g] {
-            a.vals[g][0] = 1.0;
-            rhs[g] = fixed_at[g];
+            vals[g][0] = 1.0;
         } else {
-            a.add(g as u32, g as u32, epsilon);
-            for k in 0..3 {
-                rhs[g][k] += epsilon * subset[g][k];
-            }
+            vals[g][0] += epsilon;
         }
     }
+    Matrix { cols: pattern, vals, epsilon }
+}
+
+fn rhs(points: &[[f64; 3]], hits: &Hits, rows: &Buckets, mesh: &Decimated, prepared: &Prepared, fixed_at: &[[f64; 3]], subset: &[[f64; 3]], smooth: f64, epsilon: f64) -> Vec<[f64; 3]> {
+    let fixed = &prepared.fixed;
+    crate::map_range(fixed.len(), |g| {
+        if fixed[g] {
+            return fixed_at[g];
+        }
+        let mut b = [0.0f64; 3];
+        for e in rows.row(g) {
+            let (i, r) = ((e / 3) as usize, (e % 3) as usize);
+            let (t, w, _) = hits[i];
+            let tri = mesh.triangles[t as usize];
+            let mut target = points[i];
+            for s in 0..3 {
+                if fixed[tri[s] as usize] {
+                    for k in 0..3 {
+                        target[k] -= w[s] * fixed_at[tri[s] as usize][k];
+                    }
+                }
+            }
+            for k in 0..3 {
+                b[k] += w[r] * target[k];
+            }
+        }
+        for &e in prepared.edge_rows.row(g) {
+            let (p, q) = prepared.edges[(e / 2) as usize];
+            let d = sub(subset[p as usize], subset[q as usize]);
+            if e % 2 == 0 {
+                let fq = fixed[q as usize];
+                for k in 0..3 {
+                    b[k] += smooth * (d[k] + if fq { fixed_at[q as usize][k] } else { 0.0 });
+                }
+            } else {
+                let fp = fixed[p as usize];
+                for k in 0..3 {
+                    b[k] += smooth * (-d[k] + if fp { fixed_at[p as usize][k] } else { 0.0 });
+                }
+            }
+        }
+        for k in 0..3 {
+            b[k] += epsilon * subset[g][k];
+        }
+        b
+    })
+}
+
+fn solve(a: &Matrix, b: &[[f64; 3]], subset: &[[f64; 3]], fixed: &[bool], fixed_at: &[[f64; 3]]) -> Vec<[f64; 3]> {
     let mut out = subset.to_vec();
-    for g in 0..count {
+    for g in 0..out.len() {
         if fixed[g] {
             out[g] = fixed_at[g];
         }
     }
-    for k in 0..3 {
-        let b: Vec<f64> = rhs.iter().map(|r| r[k]).collect();
+    let axes: Vec<Vec<f64>> = crate::map_range(3, |k| {
+        let column: Vec<f64> = b.iter().map(|r| r[k]).collect();
         let mut x: Vec<f64> = out.iter().map(|p| p[k]).collect();
-        pl::conjugate_gradient(&a, &b, &mut x);
-        for g in 0..count {
-            out[g][k] = x[g];
+        pl::conjugate_gradient_rows(a.cols, &a.vals, &column, &mut x);
+        x
+    });
+    for k in 0..3 {
+        for g in 0..out.len() {
+            out[g][k] = axes[k][g];
         }
     }
     out
 }
 
-fn seam_vertices(mesh: &Decimated) -> Vec<bool> {
+pub(crate) fn seam_vertices(mesh: &Decimated) -> Vec<bool> {
     let mut keys: Vec<Vec<(u32, u32)>> = vec![Vec::new(); mesh.kept.len()];
     for (tri, uvs) in mesh.triangles.iter().zip(&mesh.triangle_uvs) {
         for c in 0..3 {
@@ -165,26 +210,23 @@ fn seam_vertices(mesh: &Decimated) -> Vec<bool> {
     keys.iter().map(|k| k.len() > 1).collect()
 }
 
-fn seam_offsets(points: &[[f64; 3]], hits: &Hits, mesh: &Decimated, game: &[[f64; 3]], seam: &[bool], normals: &[[f64; 3]]) -> Vec<f64> {
-    let count = game.len();
-    let mut num = vec![0.0f64; count];
-    let mut den = vec![0.0f64; count];
-    for (i, &(t, w, _)) in hits.iter().enumerate() {
-        if t == u32::MAX {
-            continue;
+fn seam_offsets(points: &[[f64; 3]], hits: &Hits, rows: &Buckets, mesh: &Decimated, game: &[[f64; 3]], seam: &[bool], normals: &[[f64; 3]]) -> Vec<f64> {
+    crate::map_range(game.len(), |g| {
+        if !seam[g] {
+            return 0.0;
         }
-        let tri = mesh.triangles[t as usize];
-        let at = [0, 1, 2].map(|k| w[0] * game[tri[0] as usize][k] + w[1] * game[tri[1] as usize][k] + w[2] * game[tri[2] as usize][k]);
-        let residual = sub(at, points[i]);
-        for s in 0..3 {
-            let g = tri[s] as usize;
-            if seam[g] {
-                num[g] += w[s] * dot(residual, normals[g]);
-                den[g] += w[s] * w[s];
-            }
+        let (mut num, mut den) = (0.0f64, 0.0f64);
+        for e in rows.row(g) {
+            let (i, s) = ((e / 3) as usize, (e % 3) as usize);
+            let (t, w, _) = hits[i];
+            let tri = mesh.triangles[t as usize];
+            let at = [0, 1, 2].map(|k| w[0] * game[tri[0] as usize][k] + w[1] * game[tri[1] as usize][k] + w[2] * game[tri[2] as usize][k]);
+            let residual = sub(at, points[i]);
+            num += w[s] * dot(residual, normals[g]);
+            den += w[s] * w[s];
         }
-    }
-    (0..count).map(|g| if seam[g] && den[g] > 1e-12 { -num[g] / den[g] } else { 0.0 }).collect()
+        if den > 1e-12 { -num / den } else { 0.0 }
+    })
 }
 
 fn smoothstep(x: f64, range: [f64; 2]) -> f64 {
@@ -194,12 +236,9 @@ fn smoothstep(x: f64, range: [f64; 2]) -> f64 {
 
 struct Fit<'a> {
     mesh: &'a Decimated,
-    fixed: Vec<bool>,
-    seam: Vec<bool>,
+    prepared: &'a Prepared,
+    pattern: &'a [Vec<u32>],
     normals: Vec<[f64; 3]>,
-    edges: Vec<(u32, u32)>,
-    vtris: Vec<Vec<u32>>,
-    neighbours: Vec<Vec<u32>>,
     subset_normals: Vec<Option<[f64; 3]>>,
     dense_refs: Option<Vec<[f64; 3]>>,
 }
@@ -218,21 +257,24 @@ fn tangent_basis(n: [f64; 3]) -> ([f64; 3], [f64; 3]) {
 
 impl Fit<'_> {
     fn once(&self, points: &[[f64; 3]], hits: &Hits, subset: &[[f64; 3]], smooth: f64) -> (Vec<[f64; 3]>, f64) {
+        let prepared = self.prepared;
+        let rows = hit_rows(hits, self.mesh, prepared.fixed.len());
+        let a = matrix(hits, &rows, self.mesh, prepared, self.pattern, smooth);
         let mut at = subset.to_vec();
-        let first = solve(points, hits, self.mesh, &self.fixed, &at, subset, &self.edges, smooth);
-        let h = seam_offsets(points, hits, self.mesh, &first, &self.seam, &self.normals);
+        let first = solve(&a, &rhs(points, hits, &rows, self.mesh, prepared, &at, subset, smooth, a.epsilon), subset, &prepared.fixed, &at);
+        let h = seam_offsets(points, hits, &rows, self.mesh, &first, &prepared.seam, &self.normals);
         let mut largest = 0.0f64;
         for g in 0..at.len() {
-            if self.seam[g] {
+            if prepared.seam[g] {
                 at[g] = [0, 1, 2].map(|k| subset[g][k] + h[g] * self.normals[g][k]);
                 largest = largest.max(h[g].abs());
             }
         }
-        (solve(points, hits, self.mesh, &self.fixed, &at, subset, &self.edges, smooth), largest)
+        (solve(&a, &rhs(points, hits, &rows, self.mesh, prepared, &at, subset, smooth, a.epsilon), subset, &prepared.fixed, &at), largest)
     }
 
     fn sliver_step(&self, game: &[[f64; 3]], g: usize, settings: &F3Settings) -> Option<[f64; 3]> {
-        let worst = self.vtris[g]
+        let worst = self.prepared.vtris[g]
             .iter()
             .map(|&t| pl::min_angle(self.mesh.triangles[t as usize].map(|i| game[i as usize])))
             .fold(180.0f64, f64::min);
@@ -240,7 +282,7 @@ impl Fit<'_> {
         if a <= 0.0 {
             return None;
         }
-        let ring = &self.neighbours[g];
+        let ring = &self.prepared.neighbours[g];
         let c = ring.iter().fold([0.0; 3], |s, &w| [s[0] + game[w as usize][0], s[1] + game[w as usize][1], s[2] + game[w as usize][2]]);
         let c = c.map(|x| x / ring.len() as f64);
         let n = self.normals[g];
@@ -250,7 +292,7 @@ impl Fit<'_> {
     }
 
     fn back_off(&self, game: &[[f64; 3]], g: usize, settings: &F3Settings) -> f64 {
-        self.vtris[g]
+        self.prepared.vtris[g]
             .iter()
             .filter_map(|&t| {
                 let m = match &self.dense_refs {
@@ -266,7 +308,7 @@ impl Fit<'_> {
     }
 
     fn worst_at(&self, game: &[[f64; 3]], g: usize) -> f64 {
-        self.vtris[g].iter().map(|&t| pl::min_angle(self.mesh.triangles[t as usize].map(|i| game[i as usize]))).fold(180.0f64, f64::min)
+        self.prepared.vtris[g].iter().map(|&t| pl::min_angle(self.mesh.triangles[t as usize].map(|i| game[i as usize]))).fold(180.0f64, f64::min)
     }
 
     fn star_with(&self, game: &[[f64; 3]], g: usize, p: [f64; 3], t: u32) -> [[f64; 3]; 3] {
@@ -275,18 +317,18 @@ impl Fit<'_> {
 
     fn angle_pass(&self, game: &mut [[f64; 3]], away: &[f64], f4: &F4Settings, refs: &[[f64; 3]]) -> F4Stats {
         let mut stats = F4Stats::default();
-        let below = |game: &[[f64; 3]]| (0..game.len()).filter(|&g| !self.fixed[g] && self.worst_at(game, g) < f4.target_deg).count();
+        let below = |game: &[[f64; 3]]| (0..game.len()).filter(|&g| !self.prepared.fixed[g] && self.worst_at(game, g) < f4.target_deg).count();
         stats.below_target_before = below(game);
         for _ in 0..f4.passes {
             let mut moved = 0;
             for g in 0..game.len() {
-                if self.fixed[g] || self.neighbours[g].is_empty() || away[g] <= 0.0 || self.worst_at(game, g) >= f4.target_deg {
+                if self.prepared.fixed[g] || self.prepared.neighbours[g].is_empty() || away[g] <= 0.0 || self.worst_at(game, g) >= f4.target_deg {
                     continue;
                 }
-                let tris = &self.vtris[g];
+                let tris = &self.prepared.vtris[g];
                 let penalty = |p: [f64; 3]| tris.iter().map(|&t| small_angle_penalty(self.star_with(game, g, p, t), f4.target_deg)).sum::<f64>();
                 let fold = |p: [f64; 3]| tris.iter().map(|&t| pl::deviation_deg(self.star_with(game, g, p, t), refs[t as usize])).fold(0.0f64, f64::max);
-                let ring = &self.neighbours[g];
+                let ring = &self.prepared.neighbours[g];
                 let edge = ring.iter().map(|&w| length(sub(game[w as usize], game[g]))).sum::<f64>() / ring.len() as f64;
                 let plane = if f4.game_plane {
                     let n = tris.iter().fold([0.0; 3], |a, &t| {
@@ -340,11 +382,13 @@ impl Fit<'_> {
 
     fn relax(&self, game: &mut [[f64; 3]], subset: &[[f64; 3]], eyes: &[Eye], settings: &F3Settings, stats: &mut F3Stats) {
         let away = self.away(subset, eyes, settings);
-        let every: Vec<usize> = (0..game.len()).collect();
+        let prepared = self.prepared;
+        let mut active: Vec<usize> = (0..game.len()).collect();
+        let mut touched = vec![false; game.len()];
         for _ in 0..settings.relax_steps {
             let view: &[[f64; 3]] = game;
-            let moves: Vec<Option<[f64; 3]>> = crate::map_each(&every, |g| {
-                if self.fixed[g] || self.neighbours[g].is_empty() {
+            let moves: Vec<Option<[f64; 3]>> = crate::map_each(&active, |g| {
+                if prepared.fixed[g] || prepared.neighbours[g].is_empty() {
                     return None;
                 }
                 let sliver = self.sliver_step(view, g, settings).map(|d| d.map(|x| x * away[g]));
@@ -357,16 +401,26 @@ impl Fit<'_> {
                 Some([0, 1, 2].map(|k| d[k] + back[k] * settings.backoff_step * b))
             });
             let mut moved = 0;
-            for (g, m) in moves.iter().enumerate() {
+            for (&g, m) in active.iter().zip(&moves) {
                 if let Some(m) = m {
                     for k in 0..3 {
                         game[g][k] += m[k];
                     }
                     stats.relax_largest_mm = stats.relax_largest_mm.max(length(*m) * 1000.0);
                     moved += 1;
+                    for &t in &prepared.vtris[g] {
+                        for &w in &self.mesh.triangles[t as usize] {
+                            touched[w as usize] = true;
+                        }
+                    }
+                    for &w in &prepared.neighbours[g] {
+                        touched[w as usize] = true;
+                    }
                 }
             }
             stats.relaxed_vertices.push(moved);
+            active = (0..game.len()).filter(|&g| touched[g]).collect();
+            touched.fill(false);
         }
     }
 }
@@ -388,10 +442,21 @@ pub fn place(
     eyes: &[Eye],
     settings: &F3Settings,
 ) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F3Stats) {
+    let prepared = Prepared::new(positions.len(), dense_triangles, dense_uvs, mesh, settings.uv_ring);
+    place_prepared(positions, dense_triangles, dense_uvs, mesh, eyes, settings, &prepared)
+}
+
+pub fn place_prepared(
+    positions: &[[f64; 3]],
+    dense_triangles: &[[u32; 3]],
+    dense_uvs: &[[Uv; 3]],
+    mesh: &Decimated,
+    eyes: &[Eye],
+    settings: &F3Settings,
+    prepared: &Prepared,
+) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F3Stats) {
     let count = mesh.kept.len();
-    let boundary = pl::boundary_vertices(mesh);
-    let seam: Vec<bool> = seam_vertices(mesh).iter().zip(&boundary).map(|(&s, &b)| s && !b).collect();
-    let fixed: Vec<bool> = (0..count).map(|g| boundary[g] || seam[g]).collect();
+    let (boundary, seam, fixed) = (&prepared.boundary, &prepared.seam, &prepared.fixed);
     let mut stats = F3Stats {
         vertices: count,
         boundary: boundary.iter().filter(|&&b| b).count(),
@@ -399,12 +464,13 @@ pub fn place(
         ..Default::default()
     };
     let points = positions;
-    let dense_normals = pl::angle_weighted_normals(points, dense_triangles);
-    let normals: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| dense_normals[d as usize]).collect();
-    let dense_clear = (!eyes.is_empty()).then(|| lids::dense_clearance(points, &dense_normals, eyes, settings.clear.front_deg));
-    drop(dense_normals);
-    let vtris = pl::vertex_triangles(mesh, count);
-    let rings = pl::ring_triangles(mesh, &vtris);
+    let (normals, dense_clear) = if eyes.is_empty() {
+        (pl::angle_weighted_normals_at(points, dense_triangles, &prepared.corners, &mesh.kept), None)
+    } else {
+        let dense_normals = pl::angle_weighted_normals_with(points, dense_triangles, &prepared.corners);
+        let normals: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| dense_normals[d as usize]).collect();
+        (normals, Some(lids::dense_clearance(points, &dense_normals, eyes, settings.clear.front_deg)))
+    };
     let subset: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| points[d as usize]).collect();
     let subset_normals = mesh
         .triangles
@@ -415,21 +481,11 @@ pub fn place(
             (l >= 1e-20).then(|| n.map(|x| x / l))
         })
         .collect();
-    let fit = Fit {
-        mesh,
-        fixed: fixed.clone(),
-        seam: seam.clone(),
-        normals,
-        edges: pl::unique_edges(mesh),
-        neighbours: crate::placement_f2::neighbours(mesh),
-        vtris,
-        subset_normals,
-        dense_refs: None,
-    };
+    let fit = Fit { mesh, prepared, pattern: prepared.f3_pattern(mesh), normals, subset_normals, dense_refs: None };
     let refs = pl::triangle_references(mesh, &fit.normals);
     let fit = Fit { dense_refs: settings.f4.as_ref().filter(|f| f.backoff_dense).map(|_| refs.clone()), ..fit };
 
-    let (centre, local, sums) = pl::cluster_quadrics(points, dense_triangles, mesh);
+    let (centre, local, sums) = pl::cluster_quadrics_with(points, dense_triangles, mesh, &prepared.owned);
     let mut game: Vec<[f64; 3]> = (0..count)
         .map(|g| {
             if boundary[g] {
@@ -453,21 +509,16 @@ pub fn place(
             [0, 1, 2].map(|k| anchor[k] + d[k] + centre[k])
         })
         .collect();
+    drop(local);
     let mut largest = 0.0;
     for _ in 0..settings.rounds {
-        let hits = pl::project(points, &mesh.owner, &game, mesh, &rings, 1);
+        let hits = pl::project_pruned(points, &mesh.owner, &game, mesh, &prepared.rings);
         stats.fit_mm.push(mean_gap_mm(&hits));
         (game, largest) = fit.once(points, &hits, &subset, settings.smooth);
     }
     stats.seam_offset_max_mm = largest * 1000.0;
     stats.clamped = pl::clamp_moves(&mut game, &subset, settings.max_move);
-    let surface = Surface::new(points, dense_triangles, dense_uvs, mesh, settings.uv_ring);
-    let mut key: Vec<Option<Uv>> = vec![None; count];
-    for (tri, uvs) in mesh.triangles.iter().zip(&mesh.triangle_uvs) {
-        for c in 0..3 {
-            key[tri[c] as usize].get_or_insert(uvs[c]);
-        }
-    }
+    let surface = Surface::with_topology(points, dense_triangles, dense_uvs, mesh, &prepared.surface);
     fit.relax(&mut game, &subset, eyes, settings, &mut stats);
     if let Some(f4) = &settings.f4 {
         let away = fit.away(&subset, eyes, settings);
@@ -479,19 +530,19 @@ pub fn place(
         let grid = lids::PointGrid::new(points, &keep, 0.001);
         let reach = settings.clear.reach;
         let floor = |s: [f64; 3]| grid.envelope(points, dense_clear, s, reach);
-        stats.clear = Some(lids::clear_game(&mut game, mesh, &boundary, eyes, floor, &settings.clear));
+        stats.clear = Some(lids::clear_game(&mut game, mesh, boundary, eyes, floor, &settings.clear));
     }
     let mut moves: Vec<f64> = game.iter().zip(&subset).map(|(a, b)| length(sub(*a, *b))).collect();
     moves.sort_by(f64::total_cmp);
     stats.median_move_mm = moves[moves.len() / 2] * 1000.0;
     stats.max_move_mm = moves[moves.len() - 1] * 1000.0;
 
-    let every: Vec<usize> = (0..count).collect();
-    let derived: Vec<Option<Uv>> = crate::map_each(&every, |g| {
+    let spheres = uv_chart::triangle_spheres(points, dense_triangles);
+    let derived: Vec<Option<Uv>> = crate::map_range(count, |g| {
         if fixed[g] {
             return None;
         }
-        surface.closest_on_patch(g as u32, game[g], key[g]?).map(|hit| surface.uv(hit))
+        surface.closest_in(prepared.patches.row(g), game[g], &spheres).map(|hit| surface.uv(hit))
     });
     stats.uv_keys_derived = derived.iter().filter(|d| d.is_some()).count();
     stats.uv_seed_misses = (0..count).filter(|&g| !fixed[g] && derived[g].is_none()).count();

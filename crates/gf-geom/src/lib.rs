@@ -7,6 +7,7 @@ pub mod placement;
 pub mod placement_f2;
 pub mod placement_f3;
 pub mod placement_f5;
+pub mod prepared;
 pub mod quadric;
 pub mod uv_chart;
 
@@ -58,6 +59,17 @@ pub(crate) fn map_each<T, F: Fn(usize) -> T>(items: &[usize], f: F) -> Vec<T> {
     items.iter().map(|&i| f(i)).collect()
 }
 
+#[cfg(feature = "parallel")]
+pub(crate) fn map_range<T: Send, F: Fn(usize) -> T + Sync + Send>(count: usize, f: F) -> Vec<T> {
+    use rayon::prelude::*;
+    (0..count).into_par_iter().map(f).collect()
+}
+
+#[cfg(not(feature = "parallel"))]
+pub(crate) fn map_range<T, F: Fn(usize) -> T>(count: usize, f: F) -> Vec<T> {
+    (0..count).map(f).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +97,6 @@ mod tests {
     fn map_each_keeps_the_order() {
         let items: Vec<usize> = (0..1000).rev().collect();
         assert_eq!(map_each(&items, |i| i * 2), items.iter().map(|i| i * 2).collect::<Vec<_>>());
+        assert_eq!(map_range(1000, |i| i * 3), (0..1000).map(|i| i * 3).collect::<Vec<_>>());
     }
 }

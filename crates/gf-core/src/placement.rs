@@ -5,8 +5,9 @@ use gf_geom::decimate::Decimated;
 use gf_geom::lids::{self, Eye};
 use gf_geom::placement::{self as pl, FitSettings};
 use gf_geom::placement_f2::{self, F2Settings};
-use gf_geom::placement_f3::{self, F3Settings};
-use gf_geom::placement_f5::{self, F5Settings};
+use gf_geom::placement_f3::{self, F3Settings, F3Stats};
+use gf_geom::placement_f5::{self, F5Settings, F5Stats};
+pub use gf_geom::prepared::Prepared;
 use serde_json::{Map, Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +62,9 @@ pub struct Placed {
 pub trait Placement {
     fn version(&self) -> PlacementVersion;
     fn place(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated) -> Placed;
+    fn place_prepared(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, _prepared: &Prepared) -> Placed {
+        self.place(positions, dense, base)
+    }
 }
 
 pub struct Subset;
@@ -138,6 +142,28 @@ impl Placement for F2 {
     }
 }
 
+impl F3 {
+    fn placed(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, game: Vec<[f64; 3]>, triangle_uvs: Vec<[Uv; 3]>, stats: F3Stats) -> Placed {
+        let lids = (!self.eyes.is_empty()).then(|| {
+            let front = self.settings.clear.front_deg;
+            let (dense_area, dense_depth) = lids::penetration_area(positions, dense.triangles, &self.eyes, front, 2);
+            let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &self.eyes, front, 6);
+            json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
+                   "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
+        });
+        Placed {
+            game,
+            triangle_uvs: Some(triangle_uvs),
+            report: report(vec![
+                ("settings", json!(self.settings)),
+                ("eyes", json!(self.eyes.len())),
+                ("placement_stats", json!(stats)),
+                ("lids", json!(lids)),
+            ]),
+        }
+    }
+}
+
 impl Placement for F3 {
     fn version(&self) -> PlacementVersion {
         let name = if self.settings.f4.is_some() { "f4" } else { "f3" };
@@ -146,8 +172,22 @@ impl Placement for F3 {
     fn place(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated) -> Placed {
         let (game, triangle_uvs, stats) =
             placement_f3::place(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings);
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
+    }
+    fn place_prepared(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, prepared: &Prepared) -> Placed {
+        if !prepared.fits(positions.len(), dense.triangles.len(), base, self.settings.uv_ring) {
+            return self.place(positions, dense, base);
+        }
+        let (game, triangle_uvs, stats) =
+            placement_f3::place_prepared(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings, prepared);
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
+    }
+}
+
+impl F5 {
+    fn placed(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, game: Vec<[f64; 3]>, triangle_uvs: Vec<[Uv; 3]>, stats: F5Stats) -> Placed {
         let lids = (!self.eyes.is_empty()).then(|| {
-            let front = self.settings.clear.front_deg;
+            let front = self.settings.eye_front_deg;
             let (dense_area, dense_depth) = lids::penetration_area(positions, dense.triangles, &self.eyes, front, 2);
             let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &self.eyes, front, 6);
             json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
@@ -173,23 +213,15 @@ impl Placement for F5 {
     fn place(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated) -> Placed {
         let (game, triangle_uvs, stats) =
             placement_f5::place(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings);
-        let lids = (!self.eyes.is_empty()).then(|| {
-            let front = self.settings.eye_front_deg;
-            let (dense_area, dense_depth) = lids::penetration_area(positions, dense.triangles, &self.eyes, front, 2);
-            let (game_area, game_depth) = lids::penetration_area(&game, &base.triangles, &self.eyes, front, 6);
-            json!({"dense_inside_mm2": dense_area * 1e6, "dense_deepest_mm": dense_depth * 1000.0,
-                   "game_inside_mm2": game_area * 1e6, "game_deepest_mm": game_depth * 1000.0})
-        });
-        Placed {
-            game,
-            triangle_uvs: Some(triangle_uvs),
-            report: report(vec![
-                ("settings", json!(self.settings)),
-                ("eyes", json!(self.eyes.len())),
-                ("placement_stats", json!(stats)),
-                ("lids", json!(lids)),
-            ]),
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
+    }
+    fn place_prepared(&self, positions: &[[f64; 3]], dense: &DenseMesh, base: &Decimated, prepared: &Prepared) -> Placed {
+        if !prepared.fits(positions.len(), dense.triangles.len(), base, self.settings.uv_ring) {
+            return self.place(positions, dense, base);
         }
+        let (game, triangle_uvs, stats) =
+            placement_f5::place_prepared(positions, dense.triangles, dense.triangle_uvs, base, &self.eyes, &self.settings, prepared);
+        self.placed(positions, dense, base, game, triangle_uvs, stats)
     }
 }
 

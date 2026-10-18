@@ -346,41 +346,229 @@ impl Sparse {
         let k = self.cols[r as usize].iter().position(|&x| x == c).unwrap();
         self.vals[r as usize][k] += v;
     }
-
-    fn mul(&self, x: &[f64], y: &mut [f64]) {
-        for (r, out) in y.iter_mut().enumerate() {
-            *out = self.cols[r].iter().zip(&self.vals[r]).map(|(&c, &v)| v * x[c as usize]).sum();
-        }
-    }
 }
 
 pub(crate) fn conjugate_gradient(a: &Sparse, b: &[f64], x: &mut [f64]) {
-    let n = b.len();
-    let inverse_diagonal: Vec<f64> = (0..n).map(|r| 1.0 / a.vals[r][0].max(1e-300)).collect();
-    let mut ax = vec![0.0; n];
-    a.mul(x, &mut ax);
-    let mut r: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
-    let mut z: Vec<f64> = (0..n).map(|i| r[i] * inverse_diagonal[i]).collect();
-    let mut p = z.clone();
-    let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-    let norm_b = b.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-300);
-    let mut ap = vec![0.0; n];
-    for _ in 0..2000 {
-        if r.iter().map(|v| v * v).sum::<f64>().sqrt() < 1e-12 * norm_b {
-            break;
+    conjugate_gradient_rows(&a.cols, &a.vals, b, x);
+}
+
+pub struct Csr {
+    offsets: Vec<u32>,
+    items: Vec<u32>,
+}
+
+impl Csr {
+    pub(crate) fn build(rows: usize, visit: impl Fn(&mut dyn FnMut(usize, u32))) -> Csr {
+        let mut offsets = vec![0u32; rows + 1];
+        visit(&mut |r, _| offsets[r + 1] += 1);
+        for r in 0..rows {
+            offsets[r + 1] += offsets[r];
         }
-        a.mul(&p, &mut ap);
-        let alpha = rz / p.iter().zip(&ap).map(|(a, b)| a * b).sum::<f64>().max(1e-300);
-        for i in 0..n {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * ap[i];
-            z[i] = r[i] * inverse_diagonal[i];
+        let mut fill = offsets.clone();
+        let mut items = vec![0u32; offsets[rows] as usize];
+        visit(&mut |r, x| {
+            items[fill[r] as usize] = x;
+            fill[r] += 1;
+        });
+        Csr { offsets, items }
+    }
+
+    pub(crate) fn from_rows(rows: Vec<Vec<u32>>) -> Csr {
+        let mut offsets = Vec::with_capacity(rows.len() + 1);
+        offsets.push(0u32);
+        let mut items = Vec::with_capacity(rows.iter().map(Vec::len).sum());
+        for r in rows {
+            items.extend(r);
+            offsets.push(items.len() as u32);
         }
-        let rz_next: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-        let beta = rz_next / rz;
-        rz = rz_next;
-        for i in 0..n {
-            p[i] = z[i] + beta * p[i];
+        Csr { offsets, items }
+    }
+
+    pub(crate) fn row(&self, r: usize) -> &[u32] {
+        &self.items[self.offsets[r] as usize..self.offsets[r + 1] as usize]
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+pub(crate) fn corner_rows(vertices: usize, triangles: &[[u32; 3]]) -> Csr {
+    Csr::build(vertices, |push| {
+        for (t, tri) in triangles.iter().enumerate() {
+            for c in 0..3 {
+                push(tri[c] as usize, (t * 3 + c) as u32);
+            }
+        }
+    })
+}
+
+pub(crate) fn owned_rows(triangles: &[[u32; 3]], mesh: &Decimated) -> Csr {
+    Csr::build(mesh.kept.len(), |push| {
+        for (t, tri) in triangles.iter().enumerate() {
+            for &corner in tri {
+                let g = mesh.owner[corner as usize];
+                if g != u32::MAX {
+                    push(g as usize, t as u32);
+                }
+            }
+        }
+    })
+}
+
+fn vertex_normal(positions: &[[f64; 3]], triangles: &[[u32; 3]], corners: &Csr, v: usize) -> [f64; 3] {
+    let mut n = [0.0f64; 3];
+    for &tc in corners.row(v) {
+        let (t, c) = ((tc / 3) as usize, (tc % 3) as usize);
+        let p = triangles[t].map(|i| positions[i as usize]);
+        let normal = triangle_normal(p);
+        let unit = normal.map(|x| x / quadric::length(normal).max(1e-30));
+        let a = quadric::corner_angle(p, c).to_radians();
+        for k in 0..3 {
+            n[k] += unit[k] * a;
+        }
+    }
+    let l = quadric::length(n).max(1e-30);
+    n.map(|x| x / l)
+}
+
+pub(crate) fn angle_weighted_normals_with(positions: &[[f64; 3]], triangles: &[[u32; 3]], corners: &Csr) -> Vec<[f64; 3]> {
+    crate::map_range(positions.len(), |v| vertex_normal(positions, triangles, corners, v))
+}
+
+pub(crate) fn angle_weighted_normals_at(positions: &[[f64; 3]], triangles: &[[u32; 3]], corners: &Csr, at: &[u32]) -> Vec<[f64; 3]> {
+    crate::map_range(at.len(), |j| vertex_normal(positions, triangles, corners, at[j] as usize))
+}
+
+pub(crate) struct Buckets {
+    parts: Vec<Csr>,
+}
+
+impl Buckets {
+    pub(crate) fn build(rows: usize, items: usize, visit: impl Fn(usize, &mut dyn FnMut(usize, u32)) + Sync + Send) -> Buckets {
+        const CHUNK: usize = 1 << 15;
+        let parts = crate::map_range(items.div_ceil(CHUNK), |c| {
+            let (start, end) = (c * CHUNK, ((c + 1) * CHUNK).min(items));
+            Csr::build(rows, |push| {
+                for i in start..end {
+                    visit(i, push);
+                }
+            })
+        });
+        Buckets { parts }
+    }
+
+    pub(crate) fn row(&self, r: usize) -> impl Iterator<Item = u32> + '_ {
+        self.parts.iter().flat_map(move |p| p.row(r).iter().copied())
+    }
+}
+
+pub(crate) fn project_pruned(points: &[[f64; 3]], owner: &[u32], game: &[[f64; 3]], mesh: &Decimated, rings: &[Vec<u32>]) -> Vec<(u32, [f64; 3], f64)> {
+    let spheres: Vec<([f64; 3], f64)> = crate::map_range(mesh.triangles.len(), |t| {
+        let p = mesh.triangles[t].map(|i| game[i as usize]);
+        let c = [0, 1, 2].map(|k| (p[0][k] + p[1][k] + p[2][k]) / 3.0);
+        let r = p.iter().map(|v| quadric::length(quadric::sub(*v, c))).fold(0.0, f64::max);
+        (c, r * (1.0 + 1e-9) + 1e-9)
+    });
+    crate::map_range(points.len(), |i| {
+        let g = owner[i];
+        if g == u32::MAX {
+            return (u32::MAX, [0.0; 3], 0.0);
+        }
+        let mut best = (u32::MAX, [0.0; 3], f64::INFINITY);
+        let mut reach = f64::INFINITY;
+        for &t in &rings[g as usize] {
+            let (c, r) = spheres[t as usize];
+            let d = quadric::sub(points[i], c);
+            let limit = r + reach;
+            if quadric::dot(d, d) > limit * limit * (1.0 + 1e-9) {
+                continue;
+            }
+            let tri = mesh.triangles[t as usize];
+            let (w, d2) = closest(points[i], game[tri[0] as usize], game[tri[1] as usize], game[tri[2] as usize]);
+            if d2 < best.2 {
+                best = (t, w, d2);
+                reach = d2.sqrt() + 1e-9;
+            }
+        }
+        best
+    })
+}
+
+pub(crate) fn cluster_quadrics_with(positions: &[[f64; 3]], dense_triangles: &[[u32; 3]], mesh: &Decimated, owned: &Csr) -> ([f64; 3], Vec<[f64; 3]>, Vec<Quadric>) {
+    let n = positions.len();
+    let centre = positions.iter().fold([0.0; 3], |c, p| [c[0] + p[0], c[1] + p[1], c[2] + p[2]]).map(|x| x / n as f64);
+    let local: Vec<[f64; 3]> = crate::map_range(n, |i| quadric::sub(positions[i], centre));
+    let sums: Vec<Quadric> = crate::map_range(mesh.kept.len(), |g| {
+        let mut sum: Quadric = [0.0; 10];
+        for &t in owned.row(g) {
+            let p = dense_triangles[t as usize].map(|i| local[i as usize]);
+            let normal = quadric::cross(quadric::sub(p[1], p[0]), quadric::sub(p[2], p[0]));
+            let area2 = quadric::length(normal);
+            if area2 < 1e-20 {
+                continue;
+            }
+            let unit = normal.map(|x| x / area2);
+            let q = quadric::from_plane(unit, -quadric::dot(unit, p[0]), area2 * 0.5);
+            quadric::add(&mut sum, &q);
+        }
+        sum
+    });
+    (centre, local, sums)
+}
+
+pub(crate) fn sparse_pattern(mesh: &Decimated, count: usize) -> Vec<Vec<u32>> {
+    Sparse::new(mesh, count).cols
+}
+
+pub(crate) fn conjugate_gradient_rows(cols: &[Vec<u32>], vals: &[Vec<f64>], b: &[f64], x: &mut [f64]) {
+    let a = SparseView { cols, vals };
+    a.solve(b, x);
+}
+
+struct SparseView<'a> {
+    cols: &'a [Vec<u32>],
+    vals: &'a [Vec<f64>],
+}
+
+impl SparseView<'_> {
+    fn mul(&self, x: &[f64], y: &mut [f64]) {
+        let rows: Vec<f64> = crate::map_range(y.len(), |r| self.cols[r].iter().zip(&self.vals[r]).map(|(&c, &v)| v * x[c as usize]).sum());
+        y.copy_from_slice(&rows);
+    }
+
+    fn solve(&self, b: &[f64], x: &mut [f64]) {
+        let n = b.len();
+        let inverse_diagonal: Vec<f64> = (0..n).map(|r| 1.0 / self.vals[r][0].max(1e-300)).collect();
+        let mut ax = vec![0.0; n];
+        self.mul(x, &mut ax);
+        let mut r: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
+        let mut z: Vec<f64> = (0..n).map(|i| r[i] * inverse_diagonal[i]).collect();
+        let mut p = z.clone();
+        let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
+        let norm_b = b.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-300);
+        let mut ap = vec![0.0; n];
+        for _ in 0..2000 {
+            if r.iter().map(|v| v * v).sum::<f64>().sqrt() < 1e-12 * norm_b {
+                break;
+            }
+            self.mul(&p, &mut ap);
+            let alpha = rz / p.iter().zip(&ap).map(|(a, b)| a * b).sum::<f64>().max(1e-300);
+            for i in 0..n {
+                x[i] += alpha * p[i];
+                r[i] -= alpha * ap[i];
+                z[i] = r[i] * inverse_diagonal[i];
+            }
+            let rz_next: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
+            let beta = rz_next / rz;
+            rz = rz_next;
+            for i in 0..n {
+                p[i] = z[i] + beta * p[i];
+            }
         }
     }
 }

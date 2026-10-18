@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use serde::Serialize;
@@ -5,8 +6,88 @@ use serde::Serialize;
 use crate::decimate::Decimated;
 use crate::Uv;
 use crate::placement::closest;
+use crate::quadric::{dot, length, sub};
 
 pub type Hit = (u32, [f64; 3], f64);
+
+#[derive(Clone)]
+pub struct SurfaceTopology {
+    charts: usize,
+    across: Vec<[u32; 3]>,
+    seeds: Vec<Vec<(u32, u8)>>,
+    neighbours: Vec<Vec<u32>>,
+    ring: usize,
+}
+
+impl SurfaceTopology {
+    pub fn new(dense_vertices: usize, triangles: &[[u32; 3]], uvs: &[[Uv; 3]], mesh: &Decimated, ring: usize) -> SurfaceTopology {
+        let (across, charts) = continuity(triangles, uvs);
+        let games = mesh.kept.len();
+        let mut game_of = vec![u32::MAX; dense_vertices];
+        for (g, &d) in mesh.kept.iter().enumerate() {
+            game_of[d as usize] = g as u32;
+        }
+        let mut seeds: Vec<Vec<(u32, u8)>> = vec![Vec::new(); games];
+        for (t, tri) in triangles.iter().enumerate() {
+            for (c, &v) in tri.iter().enumerate() {
+                let g = game_of[v as usize];
+                if g != u32::MAX {
+                    seeds[g as usize].push((t as u32, c as u8));
+                }
+            }
+        }
+        SurfaceTopology { charts, across, seeds, neighbours: crate::placement_f2::neighbours(mesh), ring }
+    }
+
+    pub fn ring(&self) -> usize {
+        self.ring
+    }
+
+    fn region(&self, g: u32) -> Vec<u32> {
+        let mut set = vec![g];
+        let mut frontier = 0;
+        for _ in 0..self.ring {
+            let end = set.len();
+            for k in frontier..end {
+                for &w in &self.neighbours[set[k] as usize] {
+                    if !set.contains(&w) {
+                        set.push(w);
+                    }
+                }
+            }
+            frontier = end;
+        }
+        set.sort_unstable();
+        set
+    }
+
+    pub fn patch(&self, triangles: &[[u32; 3]], uvs: &[[Uv; 3]], owner: &[u32], g: u32, uv: Uv) -> Vec<u32> {
+        let region = self.region(g);
+        let inside = |t: u32| triangles[t as usize].iter().any(|&v| region.binary_search(&owner[v as usize]).is_ok());
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut queue: Vec<u32> = self.seeds[g as usize].iter().filter(|&&(t, c)| uv_close(uvs[t as usize][c as usize], uv)).map(|&(t, _)| t).collect();
+        seen.extend(queue.iter().copied());
+        let mut order = Vec::new();
+        while let Some(t) = queue.pop() {
+            order.push(t);
+            for &s in &self.across[t as usize] {
+                if s != u32::MAX && inside(s) && seen.insert(s) {
+                    queue.push(s);
+                }
+            }
+        }
+        order
+    }
+}
+
+pub fn triangle_spheres(positions: &[[f64; 3]], triangles: &[[u32; 3]]) -> Vec<[f32; 4]> {
+    crate::map_range(triangles.len(), |t| {
+        let p = triangles[t].map(|i| positions[i as usize]);
+        let c = [0, 1, 2].map(|k| ((p[0][k] + p[1][k] + p[2][k]) / 3.0) as f32);
+        let r = p.iter().map(|v| length(sub(*v, c.map(f64::from)))).fold(0.0, f64::max);
+        [c[0], c[1], c[2], (r * (1.0 + 1e-6) + 1e-9) as f32]
+    })
+}
 
 pub struct Surface<'a> {
     positions: &'a [[f64; 3]],
@@ -14,10 +95,7 @@ pub struct Surface<'a> {
     uvs: &'a [[Uv; 3]],
     owner: &'a [u32],
     pub charts: usize,
-    across: Vec<[u32; 3]>,
-    seeds: Vec<Vec<(u32, u8)>>,
-    neighbours: Vec<Vec<u32>>,
-    ring: usize,
+    topology: Cow<'a, SurfaceTopology>,
 }
 
 #[derive(Default, Serialize)]
@@ -95,40 +173,31 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 
 impl<'a> Surface<'a> {
     pub fn new(positions: &'a [[f64; 3]], triangles: &'a [[u32; 3]], uvs: &'a [[Uv; 3]], mesh: &'a Decimated, ring: usize) -> Surface<'a> {
-        let (across, charts) = continuity(triangles, uvs);
-        let games = mesh.kept.len();
-        let mut game_of = vec![u32::MAX; positions.len()];
-        for (g, &d) in mesh.kept.iter().enumerate() {
-            game_of[d as usize] = g as u32;
-        }
-        let mut seeds: Vec<Vec<(u32, u8)>> = vec![Vec::new(); games];
-        for (t, tri) in triangles.iter().enumerate() {
-            for (c, &v) in tri.iter().enumerate() {
-                let g = game_of[v as usize];
-                if g != u32::MAX {
-                    seeds[g as usize].push((t as u32, c as u8));
-                }
-            }
-        }
-        Surface { positions, triangles, uvs, owner: &mesh.owner, charts, across, seeds, neighbours: crate::placement_f2::neighbours(mesh), ring }
+        let topology = SurfaceTopology::new(positions.len(), triangles, uvs, mesh, ring);
+        Surface { positions, triangles, uvs, owner: &mesh.owner, charts: topology.charts, topology: Cow::Owned(topology) }
     }
 
-    fn region(&self, g: u32) -> Vec<u32> {
-        let mut set = vec![g];
-        let mut frontier = 0;
-        for _ in 0..self.ring {
-            let end = set.len();
-            for k in frontier..end {
-                for &w in &self.neighbours[set[k] as usize] {
-                    if !set.contains(&w) {
-                        set.push(w);
-                    }
-                }
+    pub fn with_topology(positions: &'a [[f64; 3]], triangles: &'a [[u32; 3]], uvs: &'a [[Uv; 3]], mesh: &'a Decimated, topology: &'a SurfaceTopology) -> Surface<'a> {
+        Surface { positions, triangles, uvs, owner: &mesh.owner, charts: topology.charts, topology: Cow::Borrowed(topology) }
+    }
+
+    pub fn closest_in(&self, patch: &[u32], p: [f64; 3], spheres: &[[f32; 4]]) -> Option<Hit> {
+        let mut best: Option<Hit> = None;
+        let mut reach = f64::INFINITY;
+        for &t in patch {
+            let s = spheres[t as usize];
+            let d = [p[0] - s[0] as f64, p[1] - s[1] as f64, p[2] - s[2] as f64];
+            let limit = s[3] as f64 + reach;
+            if dot(d, d) > limit * limit {
+                continue;
             }
-            frontier = end;
+            let (w3, d2) = self.distance(t, p);
+            if best.is_none_or(|b| d2 < b.2) {
+                best = Some((t, w3, d2));
+                reach = d2.sqrt() + 1e-9;
+            }
         }
-        set.sort_unstable();
-        set
+        best
     }
 
     fn distance(&self, t: u32, p: [f64; 3]) -> ([f64; 3], f64) {
@@ -137,10 +206,10 @@ impl<'a> Surface<'a> {
     }
 
     pub fn closest_on_patch(&self, g: u32, p: [f64; 3], uv: Uv) -> Option<Hit> {
-        let region = self.region(g);
+        let region = self.topology.region(g);
         let inside = |t: u32| self.triangles[t as usize].iter().any(|&v| region.binary_search(&self.owner[v as usize]).is_ok());
         let mut seen: HashSet<u32> = HashSet::new();
-        let mut queue: Vec<u32> = self.seeds[g as usize]
+        let mut queue: Vec<u32> = self.topology.seeds[g as usize]
             .iter()
             .filter(|&&(t, c)| uv_close(self.uvs[t as usize][c as usize], uv))
             .map(|&(t, _)| t)
@@ -152,7 +221,7 @@ impl<'a> Surface<'a> {
             if best.is_none_or(|b| d2 < b.2) {
                 best = Some((t, w3, d2));
             }
-            for &s in &self.across[t as usize] {
+            for &s in &self.topology.across[t as usize] {
                 if s != u32::MAX && inside(s) && seen.insert(s) {
                     queue.push(s);
                 }

@@ -283,7 +283,7 @@ settled character, and saving the character as a spec file.
 
 ```
 gazeforge serve --port 7878 --web web       # --web: the folder holding index.html (default ./web, or GAZEFORGE_WEB)
-http://127.0.0.1:7878/designer/?store=STORE[&spec=FACE.gfchar.json][&macro=MACRO_JSON][&eyes=EYES.json][&out=SAVE.gfchar.json]
+http://127.0.0.1:7878/designer/?store=STORE[&spec=FACE.gfchar.json][&macro=MACRO_JSON][&eyes=EYES.json][&out=SAVE.gfchar.json][&fast=1]
 ```
 
 While a slider is dragged the page shows a preview, labelled approximate: the last settled game mesh plus each changed
@@ -298,6 +298,13 @@ downloads one preview pack per target set (game triangles plus each target's i16
 a content-addressed store blob, cached by hash) and the settled positions. The commands, usable from every front door:
 `designer.sliders`, `designer.pack`, `designer.settle`, `designer.macro_delta`, `designer.save`. The served process keeps
 one pack, catalog and game base in memory between settles. `GET /v1/blob/<sha256>?store=STORE` serves a store blob.
+
+With them it keeps, built on the first settle, everything the placement computes that does not depend on the character:
+boundary and seam flags, rings, edges, the UV charts and each game vertex's UV search patch, the f5 footprint. Later
+settles compute only what depends on the dense positions, and their results are byte-identical to a one-shot placement.
+`designer.settle` also places with f5. `&fast=1` asks for an opt-in draft: f3/f4 with 1 of its 4 fit rounds (input
+`fast`, reply flagged `approximate`, labelled as a draft in the page). A draft is never saved or exported; after 3 s
+without a change the page settles again with the full placement.
 
 Building the page's kernel: `cargo build --release -p gf-wasm --target wasm32-unknown-unknown`, then copy
 `target/wasm32-unknown-unknown/release/gf_wasm.wasm` to `web/gf_wasm.wasm` (`CARGO_PROFILE_RELEASE_DEBUG=0` keeps it
