@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GazeForge Designer</title>
+<link rel="stylesheet" href="designer.css">
+</head>
+<body>
+<header>
+  <strong>GazeForge Designer</strong>
+  <span id="status" class="status">loading</span>
+  <span id="info" class="info"></span>
+</header>
+<main>
+  <section id="view">
+    <canvas id="gl"></canvas>
+    <div class="overlay">
+      <div class="row">
+        <button data-cam="0">front</button><button data-cam="30">30&deg;</button><button data-cam="85">85&deg;</button>
+        <select id="shade"><option value="0">clay</option><option value="1">normals</option></select>
+      </div>
+      <div id="label" class="label"></div>
+    </div>
+  </section>
+  <aside>
+    <div class="tools">
+      <input id="search" type="search" placeholder="search targets">
+      <select id="category"><option value="">all categories</option></select>
+      <button id="reset">reset</button>
+    </div>
+    <details id="macros" open><summary>Macros (head only)</summary><div id="macro-list"></div></details>
+    <div id="list"></div>
+    <details open><summary>Measurements (mm, settled)</summary><table id="measure"></table></details>
+    <div class="save">
+      <input id="out" type="text" placeholder="path of the spec file to save">
+      <button id="save">save spec</button>
+      <div id="saved"></div>
+    </div>
+  </aside>
+</main>
+<script type="module" src="designer.js"></script>
+</body>
+</html>

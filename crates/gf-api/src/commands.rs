@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, jobs, registry};
+use crate::{CommandDef, Ctx, Kind, designer, jobs, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -78,6 +78,51 @@ pub static REGISTRY: &[CommandDef] = &[
         run: character_measure,
     },
     CommandDef {
+        name: "designer.sliders",
+        kind: Kind::Query,
+        summary: "The designer's slider set: the head targets (10 categories) with their categories and sides, the macro sliders (head-only, option E) and the starting character.",
+        limits: "Head targets only (cheek, chin, ears, eyebrows, eyes, forehead, head, mouth, neck, nose); macros are available only with a pack macro_base and a macro definition file.",
+        input: designer::sliders_input,
+        output: designer::sliders_output,
+        run: designer::sliders,
+    },
+    CommandDef {
+        name: "designer.pack",
+        kind: Kind::Query,
+        summary: "Build the preview pack for a set of targets: game triangles and each target's exact delta at the game vertices (i16 with a per-target scale), stored as a content-addressed store blob.",
+        limits: "The delta is the dense target at each game vertex's dense index; the placed (settled) mesh can move differently under f3, so a preview made from it is approximate.",
+        input: designer::pack_input,
+        output: designer::pack_output,
+        run: designer::pack,
+    },
+    CommandDef {
+        name: "designer.settle",
+        kind: Kind::Query,
+        summary: "Settle a character: weights (and macros) -> dense -> placement -> game mesh; returns the game positions (and optionally the placed UVs) as base64 f32.",
+        limits: "The served process keeps one pack, catalog and game base in memory between calls; a CLI call loads them every time. Placements: f3, f4, subset, optimal with their default settings.",
+        input: designer::settle_input,
+        output: designer::settle_output,
+        run: designer::settle,
+    },
+    CommandDef {
+        name: "designer.macro_delta",
+        kind: Kind::Query,
+        summary: "The game-level change per unit of one macro slider at the current macro values, one-sided up and down, for a linear preview while it is dragged.",
+        limits: "Macros are piecewise linear in their sliders: the slope holds only until the next key value, so the preview drifts from the settled mesh past it.",
+        input: designer::macro_delta_input,
+        output: designer::macro_delta_output,
+        run: designer::macro_delta,
+    },
+    CommandDef {
+        name: "designer.save",
+        kind: Kind::Mutation,
+        summary: "Write the designer's character (weights, macros, residual) as a spec file after validating it against the store.",
+        limits: "Overwrites the file at out.",
+        input: designer::save_input,
+        output: designer::save_output,
+        run: designer::save,
+    },
+    CommandDef {
         name: "jobs.submit",
         kind: Kind::Mutation,
         summary: "Run a command as a job in a supervised worker process; returns the job record at once.",
@@ -119,7 +164,7 @@ pub fn obj(properties: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 }
 
-fn shape(properties: Value) -> Value {
+pub fn shape(properties: Value) -> Value {
     json!({"type": "object", "properties": properties})
 }
 
