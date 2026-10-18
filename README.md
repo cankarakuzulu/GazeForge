@@ -313,9 +313,9 @@ commands (so the CLI, HTTP and MCP all have them); the long ones are jobs.
 |---|---|---|
 | 0 | `photo.ingest` | copies the photos into the run directory; facing check: the front looks at the camera (nose offset within 0.08 of the eye span), the profile shows the declared side (the nose bump of the silhouette), and both photos agree on proportions (upper lip over lower face within 12 %). A failure is `gate_failed` and stops the run. |
 | 1 | `photo.landmarks` | 478 MediaPipe landmarks on the front photo (re-run agreement in px), the profile silhouette, its profile line and key points (nasion, nose tip, subnasale, lips, chin); an overlay image for each photo, to be looked at before any number is trusted |
-| 2 | `mesh.multiview` | sends both photos to an external image-to-mesh server, then keeps the outer shell (vertices visible from 26 directions) and lifts the landmarks onto it from a front render |
-| 3 | `fit.register` | similarity transform of the shell onto the dense base from 30 stable landmarks, refined by trimmed ICP on the face; landmark residual in mm |
-| 4 | `fit.targets` | bounded least squares ([0, 1]) over the head targets, with terms for distance to the shell (face and neck), front-photo landmark reprojection, the profile silhouette, a stay-at-base prior where the photos see nothing (hair-covered skull, back), left/right symmetry and a small ridge; the shell is rigidly re-aligned each round; per-region residual in mm |
+| 2 | `mesh.multiview` | sends both photos to an external image-to-mesh server, then keeps the outer shell and lifts the landmarks onto it from a front render. `shell_mode`: `outer_triangles` (default: triangles front-most from 26 directions at a fine depth tolerance, normals oriented toward the directions that see them) or `visible_vertices` (vertices visible from those directions, normals as the file gives them) |
+| 3 | `fit.register` | similarity transform of the shell onto the dense base from 30 stable landmarks, refined by trimmed ICP on the face; landmark residual in mm. `base_landmarks`: the base's landmark table (`{"vertices": {landmark index: dense vertex}}`), else the landmarks are detected on a render of the base |
+| 4 | `fit.targets` | bounded least squares ([0, 1]) over the head targets, with terms for distance to the shell (face and neck), front-photo landmark reprojection through a perspective camera (`camera`: `perspective`, the default, or `orthographic`; `focal_px` fixes the focal length, else it is solved), the profile silhouette (`profile_weight`, default 0; `profile_upright`, `profile_align`), a stay-at-base prior where the photos see nothing (hair-covered skull, back), left/right symmetry and a ridge; the shell is rigidly re-aligned each round; per-region residual in mm |
 | 5 | `fit.residual` | a residual toward the shell (trust radius, graph smoothing, holds at the eyes, the lip seam, existing folds and back-facing surfaces), backed off until the shell gates pass; otherwise refused, and nothing is written |
 | 7 | `texture.project` | projects the photos onto the game UVs through the fitted cameras, blended by facing and visibility; camera rms in px |
 | 8 | `review.sheet` | the photos beside textured and clay renders of the result at the fitted cameras |
@@ -334,7 +334,9 @@ External tools, found through options or environment variables:
   `GAZEFORGE_MESH_GRAPH`: its API-format graph template taking a front and a profile image (placeholders are listed in
   `workers/mesh_worker.py`). `glb` reuses an existing mesh instead. Check the licences of the models the server runs.
 
-Limits: cameras are orthographic; the photos carry no absolute size, so scale comes from the base's landmark spans; the
+Limits: from 30 front landmarks the focal length is barely observable (the reprojection error changes by a fraction of a
+pixel across a tenfold range of focal lengths), so pass `focal_px` when it is known; the profile silhouette term is off by
+default because its alignment drifts with the fit; the photos carry no absolute size, so scale comes from the base's landmark spans; the
 mesh's hair is not separated from the skull, which is why the skull is held to the base; the texture is not delit unless
 albedo images are passed to `texture.project` (`front_albedo`, `profile_albedo`); eyes, teeth and hair are not built.
 
