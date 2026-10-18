@@ -477,6 +477,7 @@ fn run(args: &[String]) -> Result<Value, String> {
             Some("game") => options(&args[2..]).and_then(|o| mesh_cmds::gates_game(&o)),
             Some("path") => options(&args[2..]).and_then(|o| mesh_cmds::gates_path(&o)),
             Some("facing") => options(&args[2..]).and_then(|o| mesh_cmds::gates_facing(&o)),
+            Some("lids") => options(&args[2..]).and_then(|o| mesh_cmds::gates_lids(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some(group @ ("store" | "character" | "macro")) => match args.get(1) {
