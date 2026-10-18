@@ -341,8 +341,24 @@ no WebGL context; `--use-angle=gl` does.
 
 ### Image to character
 
-A front photo and a profile photo of one face become a character spec, a glb and a photo-projected texture, as registry
-commands (so the CLI, HTTP and MCP all have them); the long ones are jobs.
+A front photo and a profile photo of one face, plus any number of extra views, become a character spec and a glb, as
+registry commands (so the CLI, HTTP and MCP all have them); the long ones are jobs.
+
+**Direct fit (the default, `"fit": "photos"`).** The targets are fitted to the photos themselves; no 3D mesh is generated.
+
+| stage | command | what it does and measures |
+|---|---|---|
+| 0 | `photo.ingest` | the reference-photo gate and the facing check on the front and the profile (below) |
+| 1 | `photo.views` | per photo: 478 landmarks, the subject's outline (plain background) with outward normals, the profile keys of a side view; an extra view (`extras`: three-quarters, the other side, slightly up or down) gets the gate's quality checks (one face, size, sharpness, clipping, eyes open, mouth closed, plain background), never its pose limits |
+| 4 | `fit.photos` | bounded least squares ([0, 1]) over the head targets to every photo at once (in `character.from_photos` a result that fails the shell gates is refused, `gate_failed`, and nothing is exported): landmark reprojection (`landmarks`: every landmark of the base table except the face oval, or the 30 stable ones) and outline distance (each fitted outline point of the model, its rim through the photo's camera, to the nearest photo outline point along that point's normal) through one perspective camera per photo; the cameras start from landmarks (front, extras) or the profile keys and the declared side (profile) and are re-solved every round, the gated front and profile held near straight (`pose_prior_deg`, default 3); stay-at-base on the outline regions not fitted (`prior_weight` 0.1), left/right symmetry, a ridge and an L1 term (`sparsity` 0.0007); per photo the landmark rms in px and per mille of the face height and the outline rms / p95 in mm; the shell gates on the result; `leave_out` names a photo to fit without and then predict |
+| 8a | `export-glb` | the spec (weights; the residual is the fitted dense shape and is near zero) and the glb |
+| 8b | `review.views` | one row per photo: the photo, a clay render at its solved camera, and both at 50 % with both outlines |
+
+`fit_options` passes `fit.photos` options through `character.from_photos`. The outline of the hair-covered skull and of the
+neck (clothing) is not fitted by default (`outline_regions`); the focal length is assumed (70 mm full-frame equivalent)
+unless `focal_px` is given; scale and placement are not observable from photos. No texture is projected on this path yet.
+
+**Mesh path (`"fit": "mesh"`).** A generated multi-view mesh is the fit target:
 
 | stage | command | what it does and measures |
 |---|---|---|

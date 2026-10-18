@@ -20,15 +20,15 @@ pub const STABLE_LANDMARKS: [usize; 30] =
     [33, 133, 362, 263, 159, 145, 386, 374, 168, 6, 197, 195, 5, 4, 1, 2, 98, 327, 61, 291, 0, 17, 13, 14, 37, 267, 84, 314, 199, 175];
 const NONE: u32 = u32::MAX;
 
-fn mm(p: Point) -> Point {
+pub(crate) fn mm(p: Point) -> Point {
     fit::scale(p, 1000.0)
 }
 
-fn opt<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn opt<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input.get(key).and_then(Value::as_str)
 }
 
-fn num(input: &Value, key: &str, default: f64) -> f64 {
+pub(crate) fn num(input: &Value, key: &str, default: f64) -> f64 {
     input.get(key).and_then(Value::as_f64).unwrap_or(default)
 }
 
@@ -36,19 +36,19 @@ fn tool(input: &Value, key: &str, env: &str, default: &str) -> String {
     opt(input, key).map(str::to_string).or_else(|| std::env::var(env).ok()).unwrap_or_else(|| default.to_string())
 }
 
-fn run_dir(input: &Value) -> Result<PathBuf, ApiError> {
+pub(crate) fn run_dir(input: &Value) -> Result<PathBuf, ApiError> {
     let dir = PathBuf::from(text(input, "run"));
     std::fs::create_dir_all(&dir).map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
     Ok(dir)
 }
 
-fn read_json(path: &Path) -> Result<Value, ApiError> {
+pub(crate) fn read_json(path: &Path) -> Result<Value, ApiError> {
     let body = std::fs::read_to_string(path)
         .map_err(|e| ApiError::not_found(format!("{}: {e}", path.display())).hint("run the stage that writes it first"))?;
     serde_json::from_str(&body).map_err(|e| ApiError::internal(format!("{}: {e}", path.display())))
 }
 
-fn write_json(path: &Path, value: &Value) -> Result<(), ApiError> {
+pub(crate) fn write_json(path: &Path, value: &Value) -> Result<(), ApiError> {
     let body = serde_json::to_string_pretty(value).map_err(|e| ApiError::internal(e.to_string()))?;
     std::fs::write(path, body).map_err(|e| ApiError::internal(format!("{}: {e}", path.display())))
 }
@@ -57,7 +57,7 @@ fn points(path: &Path) -> Result<Vec<Point>, ApiError> {
     dio::read_points(path).map_err(ApiError::not_found)
 }
 
-fn tool_props() -> Value {
+pub(crate) fn tool_props() -> Value {
     json!({
         "run": {"type": "string", "minLength": 1, "description": "run directory every stage reads from and writes to"},
         "python": {"type": "string", "description": "Python with numpy, opencv and mediapipe (else GAZEFORGE_PYTHON, else python)"},
@@ -68,7 +68,7 @@ fn tool_props() -> Value {
     })
 }
 
-fn with_tools(extra: Value) -> Value {
+pub(crate) fn with_tools(extra: Value) -> Value {
     let mut base = tool_props();
     if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
         for (k, v) in e {
@@ -78,11 +78,11 @@ fn with_tools(extra: Value) -> Value {
     base
 }
 
-fn store_props() -> Value {
+pub(crate) fn store_props() -> Value {
     json!({"store": {"type": "string", "minLength": 1}, "pack": {"type": "string", "minLength": 1}, "catalog": {"type": "string", "minLength": 1}})
 }
 
-fn merged(a: Value, b: Value) -> Value {
+pub(crate) fn merged(a: Value, b: Value) -> Value {
     let mut a = a;
     if let (Some(x), Some(y)) = (a.as_object_mut(), b.as_object()) {
         for (k, v) in y {
@@ -199,14 +199,14 @@ pub fn mesh(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(json!({"glb": glb.display().to_string(), "mesh": generated, "mesh_seconds": mesh_seconds, "shell": shell}))
 }
 
-struct Base {
-    store: Store,
-    dense: Dense,
-    quads: Vec<[u32; 4]>,
-    tip: Point,
+pub(crate) struct Base {
+    pub(crate) store: Store,
+    pub(crate) dense: Dense,
+    pub(crate) quads: Vec<[u32; 4]>,
+    pub(crate) tip: Point,
 }
 
-fn load_base(input: &Value) -> Result<Base, ApiError> {
+pub(crate) fn load_base(input: &Value) -> Result<Base, ApiError> {
     let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
     let (_, dense) = store.load_pack(text(input, "pack")).map_err(ApiError::not_found)?;
     let quads: Vec<[u32; 4]> = dense
@@ -221,7 +221,7 @@ fn load_base(input: &Value) -> Result<Base, ApiError> {
     Ok(Base { store, dense, quads, tip })
 }
 
-fn landmark_vertices(run: &Path) -> Result<BTreeMap<usize, usize>, ApiError> {
+pub(crate) fn landmark_vertices(run: &Path) -> Result<BTreeMap<usize, usize>, ApiError> {
     let v = read_json(&run.join("base_landmarks.json"))?;
     let map = v["vertices"].as_object().ok_or_else(|| ApiError::internal("base_landmarks.json has no vertices"))?;
     Ok(map.iter().filter_map(|(k, x)| Some((k.parse().ok()?, x.as_u64()? as usize))).collect())
@@ -366,7 +366,7 @@ impl Problem {
     }
 }
 
-fn head_ids(base: &Base, catalog_ref: &str) -> Result<(gf_core::catalog::CatalogManifest, Vec<String>), ApiError> {
+pub(crate) fn head_ids(base: &Base, catalog_ref: &str) -> Result<(gf_core::catalog::CatalogManifest, Vec<String>), ApiError> {
     let catalog = base.store.load_catalog(catalog_ref).map_err(ApiError::not_found)?;
     let ids = catalog.targets.iter().filter(|(_, e)| HEAD_CATEGORIES.contains(&e.category.as_str())).map(|(k, _)| k.clone()).collect();
     Ok((catalog, ids))
@@ -537,7 +537,7 @@ fn fit_profile(curve: &BTreeMap<i64, (usize, f64)>, line: &[[f64; 2]], keys: &Va
     Ok(Profile { to_model: sim, rows, rms_mm })
 }
 
-fn eye_centres(p: &[Point], lm: &BTreeMap<usize, usize>) -> Vec<Point> {
+pub(crate) fn eye_centres(p: &[Point], lm: &BTreeMap<usize, usize>) -> Vec<Point> {
     let mut out = Vec::new();
     for pair in [(33, 133), (362, 263)] {
         if let (Some(&a), Some(&b)) = (lm.get(&pair.0), lm.get(&pair.1)) {
@@ -558,7 +558,7 @@ fn polyline_mm(q: Point, line: &[Point]) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
-fn eye_gap_mm(q: Point, eyes: &[Point]) -> f64 {
+pub(crate) fn eye_gap_mm(q: Point, eyes: &[Point]) -> f64 {
     eyes.iter().map(|e| fit::norm(fit::sub(q, *e)) * 1000.0).fold(f64::INFINITY, f64::min)
 }
 
@@ -1089,7 +1089,10 @@ pub fn from_photos_input() -> Value {
                 "profile_upright": {"type": "boolean"},
                 "profile_align": {"type": "string", "enum": ["every_round", "first_round"]},
                 "shell_mode": shell_mode_prop(),
-                "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion tolerance (default 0.12)"}
+                "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion tolerance (default 0.12)"},
+                "fit": {"type": "string", "enum": ["photos", "mesh"], "description": "fit the targets directly to the photos (default: landmarks and outlines of every photo through solved cameras) or to a generated mesh (stages 2-5)"},
+                "extras": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}}, "required": ["path"], "additionalProperties": false}, "description": "any number of extra views (three-quarters, the other side, slightly up or down): each is checked for quality and its pose is solved"},
+                "fit_options": {"type": "object", "description": "fit.photos options (weights, rounds, focal_px, outline_regions, landmarks, prior_scope)"}
             })),
             merged(store_props(), base_table_prop()),
         ),
@@ -1098,6 +1101,9 @@ pub fn from_photos_input() -> Value {
 }
 
 pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    if opt(input, "fit").unwrap_or("photos") == "photos" {
+        return crate::photo_fit::from_photos(ctx, input);
+    }
     let run = run_dir(input)?;
     let started = Instant::now();
     let mut stages: Vec<Value> = Vec::new();
@@ -1189,7 +1195,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(report)
 }
 
-fn settle_export(ctx: &Ctx, input: &Value, run: &Path, spec_path: &Path, glb: &Path, name: &str, fitted: &Value) -> Result<Value, ApiError> {
+pub(crate) fn settle_export(ctx: &Ctx, input: &Value, run: &Path, spec_path: &Path, glb: &Path, name: &str, fitted: &Value) -> Result<Value, ApiError> {
     let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
     let mut spec = Spec {
         format: FORMAT.into(),

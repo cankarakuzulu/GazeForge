@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, photo_gate, registry};
+use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, photo_fit, photo_gate, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -238,6 +238,33 @@ pub static REGISTRY: &[CommandDef] = &[
         input: photo::sheet_input,
         output: photo::generic_output,
         run: photo::sheet,
+    },
+    CommandDef {
+        name: "photo.views",
+        kind: Kind::Job,
+        summary: "Direct fit, stage 1: for any number of photos (at least one front and one profile), face landmarks, the subject's outline, the profile keys of a side view, and the quality checks of the reference-photo gate for every extra view.",
+        limits: "The outline assumes a plain background and includes hair and clothing; an extra view needs a detectable face (its pose is solved later, not gated).",
+        input: photo_fit::views_input,
+        output: photo::generic_output,
+        run: photo_fit::views,
+    },
+    CommandDef {
+        name: "fit.photos",
+        kind: Kind::Job,
+        summary: "Direct fit: bounded least squares ([0, 1]) over the head targets to every photo at once - landmark reprojection and outline distance through a solved perspective camera per photo (pose re-solved each round), with stay-at-base, symmetry, ridge and L1 terms; per-photo reprojection in px and mm, the shell gates on the result, and leave-one-out prediction of a named photo.",
+        limits: "Focal length is assumed (70 mm full-frame equivalent unless focal_px is given); scale and placement are not observable from photos. The outline of hair-covered skull and of the neck is not fitted by default. Profile cameras start from the profile keys and the declared side.",
+        input: photo_fit::input,
+        output: photo::generic_output,
+        run: photo_fit::fit_photos,
+    },
+    CommandDef {
+        name: "review.views",
+        kind: Kind::Job,
+        summary: "Review sheet of a direct fit: one row per photo - the photo, a clay render at its solved camera, and both at 50 % with the photo outline (red) and the fit's outline (green).",
+        limits: "A software render for comparison, not the engine's lookdev.",
+        input: photo_fit::sheet_input,
+        output: photo::generic_output,
+        run: photo_fit::sheet,
     },
     CommandDef {
         name: "character.from_photos",
