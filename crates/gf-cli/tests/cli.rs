@@ -145,6 +145,24 @@ fn the_angle_pass_version_exports_and_refuses_what_it_does_not_read() {
 }
 
 #[test]
+fn the_continuous_placement_exports_and_refuses_what_it_does_not_read() {
+    let root = fixture("f5");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f5", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["placement_version"], Value::String("f5/1".into()));
+    assert_eq!(value["settings"]["membrane"], serde_json::json!(0.1));
+    assert!(value["placement_stats"]["footprint_points"].as_u64().unwrap() > 0, "{value}");
+    let (success, value) = export(&root, "good.npy", &["--placement", "f5/1", "--f5-membrane", "0.2", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["settings"]["membrane"], serde_json::json!(0.2));
+    refused(export(&root, "good.npy", &["--placement", "f5", "--f3-rounds", "2", "--tip-vertex", "0"]), "--f3-rounds");
+    refused(export(&root, "good.npy", &["--placement", "f3", "--f5-membrane", "0.2", "--tip-vertex", "0"]), "--f5-membrane");
+    refused(export(&root, "good.npy", &["--placement", "f5", "--f5-normals", "both", "--tip-vertex", "0"]), "--f5-normals");
+    refused(export(&root, "good.npy", &["--placement", "f5", "--f5-eye-front", "5", "--tip-vertex", "0"]), "--f5-eye-front");
+    refused(export(&root, "good.npy", &["--placement", "f5/2", "--tip-vertex", "0"]), "f5/2");
+}
+
+#[test]
 fn bad_layout_options_are_refused() {
     let root = fixture("layout");
     let dense = root.join("dense");

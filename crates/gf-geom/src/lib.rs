@@ -6,6 +6,7 @@ pub mod lids;
 pub mod placement;
 pub mod placement_f2;
 pub mod placement_f3;
+pub mod placement_f5;
 pub mod quadric;
 pub mod uv_chart;
 
