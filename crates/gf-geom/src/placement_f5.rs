@@ -5,7 +5,7 @@ use crate::decimate::Decimated;
 use crate::lids::Eye;
 use crate::placement::{self as pl, Csr};
 use crate::prepared::Prepared;
-use crate::quadric::{dot, length, sub};
+use crate::quadric::{cross, dot, length, sub};
 use crate::uv_chart::{self, Surface};
 
 #[derive(Clone, Serialize)]
@@ -19,6 +19,24 @@ pub struct F5Settings {
     pub eye_clearance: f64,
     pub eye_depth: [f64; 2],
     pub eye_front_deg: f64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct F6Settings {
+    #[serde(flatten)]
+    pub f5: F5Settings,
+    pub sliver_deg: f64,
+    pub sliver_rounds: usize,
+    pub sliver_relax: f64,
+    pub sliver_seam: f64,
+    pub sliver_eye: [f64; 2],
+}
+
+#[derive(Default, Serialize)]
+pub struct SliverStats {
+    pub below_before: usize,
+    pub below_after: usize,
+    pub largest_nudge_mm: f64,
 }
 
 #[derive(Default, Serialize)]
@@ -36,6 +54,8 @@ pub struct F5Stats {
     pub median_move_mm: f64,
     pub max_move_mm: f64,
     pub clear: Option<LiftStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slivers: Option<SliverStats>,
     pub uv_keys_derived: usize,
     pub uv_seed_misses: usize,
     pub uv_flipped_before: usize,
@@ -475,6 +495,101 @@ fn lift_vertices(game: &mut [[f64; 3]], subset: &[[f64; 3]], mesh: &Decimated, f
     stats
 }
 
+fn sliver_pushes(game: &[[f64; 3]], tri: [u32; 3], n: [f64; 3], mobility: &[f64], tau: f64) -> ([[f64; 3]; 3], bool) {
+    let mut push = [[0.0f64; 3]; 3];
+    let mut below = false;
+    for k in 0..3 {
+        let (ia, ib, ic) = (k, (k + 1) % 3, (k + 2) % 3);
+        let (a, b, c) = (game[tri[ia] as usize], game[tri[ib] as usize], game[tri[ic] as usize]);
+        let u = sub(b, a);
+        let l = length(u);
+        let side = cross(n, u);
+        let side_length = length(side);
+        if l < 1e-12 || side_length < 1e-9 * l {
+            continue;
+        }
+        let along = dot(u, sub(c, a)) / (l * l);
+        let height = [0, 1, 2].map(|d| c[d] - a[d] - along * u[d] + tau * l * side[d] / side_length);
+        let height_length = length(height);
+        if height_length < 1e-12 * l {
+            continue;
+        }
+        let m = height.map(|x| x / height_length);
+        let gap = tau * l - dot(m, sub(c, a));
+        if gap <= 0.0 {
+            continue;
+        }
+        below = true;
+        let t = along.clamp(0.0, 1.0);
+        let grads = [(ia, t - 1.0), (ib, -t), (ic, 1.0)];
+        let denom = grads.iter().map(|&(v, w)| mobility[tri[v] as usize] * w * w).sum::<f64>().max(0.5);
+        for (v, w) in grads {
+            let share = mobility[tri[v] as usize] * gap * w / denom;
+            for d in 0..3 {
+                push[v][d] += m[d] * share;
+            }
+        }
+    }
+    (push, below)
+}
+
+fn open_slivers(game: &mut [[f64; 3]], mesh: &Decimated, prepared: &Prepared, kept_normals: &[[f64; 3]], eyes: &[Eye], settings: &F6Settings) -> SliverStats {
+    let tau = settings.sliver_deg.to_radians().sin();
+    let vtris = &prepared.vtris;
+    let mobility: Vec<f64> = (0..game.len())
+        .map(|g| {
+            let base = if prepared.boundary[g] {
+                0.0
+            } else if prepared.seam[g] {
+                settings.sliver_seam
+            } else {
+                1.0
+            };
+            eyes.iter().fold(base, |m, eye| m * smoothstep(length(sub(game[g], eye.centre)) - eye.radius, settings.sliver_eye))
+        })
+        .collect();
+    let normals: Vec<[f64; 3]> = mesh
+        .triangles
+        .iter()
+        .map(|tri| {
+            let s = [0, 1, 2].map(|k| kept_normals[tri[0] as usize][k] + kept_normals[tri[1] as usize][k] + kept_normals[tri[2] as usize][k]);
+            s.map(|x| x / length(s).max(1e-30))
+        })
+        .collect();
+    let start = game.to_vec();
+    let mut stats = SliverStats::default();
+    for round in 0..=settings.sliver_rounds {
+        let view: &[[f64; 3]] = game;
+        let pushes: Vec<([[f64; 3]; 3], bool)> = crate::map_range(mesh.triangles.len(), |t| sliver_pushes(view, mesh.triangles[t], normals[t], &mobility, tau));
+        let below = pushes.iter().filter(|p| p.1).count();
+        if round == 0 {
+            stats.below_before = below;
+        }
+        stats.below_after = below;
+        if round == settings.sliver_rounds {
+            break;
+        }
+        let moves: Vec<[f64; 3]> = crate::map_range(game.len(), |g| {
+            let mut d = [0.0f64; 3];
+            for &t in &vtris[g] {
+                let tri = mesh.triangles[t as usize];
+                let c = tri.iter().position(|&x| x as usize == g).unwrap();
+                for k in 0..3 {
+                    d[k] += settings.sliver_relax * pushes[t as usize].0[c][k];
+                }
+            }
+            d
+        });
+        for (p, d) in game.iter_mut().zip(&moves) {
+            for k in 0..3 {
+                p[k] += d[k];
+            }
+        }
+    }
+    stats.largest_nudge_mm = game.iter().zip(&start).map(|(a, b)| length(sub(*a, *b))).fold(0.0, f64::max) * 1000.0;
+    stats
+}
+
 fn uv_sign(t: [Uv; 3]) -> f64 {
     ((t[1][0] as f64 - t[0][0] as f64) * (t[2][1] as f64 - t[0][1] as f64) - (t[2][0] as f64 - t[0][0] as f64) * (t[1][1] as f64 - t[0][1] as f64)).signum()
 }
@@ -499,6 +614,44 @@ pub fn place_prepared(
     eyes: &[Eye],
     settings: &F5Settings,
     prepared: &Prepared,
+) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
+    place_with(positions, dense_triangles, dense_uvs, mesh, eyes, settings, prepared, None)
+}
+
+pub fn place_f6(
+    positions: &[[f64; 3]],
+    dense_triangles: &[[u32; 3]],
+    dense_uvs: &[[Uv; 3]],
+    mesh: &Decimated,
+    eyes: &[Eye],
+    settings: &F6Settings,
+) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
+    let prepared = Prepared::new(positions.len(), dense_triangles, dense_uvs, mesh, settings.f5.uv_ring);
+    place_f6_prepared(positions, dense_triangles, dense_uvs, mesh, eyes, settings, &prepared)
+}
+
+pub fn place_f6_prepared(
+    positions: &[[f64; 3]],
+    dense_triangles: &[[u32; 3]],
+    dense_uvs: &[[Uv; 3]],
+    mesh: &Decimated,
+    eyes: &[Eye],
+    settings: &F6Settings,
+    prepared: &Prepared,
+) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
+    place_with(positions, dense_triangles, dense_uvs, mesh, eyes, &settings.f5, prepared, Some(settings))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_with(
+    positions: &[[f64; 3]],
+    dense_triangles: &[[u32; 3]],
+    dense_uvs: &[[Uv; 3]],
+    mesh: &Decimated,
+    eyes: &[Eye],
+    settings: &F5Settings,
+    prepared: &Prepared,
+    f6: Option<&F6Settings>,
 ) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
     let count = mesh.kept.len();
     let (boundary, seam, fixed) = (&prepared.boundary, &prepared.seam, &prepared.fixed);
@@ -595,6 +748,9 @@ pub fn place_prepared(
     stats.normal_gap_mm = normal_gap / n.max(1) as f64 * 1000.0;
     drop(dense_normals);
     stats.clamped = pl::clamp_moves(&mut game, &subset, settings.max_move);
+    if let Some(f6) = f6 {
+        stats.slivers = Some(open_slivers(&mut game, mesh, prepared, &kept_normals, eyes, f6));
+    }
     if !eyes.is_empty() {
         stats.clear = Some(lift_vertices(&mut game, &subset, mesh, fixed, eyes, settings));
     }
@@ -733,6 +889,49 @@ mod tests {
         assert!(one[worst] > 0.0);
         let scaling = two[worst] / one[worst];
         assert!((1.8..=2.2).contains(&scaling), "doubling the noise scaled the response by {scaling}");
+    }
+
+    fn f6_settings() -> F6Settings {
+        F6Settings { f5: settings(), sliver_deg: 6.0, sliver_rounds: 32, sliver_relax: 0.5, sliver_seam: 0.25, sliver_eye: [0.004, 0.008] }
+    }
+
+    fn min_angle(game: &[[f64; 3]], mesh: &Decimated) -> f64 {
+        mesh.triangles.iter().map(|t| pl::min_angle(t.map(|i| game[i as usize]))).fold(180.0, f64::min)
+    }
+
+    #[test]
+    fn f6_equals_f5_where_nothing_is_a_sliver() {
+        let (dense, tris, uvs, mesh) = fixture();
+        let (g5, u5, _) = place(&dense, &tris, &uvs, &mesh, &[], &settings());
+        let (g6, u6, stats) = place_f6(&dense, &tris, &uvs, &mesh, &[], &f6_settings());
+        assert!(min_angle(&g5, &mesh) > 10.0);
+        assert_eq!(stats.slivers.unwrap().below_before, 0);
+        let bits = |g: &[[f64; 3]]| g.iter().map(|p| p.map(f64::to_bits)).collect::<Vec<_>>();
+        assert_eq!(bits(&g5), bits(&g6));
+        assert_eq!(u5, u6);
+    }
+
+    #[test]
+    fn the_sliver_nudge_opens_a_planted_sliver_and_stays_continuous() {
+        let (dense, tris, uvs, mesh) = fixture();
+        let prepared = Prepared::new(dense.len(), &tris, &uvs, &mesh, 2);
+        let n = 7usize;
+        let mut game: Vec<[f64; 3]> = mesh.kept.iter().map(|&d| dense[d as usize]).collect();
+        let (a, b) = (game[3 * n + 3], game[2 * n + 3]);
+        game[3 * n + 3] = [b[0] + 0.05 * (a[0] - b[0]), b[1] + 0.05 * (a[1] - b[1]), a[2]];
+        assert!(min_angle(&game, &mesh) < 4.0, "the plant must make a sliver, got {}", min_angle(&game, &mesh));
+        let up = vec![[0.0, 0.0, 1.0]; game.len()];
+        let run = |start: &[[f64; 3]]| {
+            let mut g = start.to_vec();
+            open_slivers(&mut g, &mesh, &prepared, &up, &[], &f6_settings());
+            g
+        };
+        let opened = run(&game);
+        assert!(min_angle(&opened, &mesh) > 5.0, "after the nudge {}", min_angle(&opened, &mesh));
+        let shifted: Vec<[f64; 3]> = game.iter().zip(noise(game.len(), 1e-7)).map(|(p, d)| [0, 1, 2].map(|k| p[k] + d[k])).collect();
+        let moved = run(&shifted);
+        let worst = opened.iter().zip(&moved).map(|(p, q)| length(sub(*p, *q))).fold(0.0, f64::max);
+        assert!(worst <= 10.0 * 1e-7, "0.1 um of input noise moved the nudged mesh by {} um", worst * 1e6);
     }
 
     #[test]
