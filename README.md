@@ -30,22 +30,32 @@ The binary is `target/release/gazeforge`.
 
 Every command prints one JSON object on stdout and exits non-zero on failure.
 
-Build a game base from a dense base:
+Build a game base from a dense base, optionally with a per-vertex importance weight and nested LODs from the same
+collapse run:
 
 ```
 gazeforge build-base --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy]
-                     [--min-angle 4] [--max-angle 170] [--max-turn 45] [--boundary-weight 100]
-                     [--improve-below 20] [--flip-flat 15]
+                     [--weights W.npy] [--lods 8000,3000] [--min-angle 4] [--max-angle 170] ...
 ```
 
 Export a shape (the base, a target, or any positions over the dense order) at game resolution:
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement optimal|fit|f2|subset] [--max-move 3]
+                     [--placement optimal|fit|f2|f3|subset] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
-Run `gazeforge` without arguments for the full option list.
+Each placement is versioned and never changes once released; `f3` is the current one. With `--eyes`, `f3` keeps the
+placed eyelids outside the eyeballs.
+
+Push a character's eyelid skin out of its eyeballs at dense resolution:
+
+```
+gazeforge collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
+```
+
+An option a command does not read is refused, and numbers and input positions must be finite. Run `gazeforge` without
+arguments for the full option list.
 
 ### Data layout
 

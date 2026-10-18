@@ -18,7 +18,7 @@ pub struct Settings {
     pub flip_flat_deg: f64,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Stats {
     pub start_vertices: usize,
     pub start_triangles: usize,
@@ -86,6 +86,7 @@ struct Plan {
 
 struct Mesh<'a> {
     settings: &'a Settings,
+    weights: Option<&'a [f64]>,
     shapes: Vec<Vec<[f64; 3]>>,
     tris: Vec<[u32; 3]>,
     uvs: Vec<[Uv; 3]>,
@@ -152,6 +153,10 @@ impl<'a> Mesh<'a> {
                         quadric::eval_pair(&self.quadrics[k][u as usize], &self.quadrics[k][v as usize], self.shapes[k][v as usize])
                     })
                     .sum::<f64>();
+                let cost = match self.weights {
+                    Some(w) => cost * 0.5 * (w[u as usize] + w[v as usize]),
+                    None => cost,
+                };
                 (cost.max(0.0), v)
             })
             .collect();
@@ -353,6 +358,17 @@ impl<'a> Mesh<'a> {
 }
 
 pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 3]], settings: &Settings) -> Decimated {
+    decimate_levels(shapes, triangles, uvs, settings, None, &[]).remove(0)
+}
+
+pub fn decimate_levels(
+    shapes: Vec<Vec<[f64; 3]>>,
+    triangles: &[[u32; 3]],
+    uvs: &[[Uv; 3]],
+    settings: &Settings,
+    weights: Option<&[f64]>,
+    coarser: &[usize],
+) -> Vec<Decimated> {
     let started = Instant::now();
     let n = shapes[0].len();
     let centre = {
@@ -424,6 +440,7 @@ pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 
     drop(keys);
     let mut mesh = Mesh {
         settings,
+        weights,
         shapes,
         tris: triangles.to_vec(),
         uvs: uvs.to_vec(),
@@ -441,7 +458,27 @@ pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 
         mesh.push_best(&mut heap, u);
     }
     let mut alive_count = n;
-    while alive_count > settings.target_vertices {
+    let mut levels = Vec::with_capacity(1 + coarser.len());
+    for (level, &target) in std::iter::once(&settings.target_vertices).chain(coarser).enumerate() {
+        if level > 0 {
+            heap.clear();
+            for u in 0..n as u32 {
+                if mesh.alive[u as usize] {
+                    mesh.push_best(&mut heap, u);
+                }
+            }
+        }
+        collapse_to(&mut mesh, &mut heap, &mut alive_count, target, &mut stats);
+        stats.flips = mesh.improve(settings.improve_below_deg, settings.flip_flat_deg);
+        stats.reached_target = alive_count <= target;
+        stats.seconds = started.elapsed().as_secs_f64();
+        levels.push(extract(&mut mesh, &stats));
+    }
+    levels
+}
+
+fn collapse_to(mesh: &mut Mesh, heap: &mut BinaryHeap<Entry>, alive_count: &mut usize, target: usize, stats: &mut Stats) {
+    while *alive_count > target {
         let Some(entry) = heap.pop() else { break };
         let (u, v) = (entry.u, entry.v);
         if !mesh.alive[u as usize]
@@ -454,11 +491,11 @@ pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 
         match mesh.check(u, v) {
             Ok(plan) => {
                 mesh.apply(u, v, plan);
-                alive_count -= 1;
+                *alive_count -= 1;
                 stats.collapses += 1;
-                mesh.push_best(&mut heap, v);
+                mesh.push_best(heap, v);
                 for w in mesh.neighbours(v) {
-                    mesh.push_best(&mut heap, w);
+                    mesh.push_best(heap, w);
                 }
             }
             Err(refusal) => {
@@ -479,7 +516,10 @@ pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 
             }
         }
     }
-    stats.flips = mesh.improve(settings.improve_below_deg, settings.flip_flat_deg);
+}
+
+fn extract(mesh: &mut Mesh, stats: &Stats) -> Decimated {
+    let n = mesh.alive.len();
     let mut remap = vec![u32::MAX; n];
     let mut kept = Vec::new();
     let mut out_tris = Vec::new();
@@ -512,9 +552,81 @@ pub fn decimate(shapes: Vec<Vec<[f64; 3]>>, triangles: &[[u32; 3]], uvs: &[[Uv; 
             walk = next;
         }
     }
-    stats.vertices = kept.len();
-    stats.triangles = out_tris.len();
-    stats.reached_target = alive_count <= settings.target_vertices;
-    stats.seconds = started.elapsed().as_secs_f64();
+    let stats = Stats { vertices: kept.len(), triangles: out_tris.len(), ..stats.clone() };
     Decimated { kept, owner, triangles: out_tris, triangle_uvs: out_uvs, stats }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid(n: usize) -> (Vec<[f64; 3]>, Vec<[u32; 3]>, Vec<[Uv; 3]>) {
+        let mut points = Vec::new();
+        for j in 0..n {
+            for i in 0..n {
+                let (x, y) = (i as f64 / (n - 1) as f64, j as f64 / (n - 1) as f64);
+                points.push([x * 0.1, y * 0.1, 0.01 * ((x - 0.5).powi(2) + (y - 0.3).powi(2)) + 0.002 * (9.0 * x).sin()]);
+            }
+        }
+        let mut tris = Vec::new();
+        let mut uvs = Vec::new();
+        let uv = |v: u32| [(v as usize % n) as f32 / (n - 1) as f32, (v as usize / n) as f32 / (n - 1) as f32];
+        for j in 0..n - 1 {
+            for i in 0..n - 1 {
+                let a = (j * n + i) as u32;
+                let (b, c, d) = (a + 1, a + n as u32 + 1, a + n as u32);
+                for t in [[a, b, c], [a, c, d]] {
+                    tris.push(t);
+                    uvs.push(t.map(uv));
+                }
+            }
+        }
+        (points, tris, uvs)
+    }
+
+    fn settings(target: usize) -> Settings {
+        Settings {
+            target_vertices: target,
+            min_angle_deg: 4.0,
+            max_angle_deg: 170.0,
+            max_normal_turn_deg: 45.0,
+            boundary_weight: 100.0,
+            improve_below_deg: 20.0,
+            flip_flat_deg: 15.0,
+        }
+    }
+
+    #[test]
+    fn coarser_levels_keep_a_subset_of_the_finer_vertices() {
+        let (points, tris, uvs) = grid(24);
+        let levels = decimate_levels(vec![points], &tris, &uvs, &settings(300), None, &[150, 60]);
+        assert_eq!(levels.iter().map(|l| l.kept.len()).collect::<Vec<_>>(), vec![300, 150, 60]);
+        for pair in levels.windows(2) {
+            assert!(pair[1].kept.iter().all(|k| pair[0].kept.contains(k)), "a coarser level kept a vertex the finer one dropped");
+        }
+        for level in &levels {
+            assert!(level.owner.iter().all(|&o| (o as usize) < level.kept.len()));
+            assert!(level.kept.iter().enumerate().all(|(g, &d)| level.owner[d as usize] == g as u32));
+        }
+    }
+
+    #[test]
+    fn the_first_level_equals_a_single_level_build() {
+        let (points, tris, uvs) = grid(20);
+        let single = decimate(vec![points.clone()], &tris, &uvs, &settings(200));
+        let nested = decimate_levels(vec![points], &tris, &uvs, &settings(200), None, &[80]);
+        assert_eq!(single.kept, nested[0].kept);
+        assert_eq!(single.triangles, nested[0].triangles);
+        assert_eq!(single.owner, nested[0].owner);
+    }
+
+    #[test]
+    fn a_heavy_region_weight_keeps_more_of_that_region() {
+        let (points, tris, uvs) = grid(24);
+        let weights: Vec<f64> = points.iter().map(|p| if p[0] < 0.05 { 8.0 } else { 1.0 }).collect();
+        let plain = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), None, &[]);
+        let weighted = decimate_levels(vec![points.clone()], &tris, &uvs, &settings(150), Some(&weights), &[]);
+        let left = |d: &Decimated| d.kept.iter().filter(|&&k| points[k as usize][0] < 0.05).count();
+        assert!(left(&weighted[0]) > left(&plain[0]), "weighted {} vs plain {}", left(&weighted[0]), left(&plain[0]));
+    }
 }
