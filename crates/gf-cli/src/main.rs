@@ -19,7 +19,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   build-base  --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy] [--min-angle 4] [--max-angle 170]
               [--max-turn 45] [--boundary-weight 100] [--improve-below 20] [--flip-flat 15]
               [--weights W.npy (per dense vertex, > 0, multiplies the collapse cost)] [--lods 8000,3000 (nested, into OUT/lod_N)]
-  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement optimal|fit|f2|f3|f4|subset|NAME/VERSION]
+  export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement f5|subset|optimal|fit|f2|f3|f4|NAME/VERSION]
               [--tip-vertex 185894]
               optimal, fit, f2: [--max-move 3]
               fit, f2: [--fit-iterations 4] [--fit-smooth 0.1] [--fit-min-angle 5] [--fit-guard-steps 8] [--fit-repair-below 5] [--fit-trim 0]
@@ -40,7 +40,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
   store import-catalog --store DIR --targets DIR --pack sha256:...
   store import-game --store DIR --base DIR --pack sha256:...
-  character create --store DIR --pack sha256:... --catalog sha256:... --out FILE [--game sha256:...] [--placement f3/1]
+  character create --store DIR --pack sha256:... --catalog sha256:... --out FILE [--game sha256:...] [--placement NAME/VERSION]
               [--name NAME] [--weights JSON|@FILE] [--macro MACRO_JSON [--sliders JSON|@FILE] [--macro-mode gf|mpfb] [--head-scale 1]]
               [--residual-from FACE.npy [--quantum-mm 0.005]]
   character validate --store DIR --spec FILE [--macro MACRO_JSON]
@@ -281,7 +281,8 @@ pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dy
 }
 
 fn export_obj(opts: &Options) -> Result<Value, String> {
-    let given = opts.get("placement").map(String::as_str).unwrap_or("optimal");
+    let default = gp::DEFAULT.to_string();
+    let given = opts.get("placement").map(String::as_str).unwrap_or(&default);
     let version = PlacementVersion::parse(given)
         .map_err(|_| format!("--placement must be optimal, fit, f2, f3, f4, f5 or subset (optionally with its version, e.g. f3/1), got {given}"))?;
     let mut allowed: Vec<&[&str]> = vec![EXPORT_KEYS];

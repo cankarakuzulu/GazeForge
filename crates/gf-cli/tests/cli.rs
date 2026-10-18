@@ -271,7 +271,7 @@ fn a_spec_round_trips_its_face_through_the_store() {
     let (ok, created) = gazeforge(&args);
     assert!(ok, "{created}");
     let text = std::fs::read_to_string(&spec).unwrap();
-    assert!(text.contains(r#""placement":"f3/1""#), "{text}");
+    assert!(text.contains(r#""placement":"f5/1""#), "{text}");
     let (ok, validated) = gazeforge(&["character", "validate", "--store", s, "--spec", spec_s]);
     assert!(ok && validated["revision"] == created["revision"] && validated["canonical"] == Value::Bool(true), "{validated}");
     let out = root.join("dense.npy");
@@ -312,4 +312,40 @@ fn bad_specs_and_a_corrupt_store_are_refused() {
     let original = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, original.replace("\"CC0\"", "\"XX0\"")).unwrap();
     refused(gazeforge(&["character", "validate", "--store", s, "--spec", spec_s]), "corrupt");
+}
+
+#[test]
+fn export_obj_without_a_placement_is_the_explicit_f5() {
+    let root = fixture("unnamed-obj");
+    let (success, value) = export(&root, "good.npy", &["--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(value["placement_version"], Value::String("f5/1".into()));
+    let unnamed = std::fs::read(root.join("out.obj")).unwrap();
+    let (success, value) = export(&root, "good.npy", &["--placement", "f5/1", "--tip-vertex", "0"]);
+    assert!(success, "{value}");
+    assert_eq!(std::fs::read(root.join("out.obj")).unwrap(), unnamed);
+}
+
+#[test]
+fn an_unnamed_placement_is_f5_for_the_spec_the_glb_and_the_designer() {
+    let (root, pack, catalog, game) = store_fixture("unnamed-spec");
+    let store = root.join("store");
+    let spec = root.join("d.gfchar.json");
+    let api_spec = root.join("api.gfchar.json");
+    let glb = root.join("d.glb");
+    let (s, spec_s) = (store.to_str().unwrap(), spec.to_str().unwrap());
+    let (ok, created) = gazeforge(&["character", "create", "--store", s, "--pack", &pack, "--catalog", &catalog, "--game", &game, "--out", spec_s]);
+    assert!(ok, "{created}");
+    assert!(std::fs::read_to_string(&spec).unwrap().contains(r#""placement":"f5/1""#));
+    let input = serde_json::json!({"store": s, "pack": pack, "catalog": catalog, "game": game, "out": api_spec.to_str().unwrap()});
+    let (ok, created) = gazeforge(&["call", "character.create", "--input", &input.to_string()]);
+    assert!(ok, "{created}");
+    assert!(std::fs::read_to_string(&api_spec).unwrap().contains(r#""placement":"f5/1""#));
+    let (ok, exported) = gazeforge(&["export-glb", "--store", s, "--spec", spec_s, "--out", glb.to_str().unwrap()]);
+    assert!(ok, "{exported}");
+    assert_eq!(exported["placement_version"], Value::String("f5/1".into()));
+    let input = serde_json::json!({"store": s, "pack": pack, "catalog": catalog, "game": game});
+    let (ok, settled) = gazeforge(&["call", "designer.settle", "--input", &input.to_string()]);
+    assert!(ok, "{settled}");
+    assert_eq!(settled["result"]["placement"], Value::String("f5/1".into()));
 }

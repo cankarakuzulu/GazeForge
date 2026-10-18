@@ -237,7 +237,10 @@ fn number_map(value: Option<&Value>) -> BTreeMap<String, f64> {
 }
 
 fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Result<Spec, ApiError> {
-    let placement = PlacementVersion::parse(input.get("placement").and_then(Value::as_str).unwrap_or("f3/1")).map_err(ApiError::invalid)?;
+    let placement = match input.get("placement").and_then(Value::as_str) {
+        Some(given) => PlacementVersion::parse(given).map_err(ApiError::invalid)?,
+        None => gp::DEFAULT,
+    };
     let macros = match input.get("macros").filter(|m| !m.is_null()) {
         Some(m) => {
             let source = source.ok_or_else(|| ApiError::invalid("macros need macro, the macro definition file"))?;
@@ -311,7 +314,7 @@ fn with(mut base: Value, extra: Value) -> Value {
 }
 
 fn character_props() -> Value {
-    json!({"placement": {"type": "string", "description": "placement name/version, default f3/1"},
+    json!({"placement": {"type": "string", "description": format!("placement name/version, default {}", gp::DEFAULT)},
            "name": {"type": "string", "minLength": 1},
            "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}, "description": "target id -> weight in [0, 1]"},
            "macros": {"type": ["object", "null"], "description": "{sliders: {name: value}, mode: gf|mpfb, head_scale}; sliders not given keep the pack's macro_base"},
@@ -343,7 +346,7 @@ pub fn pack_output() -> Value {
 
 pub fn settle_input() -> Value {
     obj(
-        with(with(base_props(), character_props()), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file for f3's eyelid clearance"},
+        with(with(base_props(), character_props()), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file for the eyelid clearance of f3 and f5"},
                                                            "uvs": {"type": "boolean", "description": "also return the placed triangle UVs (default false)"},
                                                            "fast": {"type": "boolean", "description": "opt-in designer draft for f3/f4: DRAFT_ROUNDS fit rounds instead of 4, so the result is approximate (flagged approximate); designer.save and every export still place with the full released placement (default false)"}})),
         &["store", "pack", "catalog", "game"],

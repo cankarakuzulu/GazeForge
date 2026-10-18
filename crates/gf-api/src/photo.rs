@@ -1198,7 +1198,7 @@ fn settle_export(ctx: &Ctx, input: &Value, run: &Path, spec_path: &Path, glb: &P
             pack: text(input, "pack").into(),
             catalog: text(input, "catalog").into(),
             game_base: Some(text(input, "game").into()),
-            placement: "f3/1".into(),
+            placement: gf_core::placement::DEFAULT.to_string(),
         },
         weights: weights_of(fitted),
         macros: None,
