@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "gf-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gf-core",
  "gf-geom",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "gf-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gf-api",
  "gf-core",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "gf-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "gf-geom",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "gf-geom"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rayon",
  "serde",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "gf-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "gf-core",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "gf-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gf-geom",
 ]

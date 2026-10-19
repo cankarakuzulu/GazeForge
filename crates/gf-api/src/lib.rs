@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
+pub mod anim;
+mod anim_glb;
+mod anim_guard;
 pub mod body;
 mod commands;
 pub mod designer;

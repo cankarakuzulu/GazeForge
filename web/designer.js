@@ -986,6 +986,7 @@ function makeApi(panelId) {
     onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
     setPose,
     setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); pendingVisibility("mesh", String(id)); renderVisibility(); request(false); },
+    poseExtraMesh: (id, rotation, centre) => { const ok = V.poseExtra(String(id), rotation || null, centre || null); request(false); return ok; },
     setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
     pushUndo,
     requestRender: () => request(false),
