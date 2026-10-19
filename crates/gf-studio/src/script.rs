@@ -249,7 +249,8 @@ impl Offscreen {
             }
             "godot_readback" => {
                 let stem = text("file").ok_or("godot_readback needs file")?;
-                let (rev, back) = host.readback(std::time::Duration::from_secs(20))?;
+                let rb = host.readback(std::time::Duration::from_secs(20))?;
+                let (rev, back) = (rb.revision, &rb.positions);
                 let topo = host.topology().ok_or("Godot holds no mesh yet")?;
                 let s = self.world.session.as_ref().ok_or("nothing is loaded")?;
                 let write = |name: String, bytes: Vec<u8>| -> Result<String, String> {
@@ -269,7 +270,57 @@ impl Offscreen {
                     }
                 }
                 Ok(json!({"godot": g, "app": a, "map": m, "render_vertices": topo.map.len(), "godot_vertices": back.len() / 3, "game_vertices": s.head.n,
-                          "revision_sent": rev, "head_revision": s.head.revision, "max_abs": worst}))
+                          "revision_sent": rev, "head_revision": s.head.revision, "max_abs": worst, "godot_lod": rb.lod, "godot_indices": rb.indices,
+                          "app_lod_indices": s.head.lods.iter().map(|l| l.indices.len()).collect::<Vec<_>>(),
+                          "slot_lods": (0..4).map(|i| self.world.state.vp[i].lod).collect::<Vec<_>>()}))
+            }
+            "godot_track" => {
+                let mk = host.marker().ok_or("godot_track needs a godot_marker step first")?;
+                let pos = [mk[0] as f64, mk[1] as f64, mk[2] as f64];
+                let count = num("count").unwrap_or(240.0).max(1.0) as usize;
+                let (spin, pace) = (num("spin").unwrap_or(0.5), num("frame_ms").unwrap_or(6.944));
+                let a = self.world.state.active_rect(self.width, self.height);
+                let (mut last_seq, mut prev_claim): (Option<u64>, Option<[f64; 2]>) = (None, None);
+                let (mut rows, mut complete) = (Vec::new(), Vec::new());
+                let t = Instant::now();
+                for _ in 0..count {
+                    let started = Instant::now();
+                    self.world.state.orbit(a.cam, spin, 0.0, true);
+                    let r = self.render()?;
+                    complete.push(r["complete_ms"].as_f64().unwrap_or(0.0));
+                    if let Some(f) = host.shown(a.slot).filter(|f| Some(f.seq) != last_seq) {
+                        last_seq = Some(f.seq);
+                        let (mut n, mut sx, mut sy) = (0u64, 0f64, 0f64);
+                        for (i, p) in f.rgba.chunks_exact(4).enumerate() {
+                            if p[0] > 200 && p[1] < 80 && p[2] > 200 {
+                                n += 1;
+                                sx += (i as u32 % f.w) as f64 + 0.5;
+                                sy += (i as u32 / f.w) as f64 + 0.5;
+                            }
+                        }
+                        let claim = f.project(pos);
+                        let found = (n > 0).then(|| [sx / n as f64, sy / n as f64]);
+                        let err = match (found, claim) {
+                            (Some(c), Some(p)) => Some(((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt()),
+                            _ => None,
+                        };
+                        let step = match (claim, prev_claim) {
+                            (Some(p), Some(q)) => Some(((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()),
+                            _ => None,
+                        };
+                        prev_claim = claim;
+                        rows.push(json!({"seq": f.seq, "revision": f.revision, "scale": f.scale, "lod": f.lod, "marker_px": n, "centroid": found, "claimed": claim, "error_px": err, "step_from_previous_px": step}));
+                    }
+                    let left = pace - ms(started);
+                    if left > 0.0 {
+                        std::thread::sleep(std::time::Duration::from_secs_f64(left / 1000.0));
+                    }
+                }
+                let errs: Vec<f64> = rows.iter().filter_map(|r| r["error_px"].as_f64()).collect();
+                let steps: Vec<f64> = rows.iter().filter_map(|r| r["step_from_previous_px"].as_f64()).collect();
+                let missing = rows.iter().filter(|r| r["error_px"].is_null()).count();
+                Ok(json!({"frames": count, "seconds": ms(t) / 1000.0, "shown_frames": rows.len(), "checked": errs.len(), "missing_marker": missing,
+                          "max_error_px": errs.iter().cloned().fold(0.0, f64::max), "error_px": stats(errs), "step_px": stats(steps), "complete_ms": stats(complete), "rows": rows}))
             }
             "godot_marker" => {
                 if step.get("off").and_then(Value::as_bool).unwrap_or(false) {
@@ -534,9 +585,9 @@ impl Offscreen {
                 let count = num("count").unwrap_or(60.0).max(1.0) as usize;
                 let spin = num("spin").unwrap_or(0.0);
                 let pace = num("frame_ms");
-                let (mut submit, mut complete) = (Vec::new(), Vec::new());
+                let (mut submit, mut complete, mut slow) = (Vec::new(), Vec::new(), Vec::new());
                 let t = Instant::now();
-                for _ in 0..count {
+                for k in 0..count {
                     let started = Instant::now();
                     if spin != 0.0 {
                         let a = self.world.state.active_rect(self.width, self.height);
@@ -545,6 +596,9 @@ impl Offscreen {
                     let r = self.render()?;
                     submit.push(r["submit_ms"].as_f64().unwrap_or(0.0));
                     complete.push(r["complete_ms"].as_f64().unwrap_or(0.0));
+                    if r["complete_ms"].as_f64().unwrap_or(0.0) > 16.0 {
+                        slow.push(json!({"frame": k, "at_ms": ms(t), "encode_ms": r["encode_ms"], "submit_ms": r["submit_ms"], "complete_ms": r["complete_ms"]}));
+                    }
                     if let Some(p) = pace {
                         let left = p - ms(started);
                         if left > 0.0 {
@@ -553,7 +607,7 @@ impl Offscreen {
                     }
                 }
                 let total = ms(t);
-                return Ok(json!({"frames": count, "total_ms": total, "fps": count as f64 / (total / 1000.0), "submit_ms": stats(submit), "complete_ms": stats(complete)}));
+                return Ok(json!({"frames": count, "total_ms": total, "fps": count as f64 / (total / 1000.0), "submit_ms": stats(submit), "complete_ms": stats(complete), "frames_over_16ms": slow}));
             }
             "dump_positions" => {
                 let s = w.session.as_ref().ok_or("nothing is loaded")?;

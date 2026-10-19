@@ -1,7 +1,7 @@
 extends SceneTree
 
 const MAGIC := 0x48524647
-const VERSION := 1
+const VERSION := 2
 const HELLO := 1
 const HELLO_ACK := 2
 const MESH := 3
@@ -17,17 +17,31 @@ const ERROR := 12
 const MESH_ACK := 13
 const POSITIONS_ACK := 14
 
+const ALBEDO := Color(0.80, 0.74, 0.68)
+const WRAP := 0.3
+const SKY_TOP := Color(0.159, 0.169, 0.183)
+const SKY_BOTTOM := Color(0.087, 0.081, 0.081)
+const RIG := [[-40.0, 30.0, 1.0, 5600.0], [50.0, 10.0, 0.35, 6500.0], [160.0, 35.0, 0.8, 7500.0]]
+
 var peer := StreamPeerTCP.new()
-var mesh := ArrayMesh.new()
+var rd: RenderingDevice
+var base := []
+var lod_index := []
+var lod_mesh := []
+var dirty := []
+var current_lod := -1
 var body := MeshInstance3D.new()
-var arrays := []
 var material: Material
 var env_node := WorldEnvironment.new()
 var lights := Node3D.new()
+var rig := []
 var marker := MeshInstance3D.new()
 var slots := {}
 var done := false
 var frame_delay_ms := 0
+var sync_readback := false
+var pending := 0
+var ready_frames := []
 
 
 func _initialize() -> void:
@@ -38,8 +52,12 @@ func _initialize() -> void:
 			port = int(args[i + 1])
 		if args[i] == "--frame-delay-ms" and i + 1 < args.size():
 			frame_delay_ms = int(args[i + 1])
+	sync_readback = args.has("--sync-readback")
 	RenderingServer.render_loop_enabled = false
 	root.disable_3d = true
+	rd = RenderingServer.get_rendering_device()
+	if rd == null:
+		sync_readback = true
 	if not args.has("--visible"):
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 	build_scene()
@@ -58,28 +76,59 @@ func _initialize() -> void:
 	peer.set_no_delay(true)
 
 
+func kelvin(k: float) -> Color:
+	var t := k / 100.0
+	var r := 255.0
+	var g := 0.0
+	var b := 255.0
+	if t <= 66.0:
+		g = 99.4708025861 * log(t) - 161.1195681661
+		b = 0.0 if t <= 19.0 else 138.5177312231 * log(t - 10.0) - 305.0447927307
+	else:
+		r = 329.698727446 * pow(t - 60.0, -0.1332047592)
+		g = 288.1221695283 * pow(t - 60.0, -0.0755148492)
+	return Color(clampf(r, 0, 255) / 255.0, clampf(g, 0, 255) / 255.0, clampf(b, 0, 255) / 255.0)
+
+
 func build_scene() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.12, 0.12, 0.13)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(1, 1, 1)
-	env.ambient_light_energy = 0.35
+	var sh := Shader.new()
+	sh.code = "shader_type sky;\nuniform vec3 top;\nuniform vec3 bottom;\nvoid sky() { COLOR = mix(bottom, top, EYEDIR.z * 0.5 + 0.5); }\n"
+	var skm := ShaderMaterial.new()
+	skm.shader = sh
+	skm.set_shader_parameter("top", Vector3(SKY_TOP.r, SKY_TOP.g, SKY_TOP.b))
+	skm.set_shader_parameter("bottom", Vector3(SKY_BOTTOM.r, SKY_BOTTOM.g, SKY_BOTTOM.b))
+	var sky := Sky.new()
+	sky.sky_material = skm
+	sky.radiance_size = Sky.RADIANCE_SIZE_32
+	env.sky = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_sky_contribution = 1.0
+	env.ambient_light_energy = 1.0
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env_node.environment = env
 	root.add_child(env_node)
-	for d in [[Vector3(-0.35, -0.45, -1.0), 1.0], [Vector3(0.8, -0.2, -0.6), 0.45], [Vector3(0.1, -0.3, 1.0), 0.5]]:
+	for d in RIG:
 		var l := DirectionalLight3D.new()
-		l.light_energy = d[1]
-		l.look_at_from_position(Vector3.ZERO, d[0], Vector3.UP if abs(d[0].normalized().y) < 0.95 else Vector3.FORWARD)
+		l.light_energy = d[2] * (1.0 + WRAP)
+		l.light_color = kelvin(d[3])
+		l.light_specular = 0.0
+		var az: float = deg_to_rad(d[0])
+		var el: float = deg_to_rad(d[1])
+		rig.append([l, Vector3(sin(az) * cos(el), sin(el), cos(az) * cos(el))])
 		lights.add_child(l)
 	root.add_child(lights)
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.78, 0.75, 0.72)
-	m.roughness = 0.6
+	m.albedo_color = ALBEDO
+	m.roughness = WRAP
+	m.metallic_specular = 0.0
+	m.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT_WRAP
+	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material = m
-	body.mesh = mesh
 	root.add_child(body)
 	var sm := SphereMesh.new()
 	sm.radius = 1.0
@@ -99,15 +148,29 @@ func build_scene() -> void:
 func _process(_delta: float) -> bool:
 	if done:
 		return true
-	peer.poll()
-	if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-		return true
-	var handled := 0
-	while peer.get_available_bytes() >= 16:
-		if not handle():
+	var t0 := Time.get_ticks_usec()
+	var worked := false
+	var flushes := 0
+	while Time.get_ticks_usec() - t0 < 20000:
+		peer.poll()
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 			return true
-		handled += 1
-	if handled == 0:
+		var handled := 0
+		while peer.get_available_bytes() >= 16:
+			if not handle():
+				return true
+			handled += 1
+		if handled > 0:
+			worked = true
+			flushes = 0
+			continue
+		if pending > 0 and flushes < 8:
+			flushes += 1
+			RenderingServer.force_draw(false)
+			flush_frames()
+			continue
+		break
+	if not worked:
 		OS.delay_usec(300)
 	return false
 
@@ -153,7 +216,8 @@ func handle() -> bool:
 	match type:
 		HELLO:
 			var info := {"version": VERSION, "godot": Engine.get_version_info().string, "adapter": RenderingServer.get_video_adapter_name(),
-				"api": RenderingServer.get_video_adapter_api_version(), "method": ProjectSettings.get_setting("rendering/renderer/rendering_method")}
+				"api": RenderingServer.get_video_adapter_api_version(), "method": ProjectSettings.get_setting("rendering/renderer/rendering_method"),
+				"readback": "sync" if sync_readback else "async"}
 			var out := PackedByteArray()
 			out.resize(4)
 			out.encode_u32(0, VERSION)
@@ -163,18 +227,28 @@ func handle() -> bool:
 		MESH:
 			var t0 := Time.get_ticks_usec()
 			var n := p.decode_u32(0)
-			var ni := p.decode_u32(4)
+			var nl := p.decode_u32(4)
 			var o := 8
-			arrays = []
-			arrays.resize(Mesh.ARRAY_MAX)
-			arrays[Mesh.ARRAY_VERTEX] = p.slice(o, o + n * 12).to_vector3_array()
+			base = []
+			base.resize(Mesh.ARRAY_MAX)
+			base[Mesh.ARRAY_VERTEX] = p.slice(o, o + n * 12).to_vector3_array()
 			o += n * 12
-			arrays[Mesh.ARRAY_NORMAL] = p.slice(o, o + n * 12).to_vector3_array()
+			base[Mesh.ARRAY_NORMAL] = p.slice(o, o + n * 12).to_vector3_array()
 			o += n * 12
-			arrays[Mesh.ARRAY_TEX_UV] = p.slice(o, o + n * 8).to_vector2_array()
+			base[Mesh.ARRAY_TEX_UV] = p.slice(o, o + n * 8).to_vector2_array()
 			o += n * 8
-			arrays[Mesh.ARRAY_INDEX] = p.slice(o, o + ni * 4).to_int32_array()
-			rebuild()
+			lod_index = []
+			lod_mesh = []
+			dirty = []
+			for l in nl:
+				var ni := p.decode_u32(o)
+				o += 4
+				lod_index.append(p.slice(o, o + ni * 4).to_int32_array())
+				o += ni * 4
+				lod_mesh.append(ArrayMesh.new())
+				dirty.append(true)
+			current_lod = -1
+			use_lod(0)
 			var out := PackedByteArray()
 			out.resize(8)
 			out.encode_u32(0, n)
@@ -183,11 +257,13 @@ func handle() -> bool:
 		POSITIONS:
 			var t0 := Time.get_ticks_usec()
 			var n := p.decode_u32(8)
-			if arrays.is_empty() or arrays[Mesh.ARRAY_VERTEX].size() != n:
-				return fail("positions for %d vertices, the mesh has %d" % [n, 0 if arrays.is_empty() else arrays[Mesh.ARRAY_VERTEX].size()])
-			arrays[Mesh.ARRAY_VERTEX] = p.slice(12, 12 + n * 12).to_vector3_array()
-			arrays[Mesh.ARRAY_NORMAL] = p.slice(12 + n * 12, 12 + n * 24).to_vector3_array()
-			rebuild()
+			if base.is_empty() or base[Mesh.ARRAY_VERTEX].size() != n:
+				return fail("positions for %d vertices, the mesh has %d" % [n, 0 if base.is_empty() else base[Mesh.ARRAY_VERTEX].size()])
+			base[Mesh.ARRAY_VERTEX] = p.slice(12, 12 + n * 12).to_vector3_array()
+			base[Mesh.ARRAY_NORMAL] = p.slice(12 + n * 12, 12 + n * 24).to_vector3_array()
+			for l in dirty.size():
+				dirty[l] = true
+			clean(current_lod)
 			var out := PackedByteArray()
 			out.resize(12)
 			out.encode_u64(0, p.decode_u64(0))
@@ -197,11 +273,17 @@ func handle() -> bool:
 			render(p)
 		READBACK:
 			var v := PackedVector3Array()
-			if mesh.get_surface_count() > 0:
-				v = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+			var ni := 0
+			if current_lod >= 0:
+				clean(current_lod)
+				var a: Array = lod_mesh[current_lod].surface_get_arrays(0)
+				v = a[Mesh.ARRAY_VERTEX]
+				ni = a[Mesh.ARRAY_INDEX].size()
 			var out := PackedByteArray()
-			out.resize(4)
+			out.resize(12)
 			out.encode_u32(0, v.size())
+			out.encode_u32(4, maxi(current_lod, 0))
+			out.encode_u32(8, ni)
 			send(VERTS, out, v.to_byte_array())
 		BYE:
 			done = true
@@ -210,10 +292,27 @@ func handle() -> bool:
 	return true
 
 
-func rebuild() -> void:
-	mesh.clear_surfaces()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh.surface_set_material(0, material)
+func clean(l: int) -> void:
+	if l < 0 or l >= lod_mesh.size() or not dirty[l]:
+		return
+	var a := base.duplicate()
+	a[Mesh.ARRAY_INDEX] = lod_index[l]
+	var m: ArrayMesh = lod_mesh[l]
+	m.clear_surfaces()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+	m.surface_set_material(0, material)
+	dirty[l] = false
+
+
+func use_lod(l: int) -> void:
+	if lod_mesh.is_empty():
+		return
+	l = clampi(l, 0, lod_mesh.size() - 1)
+	clean(l)
+	if l != current_lod:
+		current_lod = l
+		body.mesh = lod_mesh[l]
+		RenderingServer.instance_set_base(body.get_instance(), lod_mesh[l].get_rid())
 
 
 func configure(c: Variant) -> Dictionary:
@@ -227,8 +326,9 @@ func configure(c: Variant) -> Dictionary:
 		var m = load(c["material"])
 		if m is Material:
 			material = m
-			if mesh.get_surface_count() > 0:
-				mesh.surface_set_material(0, material)
+			for x in lod_mesh:
+				if x.get_surface_count() > 0:
+					x.surface_set_material(0, material)
 		else:
 			problems.append("material %s did not load as a Material" % c["material"])
 	if c.get("environment", null) is String:
@@ -241,11 +341,13 @@ func configure(c: Variant) -> Dictionary:
 		var s = load(c["scene"])
 		if s is PackedScene:
 			lights.queue_free()
+			rig = []
 			lights = s.instantiate()
 			root.add_child(lights)
 		else:
 			problems.append("scene %s did not load as a PackedScene" % c["scene"])
-	return {"ok": problems.is_empty(), "problems": problems, "material": material.resource_path, "environment": env_node.environment.resource_path}
+	return {"ok": problems.is_empty(), "problems": problems, "material": material.resource_path, "environment": env_node.environment.resource_path,
+		"default_lights": not rig.is_empty()}
 
 
 func slot(i: int) -> Dictionary:
@@ -262,6 +364,28 @@ func slot(i: int) -> Dictionary:
 	return slots[i]
 
 
+func on_frame(data: PackedByteArray, req: int, w: int, h: int, draw_ms: float, asked: int) -> void:
+	ready_frames.append([req, w, h, draw_ms, (Time.get_ticks_usec() - asked) / 1000.0, data])
+
+
+func flush_frames() -> void:
+	for f in ready_frames:
+		pending -= 1
+		send_frame(f[0], f[1], f[2], f[3], f[4], f[5])
+	ready_frames.clear()
+
+
+func send_frame(req: int, w: int, h: int, draw_ms: float, read_ms: float, data: PackedByteArray) -> void:
+	var out := PackedByteArray()
+	out.resize(20)
+	out.encode_u32(0, req)
+	out.encode_u32(4, w)
+	out.encode_u32(8, h)
+	out.encode_float(12, draw_ms)
+	out.encode_float(16, read_ms)
+	send(FRAME, out, data)
+
+
 func render(p: PackedByteArray) -> void:
 	var req := p.decode_u32(0)
 	var s := slot(p.decode_u32(4))
@@ -273,17 +397,29 @@ func render(p: PackedByteArray) -> void:
 	var far := p.decode_float(28)
 	var f := p.slice(32, 80).to_float32_array()
 	var mk := p.slice(80, 96).to_float32_array()
+	var lod := p.decode_u32(96)
+	if frame_delay_ms > 0:
+		OS.delay_msec(frame_delay_ms)
+	use_lod(lod)
 	var vp: SubViewport = s["vp"]
 	var cam: Camera3D = s["cam"]
 	vp.size = Vector2i(w, h)
 	vp.transparent_bg = (flags & 4) != 0
-	var xf := Transform3D(Basis(Vector3(f[0], f[1], f[2]), Vector3(f[3], f[4], f[5]), Vector3(f[6], f[7], f[8])), Vector3(f[9], f[10], f[11]))
+	var basis := Basis(Vector3(f[0], f[1], f[2]), Vector3(f[3], f[4], f[5]), Vector3(f[6], f[7], f[8]))
+	var xf := Transform3D(basis, Vector3(f[9], f[10], f[11]))
 	cam.transform = xf
 	RenderingServer.camera_set_transform(cam.get_camera_rid(), xf)
 	if flags & 1:
 		cam.set_orthogonal(a, near, far)
 	else:
 		cam.set_perspective(a, near, far)
+	for r in rig:
+		var d: Vector3 = basis * r[1]
+		var l: DirectionalLight3D = r[0]
+		var up := Vector3.UP if abs(d.normalized().y) < 0.95 else Vector3.FORWARD
+		var lx := Transform3D(Basis.looking_at(-d, up), Vector3.ZERO)
+		l.transform = lx
+		RenderingServer.instance_set_transform(l.get_instance(), lx)
 	marker.visible = (flags & 2) != 0
 	RenderingServer.instance_set_visible(marker.get_instance(), marker.visible)
 	if marker.visible:
@@ -293,17 +429,14 @@ func render(p: PackedByteArray) -> void:
 	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	RenderingServer.force_draw(false)
 	var t1 := Time.get_ticks_usec()
-	var img := vp.get_texture().get_image()
-	if img.get_format() != Image.FORMAT_RGBA8:
-		img.convert(Image.FORMAT_RGBA8)
-	var t2 := Time.get_ticks_usec()
-	if frame_delay_ms > 0:
-		OS.delay_msec(frame_delay_ms)
-	var out := PackedByteArray()
-	out.resize(20)
-	out.encode_u32(0, req)
-	out.encode_u32(4, img.get_width())
-	out.encode_u32(8, img.get_height())
-	out.encode_float(12, (t1 - t0) / 1000.0)
-	out.encode_float(16, (t2 - t1) / 1000.0)
-	send(FRAME, out, img.get_data())
+	if sync_readback:
+		flush_frames()
+		var img := vp.get_texture().get_image()
+		if img.get_format() != Image.FORMAT_RGBA8:
+			img.convert(Image.FORMAT_RGBA8)
+		send_frame(req, img.get_width(), img.get_height(), (t1 - t0) / 1000.0, (Time.get_ticks_usec() - t1) / 1000.0, img.get_data())
+		return
+	pending += 1
+	var tex := RenderingServer.texture_get_rd_texture(vp.get_texture().get_rid())
+	rd.texture_get_data_async(tex, 0, on_frame.bind(req, w, h, (t1 - t0) / 1000.0, t1))
+	flush_frames()
