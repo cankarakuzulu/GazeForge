@@ -4,7 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use gf_api::designer::{self, MacroSlope, TargetDeltas};
+use gf_api::designer::{self, MacroSamples, MacroSlope, TargetDeltas};
 use gf_api::{ApiError, Ctx};
 use serde_json::{Value, json};
 
@@ -21,6 +21,7 @@ pub struct Opened {
 pub enum Job {
     Load { store: String, spec: Option<String>, macro_file: Option<String> },
     Slope { name: String, at: f64, input: Value, prefetch: bool },
+    Samples { name: String, key: String, input: Value },
     Reference { input: Value },
     Save { input: Value },
 }
@@ -29,6 +30,7 @@ pub enum Done {
     Loaded { epoch: u64, result: Result<Box<Opened>, String>, ms: f64 },
     Settled { epoch: u64, generation: u64, sent: Values, result: Result<SettleOut, String>, queued_ms: f64 },
     Slope { epoch: u64, name: String, at: f64, result: Result<MacroSlope, String>, ms: f64 },
+    Samples { epoch: u64, name: String, key: String, result: Result<MacroSamples, String>, ms: f64 },
     Reference { epoch: u64, result: Result<Vec<f32>, String> },
     Saved { result: Result<Value, String> },
 }
@@ -108,6 +110,8 @@ impl Jobs {
         };
         {
             let (done, wake, gate) = (done.clone(), wake.clone(), slot.clone());
+            let cores = thread::available_parallelism().map_or(4, |n| n.get());
+            let samples_pool = rayon::ThreadPoolBuilder::new().num_threads((cores / 2).max(1)).thread_name(|i| format!("samples-{i}")).build().ok();
             thread::Builder::new()
                 .name("studio-jobs".into())
                 .spawn(move || {
@@ -120,6 +124,17 @@ impl Jobs {
                                     thread::sleep(std::time::Duration::from_millis(5));
                                 }
                                 Done::Slope { epoch, name, at, result: designer::macro_slope(&input).map_err(err), ms: 0.0 }
+                            }
+                            Job::Samples { name, key, input } => {
+                                while t.elapsed().as_secs_f64() < 10.0 && slot_busy(&gate) {
+                                    thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                let t = Instant::now();
+                                let result = match &samples_pool {
+                                    Some(p) => p.install(|| designer::macro_samples(&input)),
+                                    None => designer::macro_samples(&input),
+                                };
+                                Done::Samples { epoch, name, key, result: result.map_err(err), ms: ms(t) }
                             }
                             Job::Reference { input } => {
                                 Done::Reference { epoch, result: designer::settle_mesh(&input).map(|s| s.positions.iter().flatten().map(|&x| x as f32).collect()).map_err(err) }

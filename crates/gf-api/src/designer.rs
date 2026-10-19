@@ -367,13 +367,20 @@ pub fn settle_output() -> Value {
 
 pub fn macro_delta_input() -> Value {
     obj(
-        with(with(base_props(), character_props()), json!({"slider": {"type": "string", "minLength": 1}, "step": {"type": "number", "minimum": 0.001, "maximum": 0.5}})),
+        with(with(base_props(), character_props()), json!({"slider": {"type": "string", "minLength": 1}, "step": {"type": "number", "minimum": 0.001, "maximum": 0.5},
+                                                           "sampled": {"type": "boolean", "description": "return samples instead of the two slopes: at every part boundary of the slider plus a grid of sample_spacing, for piecewise-linear interpolation (default false)"},
+                                                           "sample_spacing": {"type": "number", "minimum": 0.01, "maximum": 1, "description": "grid spacing of the samples (default 0.25)"},
+                                                           "sample_form": {"type": "string", "enum": ["placed", "layer"], "description": "placed (default): the settled game positions of the character at each sample value, as designer.settle places them; layer: the macro layer alone at the game vertices, cheaper, without the placement"},
+                                                           "eyes": {"type": "string", "minLength": 1, "description": "placed samples: the eyes file the settle uses"},
+                                                           "fast": {"type": "boolean", "description": "placed samples: the designer draft placement, as in designer.settle"}})),
         &["store", "pack", "catalog", "game", "macro", "slider"],
     )
 }
 
 pub fn macro_delta_output() -> Value {
-    shape(json!({"up_f32_b64": {"type": "string"}, "down_f32_b64": {"type": "string"}, "value": {"type": "number"}, "step": {"type": "number"}}))
+    shape(json!({"up_f32_b64": {"type": "string"}, "down_f32_b64": {"type": "string"}, "value": {"type": "number"}, "step": {"type": "number"},
+                 "values": {"type": "array", "description": "sampled: the slider values, ascending, 0 and 1 included"},
+                 "layers_f32_b64": {"type": "array", "description": "sampled: per value, the macro layer at every game vertex in metres"}}))
 }
 
 pub fn scene_input() -> Value {
@@ -642,20 +649,101 @@ pub struct MacroSlope {
     pub vertices: usize,
 }
 
-pub fn macro_slope(input: &Value) -> Result<MacroSlope, ApiError> {
-    let (loaded, _) = load(input)?;
-    let source = macro_source(input)?.ok_or_else(|| ApiError::invalid("macro_delta needs macro, the macro definition file"))?;
-    let spec = spec_of(&with(input.clone(), json!({"macros": input.get("macros").cloned().filter(|m| !m.is_null()).unwrap_or(json!({}))})), &loaded, Some(&source))?;
-    let m = spec.macros.clone().expect("set above");
-    let slider = text(input, "slider");
-    let value = *m.sliders.get(slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
-    let step = input.get("step").and_then(Value::as_f64).unwrap_or(0.05);
-    let at = |v: f64| -> Result<Vec<[f64; 3]>, ApiError> {
+struct MacroAt {
+    loaded: Arc<Loaded>,
+    source: MacroSource,
+    macros: MacroSpec,
+    slider: String,
+    value: f64,
+}
+
+impl MacroAt {
+    fn new(input: &Value) -> Result<MacroAt, ApiError> {
+        let (loaded, _) = load(input)?;
+        let source = macro_source(input)?.ok_or_else(|| ApiError::invalid("macro_delta needs macro, the macro definition file"))?;
+        let spec = spec_of(&with(input.clone(), json!({"macros": input.get("macros").cloned().filter(|m| !m.is_null()).unwrap_or(json!({}))})), &loaded, Some(&source))?;
+        let macros = spec.macros.clone().expect("set above");
+        let slider = text(input, "slider").to_string();
+        let value = *macros.sliders.get(&slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
+        Ok(MacroAt { loaded, source, macros, slider, value })
+    }
+
+    fn layer(&self, v: f64) -> Result<Vec<[f64; 3]>, ApiError> {
+        let m = &self.macros;
         let mut sliders = m.sliders.clone();
-        sliders.insert(slider.to_string(), v);
-        let layer = loaded.macro_layer(&source, &m.mode, &sliders, m.head_scale)?;
-        Ok(loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
+        sliders.insert(self.slider.clone(), v);
+        let layer = self.loaded.macro_layer(&self.source, &m.mode, &sliders, m.head_scale)?;
+        Ok(self.loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
+    }
+}
+
+pub const MACRO_SAMPLE_SPACING: f64 = 0.25;
+const SAMPLE_MERGE: f64 = 1e-4;
+
+pub fn macro_sample_values(source: &MacroSource, slider: &str, spacing: f64) -> Vec<f64> {
+    let mut knots: Vec<f64> = vec![0.0, 1.0];
+    if let Some(parts) = source.definition.parts.get(slider) {
+        knots.extend(parts.iter().flat_map(|p| [p.lowest, p.highest]).filter(|x| *x > 0.0 && *x < 1.0));
+    }
+    knots.sort_by(f64::total_cmp);
+    let mut values: Vec<f64> = Vec::new();
+    for k in knots {
+        if values.last().is_none_or(|l| k - l > SAMPLE_MERGE) {
+            values.push(k);
+        }
+    }
+    let n = (1.0 / spacing.clamp(0.01, 1.0)).round().max(1.0) as usize;
+    for g in (1..n).map(|i| i as f64 / n as f64) {
+        if values.iter().all(|v| (v - g).abs() > SAMPLE_MERGE) {
+            values.push(g);
+        }
+    }
+    values.sort_by(f64::total_cmp);
+    values
+}
+
+pub struct MacroSamples {
+    pub value: f64,
+    pub spacing: f64,
+    pub placed: bool,
+    pub values: Vec<f64>,
+    pub layers: Vec<Vec<f32>>,
+    pub vertices: usize,
+}
+
+pub fn macro_samples(input: &Value) -> Result<MacroSamples, ApiError> {
+    let at = MacroAt::new(input)?;
+    let spacing = input.get("sample_spacing").and_then(Value::as_f64).unwrap_or(MACRO_SAMPLE_SPACING);
+    let placed = match input.get("sample_form").and_then(Value::as_str).unwrap_or("placed") {
+        "placed" => true,
+        "layer" => false,
+        other => return Err(ApiError::invalid(format!("sample_form {other} is neither placed nor layer"))),
     };
+    let values = macro_sample_values(&at.source, &at.slider, spacing);
+    let mut layers = Vec::with_capacity(values.len());
+    for &v in &values {
+        let rows = if placed {
+            let mut sliders = at.macros.sliders.clone();
+            sliders.insert(at.slider.clone(), v);
+            let mut one = input.clone();
+            one["macros"] = json!({"sliders": sliders, "mode": at.macros.mode, "head_scale": at.macros.head_scale});
+            if let Some(o) = one.as_object_mut() {
+                o.remove("uvs");
+            }
+            settle_mesh(&one)?.positions
+        } else {
+            at.layer(v)?
+        };
+        layers.push(rows.iter().flatten().map(|&x| x as f32).collect::<Vec<f32>>());
+    }
+    Ok(MacroSamples { value: at.value, spacing, placed, values, layers, vertices: at.loaded.game.kept.len() })
+}
+
+pub fn macro_slope(input: &Value) -> Result<MacroSlope, ApiError> {
+    let m = MacroAt::new(input)?;
+    let value = m.value;
+    let step = input.get("step").and_then(Value::as_f64).unwrap_or(0.05);
+    let at = |v: f64| m.layer(v);
     let (hi, lo) = ((value + step).min(1.0), (value - step).max(0.0));
     let mid = at(value)?;
     let slope = |far: &[[f64; 3]], span: f64| -> Vec<f32> {
@@ -762,6 +850,15 @@ pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 
 pub fn macro_delta(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let started = Instant::now();
+    if input.get("sampled").and_then(Value::as_bool).unwrap_or(false) {
+        let s = macro_samples(input)?;
+        let layers: Vec<String> = s.layers.iter().map(|l| f32_base64(l.iter().map(|&x| x as f64))).collect();
+        let what = if s.placed { "the settled game positions P(x) in metres (designer.settle of the character with the slider at x)" } else { "the macro layer P(x) in metres at each game vertex" };
+        return Ok(json!({"slider": text(input, "slider"), "value": s.value, "sampled": true, "sample_form": if s.placed { "placed" } else { "layer" }, "sample_spacing": s.spacing,
+                         "values": s.values, "layers_f32_b64": layers, "vertices": s.vertices,
+                         "definition": format!("{what} for every sample value x (0, 1, every part boundary of the slider, a grid of sample_spacing); a preview interpolates P piecewise-linearly and moves the anchor by P(v) - P(v0)"),
+                         "seconds": started.elapsed().as_secs_f64()}));
+    }
     let s = macro_slope(input)?;
     let encode = |v: &[f32]| f32_base64(v.iter().map(|&x| x as f64));
     Ok(json!({"slider": text(input, "slider"), "value": s.value, "step": s.step, "up_f32_b64": encode(&s.up), "down_f32_b64": encode(&s.down), "vertices": s.vertices,
