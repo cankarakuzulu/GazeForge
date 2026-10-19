@@ -60,13 +60,13 @@ pub(crate) fn map_each<T, F: Fn(usize) -> T>(items: &[usize], f: F) -> Vec<T> {
 }
 
 #[cfg(feature = "parallel")]
-pub(crate) fn map_range<T: Send, F: Fn(usize) -> T + Sync + Send>(count: usize, f: F) -> Vec<T> {
+pub fn map_range<T: Send, F: Fn(usize) -> T + Sync + Send>(count: usize, f: F) -> Vec<T> {
     use rayon::prelude::*;
     (0..count).into_par_iter().map(f).collect()
 }
 
 #[cfg(not(feature = "parallel"))]
-pub(crate) fn map_range<T, F: Fn(usize) -> T>(count: usize, f: F) -> Vec<T> {
+pub fn map_range<T, F: Fn(usize) -> T>(count: usize, f: F) -> Vec<T> {
     (0..count).map(f).collect()
 }
 

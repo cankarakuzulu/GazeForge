@@ -649,6 +649,147 @@ pub fn save(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(json!({"out": out, "revision": revision, "spec": serde_json::to_value(&spec).map_err(|e| ApiError::internal(e.to_string()))?}))
 }
 
+type BaseRigSlot = Mutex<Option<(String, Arc<gf_core::face_rig::BaseRig>)>>;
+static RIG_CACHE: OnceLock<BaseRigSlot> = OnceLock::new();
+
+pub fn rig_face_input() -> Value {
+    obj(
+        with(with(base_props(), character_props()), json!({
+            "morphs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "description": "the expression target ids, in slider order"},
+            "morph_dir": {"type": "string", "minLength": 1, "description": "directory of <id>.npz sparse targets on the dense topology; an id not found there comes from the catalog"},
+            "jaw": {"type": "string", "minLength": 1, "description": "the jaw-open target id the hinge is fitted to (default: the morph whose id ends in jawOpen)"},
+            "eyes": {"type": "string", "minLength": 1, "description": "optional eyes file: eye joint positions and the placement's eyelid clearance; without it the eye joints sit between the lid joints"},
+            "rounds": {"type": "integer", "minimum": 0, "maximum": 6, "description": "weight refinement rounds on the base (default 2)"},
+            "payload": {"type": "boolean", "description": "return the per-vertex arrays (default true); false returns the joints, poses and report only"}})),
+        &["store", "pack", "catalog", "game", "morphs"],
+    )
+}
+
+pub fn rig_face_output() -> Value {
+    shape(json!({"names": {"type": "array"}, "joints": {"type": "array"}, "poses": {"type": "array"}, "fit": {"type": "array"}, "weights": {"type": "object"},
+                 "rest_f32_b64": {"type": "string"}, "influence_joints_u8_b64": {"type": "string"}, "influence_weights_f32_b64": {"type": "string"},
+                 "blend": {"type": "object"}, "timing_ms": {"type": "object"}}))
+}
+
+pub fn rig_face(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    use gf_core::face_rig as fr;
+    let started = Instant::now();
+    let (loaded, cached) = load(input)?;
+    let ids: Vec<String> = input.get("morphs").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    if ids.is_empty() {
+        return Err(ApiError::invalid("morphs must name at least one target"));
+    }
+    let dir = input.get("morph_dir").and_then(Value::as_str);
+    let fetch = |id: &str| -> Result<SparseTarget, ApiError> {
+        if let Some(d) = dir {
+            let path = Path::new(d).join(format!("{id}.npz"));
+            if path.is_file() {
+                let bytes = std::fs::read(&path).map_err(|e| ApiError::internal(format!("{}: {e}", path.display())))?;
+                let t = gf_io::store::sparse_from_npz(&bytes).map_err(|e| ApiError::invalid(format!("{id}: {e}")))?;
+                t.check(loaded.dense.positions.len()).map_err(|e| ApiError::invalid(format!("{id}: {e}")))?;
+                return Ok(t);
+            }
+        }
+        loaded.target(id).map(|t| (*t).clone())
+    };
+    let targets: Vec<SparseTarget> = ids.iter().map(|id| fetch(id)).collect::<Result<_, _>>()?;
+    let jaw_id = match input.get("jaw").and_then(Value::as_str) {
+        Some(j) => j.to_string(),
+        None => ids.iter().find(|i| i.ends_with("jawOpen")).cloned().ok_or_else(|| ApiError::invalid("no morph id ends in jawOpen; name the jaw target with jaw"))?,
+    };
+    let rounds = input.get("rounds").and_then(Value::as_u64).unwrap_or(2).min(6) as usize;
+    let key = format!("{}|{}|{}|{}|{}", loaded.key, dir.unwrap_or(""), ids.join(","), jaw_id, rounds);
+    let slot = RIG_CACHE.get_or_init(|| Mutex::new(None));
+    let (base_rig, rig_cached) = {
+        let mut held = slot.lock().map_err(|_| ApiError::internal("the rig cache lock is poisoned"))?;
+        match held.as_ref().filter(|(k, _)| *k == key) {
+            Some((_, r)) => (r.clone(), true),
+            None => {
+                let jaw = fetch(&jaw_id)?;
+                let r = Arc::new(fr::base_rig(&loaded.dense.positions, &loaded.game.kept, &loaded.game.triangles, &jaw, &targets, rounds).map_err(ApiError::invalid)?);
+                *held = Some((key, r.clone()));
+                (r, false)
+            }
+        }
+    };
+    let t_rig = started.elapsed().as_secs_f64();
+    let source = macro_source(input)?;
+    let spec = spec_of(input, &loaded, source.as_ref())?;
+    let eyes = match input.get("eyes").and_then(Value::as_str) {
+        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?,
+        None => Vec::new(),
+    };
+    let eye_spheres: Vec<([f64; 3], f64)> = eyes.iter().map(|e| (e.centre, e.radius)).collect();
+    let mut eye_centres: Vec<[f64; 3]> = eyes.iter().map(|e| e.centre).collect();
+    eye_centres.sort_by(|a, b| b[0].total_cmp(&a[0]));
+    let version = PlacementVersion::parse(&spec.base.placement).map_err(ApiError::invalid)?;
+    let placement = placer(version, eyes, false)?;
+    let dense = loaded.evaluate(&spec, source.as_ref())?;
+    let placed = placement.place_prepared(&dense, &DenseMesh { triangles: &loaded.dense.triangles, triangle_uvs: &loaded.dense.triangle_uvs }, &loaded.game, loaded.prepared());
+    let t_place = started.elapsed().as_secs_f64();
+    let rest = placed.game;
+    let seam = fr::neck_seam(&loaded.game.triangles, &rest).map_err(ApiError::invalid)?;
+    let neck = fr::mean(seam.iter().map(|&g| rest[g as usize]));
+    let hinge = gf_core::rig::character_hinge(&loaded.dense.positions, &dense, &base_rig.hinge);
+    let (eye_left, eye_right, eye_source) = if eye_centres.len() == 2 {
+        (eye_centres[0], eye_centres[1], "eyes file")
+    } else {
+        let (l, r) = fr::eye_estimate(&dense);
+        (l, r, "estimated from the eye corners (no eyes file)")
+    };
+    let pivots = fr::character_pivots([neck, hinge, eye_left, eye_right], &base_rig.regions, &dense);
+    let deltas = fr::game_deltas(&targets, &loaded.game.kept, dense.len());
+    let emphasis = fr::lid_emphasis(&rest, &eye_spheres);
+    let problem = fr::Problem { rest: &rest, influences: &base_rig.influences, pivots: &pivots, emphasis: Some(&emphasis) };
+    let fits = fr::fit_shapes(&problem, &deltas);
+    let t_fit = started.elapsed().as_secs_f64();
+    let names: Vec<String> = ids.iter().map(|id| id.rsplit('/').next().unwrap_or(id).to_string()).collect();
+    let all = fr::names();
+    let parents = fr::parents();
+    let joints: Vec<Value> = (0..fr::count()).map(|j| json!({"name": all[j], "parent": parents[j], "position": pivots[j], "posed": fr::is_free(j)})).collect();
+    let poses: Vec<Value> = fits.iter().map(|f| json!(f.0.iter().map(|p| [p.rotation[0], p.rotation[1], p.rotation[2], p.translation[0], p.translation[1], p.translation[2]]).collect::<Vec<_>>())).collect();
+    let fit: Vec<Value> = names.iter().zip(&fits).map(|(n, f)| {
+        let mut row = serde_json::to_value(&f.1).unwrap_or(Value::Null);
+        row["name"] = json!(n);
+        row["poorly_expressed"] = json!(fr::poorly_expressed(&f.1));
+        row
+    }).collect();
+    let mut out = json!({"names": names, "targets": ids, "jaw": jaw_id, "joints": joints, "eye_joints": eye_source, "poses": poses, "fit": fit,
+                         "weights": base_rig.report, "vertices": rest.len(), "revision": spec.revision(), "placement": placement.version().to_string(),
+                         "cached": cached, "rig_cached": rig_cached,
+                         "definitions": {"poses": "per shape and joint [rx, ry, rz, tx, ty, tz] in the dense frame (metres, z up): x' = R(r) (x - p) + p + t with p the joint position and R(r) the rotation by the rotation vector r",
+                                         "skinning": "x' = sum over a vertex's influences of weight * (joint transform applied to x)",
+                                         "blend": "delta[s] = the target's dense delta at each game vertex's dense index (as designer.pack), f32 metres; the export's morphs are F(c + e) - F(c) through the placement instead",
+                                         "fit": "the poses are fitted to these blend deltas on the settled game mesh; errors in mm over the vertices the shape or the joints move more than 0.1 mm"}});
+    if input.get("payload").and_then(Value::as_bool).unwrap_or(true) {
+        let (mut jb, mut wb) = (Vec::with_capacity(rest.len() * 4), Vec::with_capacity(rest.len() * 16));
+        for inf in &base_rig.influences {
+            for k in 0..4 {
+                let (j, w) = inf.get(k).copied().unwrap_or((0, 0.0));
+                jb.push(j as u8);
+                wb.extend((w as f32).to_le_bytes());
+            }
+        }
+        let (mut offsets, mut index, mut delta) = (vec![0u32], Vec::new(), Vec::new());
+        for d in &deltas {
+            for (g, v) in d.iter().enumerate() {
+                if v.iter().any(|x| *x != 0.0) {
+                    index.extend((g as u32).to_le_bytes());
+                    delta.extend(v.iter().flat_map(|x| (*x as f32).to_le_bytes()));
+                }
+            }
+            offsets.push((index.len() / 4) as u32);
+        }
+        out["rest_f32_b64"] = json!(f32_base64(rest.iter().flatten().copied()));
+        out["influence_joints_u8_b64"] = json!(base64(&jb));
+        out["influence_weights_f32_b64"] = json!(base64(&wb));
+        out["blend"] = json!({"offsets": offsets, "index_u32_b64": base64(&index), "delta_f32_b64": base64(&delta)});
+    }
+    let t_end = started.elapsed().as_secs_f64();
+    out["timing_ms"] = json!({"base_rig": t_rig * 1000.0, "place": (t_place - t_rig) * 1000.0, "fit": (t_fit - t_place) * 1000.0, "encode": (t_end - t_fit) * 1000.0, "total": t_end * 1000.0});
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

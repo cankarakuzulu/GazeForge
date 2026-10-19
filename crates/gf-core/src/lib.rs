@@ -1,5 +1,6 @@
 pub mod body;
 pub mod catalog;
+pub mod face_rig;
 pub mod fit;
 pub mod game_mesh;
 pub mod gates;
