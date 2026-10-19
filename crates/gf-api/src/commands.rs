@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, body, designer, jobs, photo, photo_fit, photo_gate, registry};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, jobs, photo, photo_fit, photo_gate, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -310,6 +310,24 @@ pub static REGISTRY: &[CommandDef] = &[
         input: body::stitch_input,
         output: body::stitch_output,
         run: body::stitch,
+    },
+    CommandDef {
+        name: "animation.from_video",
+        kind: Kind::Job,
+        summary: "Facial animation from a video or an image sequence: per frame the face landmarker's 51 ARKit-named blendshape scores and head pose, a per-frame gate (face found, one face, head pose, face size, landmarks in frame) with rejected frames filled by interpolation, neutral and optional range-of-motion calibration (gains, leaks, head bias, a reusable profile), crosstalk couplings, an opt-in lid guard, One Euro smoothing, retarget by name to a character's morph order; writes a clip, a report and, with glb, a copy of the character glb with a glTF animation (morph weights, head joint rotation, optional blended joint tracks).",
+        limits: "Job only (jobs.submit). The landmarker model is supplied by the user (landmarker); it reads one face per frame and its scores are relative estimates, not measurements. Head pose is relative to the neutral segment; translation is not exported. Joint tracks are an approximation (each shape's fitted pose blended by its weight).",
+        input: anim::video_input,
+        output: anim::output,
+        run: anim::from_video,
+    },
+    CommandDef {
+        name: "animation.from_csv",
+        kind: Kind::Mutation,
+        summary: "EXPERIMENTAL: facial animation from a CSV of ARKit blendshape columns (as a Live Link Face recording is believed to have), read by header names; the same calibration, smoothing, retarget and outputs as animation.from_video.",
+        limits: "The recording app's CSV columns, timecode format and head rotation units are unconfirmed; head rotation is ignored unless head_units is given. tongueOut and eye rotation columns are not used.",
+        input: anim::csv_input,
+        output: anim::output,
+        run: anim::from_csv,
     },
 ];
 

@@ -583,6 +583,35 @@ export class Viewer {
     this.meshes.set(id, m);
   }
 
+  poseExtra(id, rot, centre) {
+    const e = this.meshes.get(id);
+    if (!e || e.kind === "head") return false;
+    if (!e.rest) e.rest = { pos: e.cpuPos, nrm: e.nrmCPU };
+    let pos = e.rest.pos, nrm = e.rest.nrm;
+    if (rot) {
+      const c = centre || [0, 0, 0], P = e.rest.pos, N = e.rest.nrm;
+      pos = new Float32Array(P.length);
+      nrm = new Float32Array(N.length);
+      for (let g = 0; g < P.length; g += 3) {
+        const x = P[g] - c[0], y = P[g + 1] - c[1], z = P[g + 2] - c[2], a = N[g], b = N[g + 1], d = N[g + 2];
+        pos[g] = rot[0] * x + rot[1] * y + rot[2] * z + c[0];
+        pos[g + 1] = rot[3] * x + rot[4] * y + rot[5] * z + c[1];
+        pos[g + 2] = rot[6] * x + rot[7] * y + rot[8] * z + c[2];
+        nrm[g] = rot[0] * a + rot[1] * b + rot[2] * d;
+        nrm[g + 1] = rot[3] * a + rot[4] * b + rot[5] * d;
+        nrm[g + 2] = rot[6] * a + rot[7] * b + rot[8] * d;
+      }
+    }
+    if (pos === e.cpuPos) return true;
+    this.drop(e.pos);
+    this.drop(e.nrm);
+    e.pos = this.tex("f3", e.n, pos);
+    e.nrm = this.tex("f3", e.n, nrm);
+    e.cpuPos = pos;
+    e.nrmCPU = nrm;
+    return true;
+  }
+
   setOverlay(id, spec) {
     const old = this.overlays.get(id);
     if (!spec) { this.overlays.delete(id); return; }
