@@ -44,66 +44,62 @@ impl Lod {
     }
 }
 
+pub struct EdgePairs {
+    tri: usize,
+    corners: usize,
+    pairs: Vec<[u32; 6]>,
+    boundary: Vec<u32>,
+}
+
+impl EdgePairs {
+    pub fn new(idx: &[u32]) -> EdgePairs {
+        let tri = idx.len() / 3;
+        let mut seen: HashMap<u64, i64> = HashMap::with_capacity(idx.len());
+        let corner_of = |t: usize, v: u32| -> u32 { (0..3).find(|&k| idx[t * 3 + k] == v).map_or(u32::MAX, |k| (t * 3 + k) as u32) };
+        let (mut pairs, mut order) = (Vec::new(), Vec::new());
+        for t in 0..tri {
+            for k in 0..3 {
+                let (a, b) = (idx[t * 3 + (k + 1) % 3], idx[t * 3 + (k + 2) % 3]);
+                let key = (a.min(b) as u64) * 4194304 + a.max(b) as u64;
+                let Some(&first) = seen.get(&key) else {
+                    seen.insert(key, (t * 3 + k) as i64);
+                    order.push(key);
+                    continue;
+                };
+                if first < 0 {
+                    continue;
+                }
+                seen.insert(key, -1);
+                let t1 = (first / 3) as usize;
+                pairs.push([first as u32, (t * 3 + k) as u32, corner_of(t1, a), corner_of(t, a), corner_of(t1, b), corner_of(t, b)]);
+            }
+        }
+        let boundary = order.into_iter().filter_map(|key| u32::try_from(seen[&key]).ok()).collect();
+        EdgePairs { tri, corners: idx.len(), pairs, boundary }
+    }
+
+    pub fn flags(&self, uvs: &[f32]) -> (Vec<u32>, usize, usize) {
+        let mut flags = vec![0u32; self.tri];
+        if uvs.len() >= self.corners * 2 {
+            let uv = |c: u32| -> [f32; 2] { if c == u32::MAX { [0.0, 0.0] } else { [uvs[c as usize * 2], uvs[c as usize * 2 + 1]] } };
+            let apart = |p: [f32; 2], q: [f32; 2]| (p[0] as f64 - q[0] as f64).abs() > 1e-5 || (p[1] as f64 - q[1] as f64).abs() > 1e-5;
+            for &[c1, c2, pa, qa, pb, qb] in &self.pairs {
+                if apart(uv(pa), uv(qa)) || apart(uv(pb), uv(qb)) {
+                    flags[c1 as usize / 3] |= 8 << (c1 % 3);
+                    flags[c2 as usize / 3] |= 8 << (c2 % 3);
+                }
+            }
+        }
+        for &c in &self.boundary {
+            flags[c as usize / 3] |= 1 << (c % 3);
+        }
+        let seams: usize = flags.iter().map(|f| (0..3).filter(|k| f & (8 << k) != 0).count()).sum();
+        (flags, self.boundary.len(), seams / 2)
+    }
+}
+
 pub fn edge_flags(idx: &[u32], uvs: &[f32]) -> (Vec<u32>, usize, usize) {
-    let tri = idx.len() / 3;
-    let mut flags = vec![0u32; tri];
-    let mut seen: HashMap<u64, i64> = HashMap::with_capacity(idx.len());
-    let has_uv = uvs.len() >= idx.len() * 2;
-    let uv_at = |t: usize, v: u32| -> [f32; 2] {
-        for k in 0..3 {
-            if idx[t * 3 + k] == v {
-                return [uvs[(t * 3 + k) * 2], uvs[(t * 3 + k) * 2 + 1]];
-            }
-        }
-        [0.0, 0.0]
-    };
-    let mut order: Vec<u64> = Vec::new();
-    for t in 0..tri {
-        for k in 0..3 {
-            let (a, b) = (idx[t * 3 + (k + 1) % 3], idx[t * 3 + (k + 2) % 3]);
-            let key = (a.min(b) as u64) * 4194304 + a.max(b) as u64;
-            let Some(&first) = seen.get(&key) else {
-                seen.insert(key, (t * 3 + k) as i64);
-                order.push(key);
-                continue;
-            };
-            if first < 0 {
-                continue;
-            }
-            seen.insert(key, -1);
-            if has_uv {
-                let (t1, k1) = ((first / 3) as usize, (first % 3) as u32);
-                let mut seam = false;
-                for v in [a, b] {
-                    let (p, q) = (uv_at(t1, v), uv_at(t, v));
-                    if (p[0] as f64 - q[0] as f64).abs() > 1e-5 || (p[1] as f64 - q[1] as f64).abs() > 1e-5 {
-                        seam = true;
-                    }
-                }
-                if seam {
-                    flags[t1] |= 8 << k1;
-                    flags[t] |= 8 << k;
-                }
-            }
-        }
-    }
-    let mut boundary = 0;
-    for key in order {
-        let c = seen[&key];
-        if c >= 0 {
-            flags[(c / 3) as usize] |= 1 << (c % 3);
-            boundary += 1;
-        }
-    }
-    let mut seams = 0;
-    for f in &flags {
-        for k in 0..3 {
-            if f & (8 << k) != 0 {
-                seams += 1;
-            }
-        }
-    }
-    (flags, boundary, seams / 2)
+    EdgePairs::new(idx).flags(uvs)
 }
 
 pub fn vertex_normals(pos: &[f32], idx: &[u32], n: usize) -> Vec<f32> {
@@ -348,6 +344,92 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn edge_flags_reference(idx: &[u32], uvs: &[f32]) -> (Vec<u32>, usize, usize) {
+        let tri = idx.len() / 3;
+        let mut flags = vec![0u32; tri];
+        let mut seen: HashMap<u64, i64> = HashMap::with_capacity(idx.len());
+        let has_uv = uvs.len() >= idx.len() * 2;
+        let uv_at = |t: usize, v: u32| -> [f32; 2] {
+            for k in 0..3 {
+                if idx[t * 3 + k] == v {
+                    return [uvs[(t * 3 + k) * 2], uvs[(t * 3 + k) * 2 + 1]];
+                }
+            }
+            [0.0, 0.0]
+        };
+        let mut order: Vec<u64> = Vec::new();
+        for t in 0..tri {
+            for k in 0..3 {
+                let (a, b) = (idx[t * 3 + (k + 1) % 3], idx[t * 3 + (k + 2) % 3]);
+                let key = (a.min(b) as u64) * 4194304 + a.max(b) as u64;
+                let Some(&first) = seen.get(&key) else {
+                    seen.insert(key, (t * 3 + k) as i64);
+                    order.push(key);
+                    continue;
+                };
+                if first < 0 {
+                    continue;
+                }
+                seen.insert(key, -1);
+                if has_uv {
+                    let (t1, k1) = ((first / 3) as usize, (first % 3) as u32);
+                    let mut seam = false;
+                    for v in [a, b] {
+                        let (p, q) = (uv_at(t1, v), uv_at(t, v));
+                        if (p[0] as f64 - q[0] as f64).abs() > 1e-5 || (p[1] as f64 - q[1] as f64).abs() > 1e-5 {
+                            seam = true;
+                        }
+                    }
+                    if seam {
+                        flags[t1] |= 8 << k1;
+                        flags[t] |= 8 << k;
+                    }
+                }
+            }
+        }
+        let mut boundary = 0;
+        for key in order {
+            let c = seen[&key];
+            if c >= 0 {
+                flags[(c / 3) as usize] |= 1 << (c % 3);
+                boundary += 1;
+            }
+        }
+        let mut seams = 0;
+        for f in &flags {
+            for k in 0..3 {
+                if f & (8 << k) != 0 {
+                    seams += 1;
+                }
+            }
+        }
+        (flags, boundary, seams / 2)
+    }
+
+    #[test]
+    fn precomputed_edge_pairs_flag_exactly_like_the_per_settle_scan() {
+        let n = 9u32;
+        let mut idx = Vec::new();
+        for y in 0..n - 1 {
+            for x in 0..n - 1 {
+                if (x, y) == (3, 3) {
+                    continue;
+                }
+                let v = y * n + x;
+                idx.extend([v, v + 1, v + n, v + n, v + 1, v + n + 1]);
+            }
+        }
+        idx.extend([0, 1, 2 * n]);
+        idx.extend([1, 0, 3 * n]);
+        let corners = idx.len();
+        let uvs: Vec<f32> = (0..corners * 2).map(|i| { let v = idx[i / 2] as f32; if (i / 6) % 7 == 0 { v * 0.37 + 0.5 } else { v * 0.37 } }).collect();
+        for uv in [uvs.clone(), Vec::new()] {
+            assert_eq!(edge_flags(&idx, &uv), edge_flags_reference(&idx, &uv));
+        }
+        let (_, boundary, seams) = edge_flags(&idx, &uvs);
+        assert!(boundary > 0 && seams > 0);
+    }
 
     #[test]
     fn edge_flags_mark_open_boundaries_and_uv_seams() {

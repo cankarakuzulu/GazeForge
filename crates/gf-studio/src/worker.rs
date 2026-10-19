@@ -1,4 +1,5 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -7,7 +8,7 @@ use gf_api::designer::{self, MacroSlope, TargetDeltas};
 use gf_api::{ApiError, Ctx};
 use serde_json::{Value, json};
 
-use crate::session::{Session, SettleOut, edge_flags, run_settle};
+use crate::session::{EdgePairs, Session, SettleOut, run_settle};
 use crate::shape::Values;
 
 pub struct Opened {
@@ -38,7 +39,7 @@ pub struct SettleRequest {
     pub sent: Values,
     pub input: Value,
     pub at: Instant,
-    pub indices: Option<Arc<Vec<u32>>>,
+    pub edges: Option<Arc<EdgePairs>>,
 }
 
 #[derive(Default)]
@@ -46,6 +47,19 @@ struct Slot {
     next: Option<SettleRequest>,
     running: bool,
     cancelled: u64,
+    dragging: bool,
+    stop: Arc<AtomicBool>,
+    aborted: u64,
+    requeued: u64,
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct SettleState {
+    pub queued: bool,
+    pub running: bool,
+    pub cancelled: u64,
+    pub aborted: u64,
+    pub requeued: u64,
 }
 
 type Wake = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
@@ -128,7 +142,7 @@ impl Jobs {
         {
             let (slot, wake) = (slot.clone(), wake.clone());
             let cores = thread::available_parallelism().map_or(4, |n| n.get());
-            let threads = std::env::var("GAZEFORGE_SETTLE_THREADS").ok().and_then(|t| t.parse::<usize>().ok()).unwrap_or(cores / 2).max(1);
+            let threads = std::env::var("GAZEFORGE_SETTLE_THREADS").ok().and_then(|t| t.parse::<usize>().ok()).unwrap_or(cores).max(1);
             let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("settle-{i}")).build().ok();
             thread::Builder::new()
                 .name("studio-settle".into())
@@ -137,22 +151,41 @@ impl Jobs {
                         let req = {
                             let (lock, cv) = &*slot;
                             let Ok(mut s) = lock.lock() else { return };
-                            while s.next.is_none() {
+                            while s.next.is_none() || s.dragging {
                                 s = match cv.wait(s) {
                                     Ok(s) => s,
                                     Err(_) => return,
                                 };
                             }
                             s.running = true;
-                            s.next.take().expect("checked above")
+                            s.stop = Arc::new(AtomicBool::new(false));
+                            (s.next.take().expect("checked above"), s.stop.clone())
                         };
+                        let (req, stop) = req;
                         let queued_ms = ms(req.at);
-                        let mut result = match &pool {
-                            Some(p) => p.install(|| run_settle(&req.input)),
-                            None => run_settle(&req.input),
+                        let run = || gf_geom::cancel::scope(&stop, || run_settle(&req.input));
+                        let ran = match &pool {
+                            Some(p) => p.install(run),
+                            None => run(),
                         };
-                        if let (Ok(out), Some(idx)) = (result.as_mut(), req.indices.as_ref()) {
-                            out.flags = out.uvs.as_ref().map(|u| edge_flags(idx, u));
+                        let mut result = match ran {
+                            Ok(r) => r,
+                            Err(gf_geom::cancel::Cancelled) => {
+                                if let Ok(mut s) = slot.0.lock() {
+                                    s.running = false;
+                                    s.aborted += 1;
+                                    if s.next.is_none() {
+                                        s.requeued += 1;
+                                        s.next = Some(req);
+                                    }
+                                }
+                                continue;
+                            }
+                        };
+                        if let (Ok(out), Some(idx)) = (result.as_mut(), req.edges.as_ref()) {
+                            let t = Instant::now();
+                            out.flags = out.uvs.as_ref().map(|u| idx.flags(u));
+                            out.server_ms["edge_flags"] = json!(ms(t));
                         }
                         let sent = Done::Settled { epoch: req.epoch, generation: req.generation, sent: req.sent, result, queued_ms };
                         let gone = done.send(sent).is_err();
@@ -187,12 +220,26 @@ impl Jobs {
                 s.cancelled += 1;
             }
             s.next = Some(req);
+            s.stop.store(true, Ordering::Relaxed);
             cv.notify_one();
         }
     }
 
-    pub fn settle_state(&self) -> (bool, bool, u64) {
-        self.slot.0.lock().map(|s| (s.next.is_some(), s.running, s.cancelled)).unwrap_or((false, false, 0))
+    pub fn set_dragging(&self, on: bool) {
+        let (lock, cv) = &*self.slot;
+        if let Ok(mut s) = lock.lock()
+            && s.dragging != on
+        {
+            s.dragging = on;
+            if on {
+                s.stop.store(true, Ordering::Relaxed);
+            }
+            cv.notify_one();
+        }
+    }
+
+    pub fn settle_state(&self) -> SettleState {
+        self.slot.0.lock().map(|s| SettleState { queued: s.next.is_some(), running: s.running, cancelled: s.cancelled, aborted: s.aborted, requeued: s.requeued }).unwrap_or_default()
     }
 
     pub fn try_recv(&self) -> Option<Done> {
