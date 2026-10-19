@@ -486,6 +486,7 @@ character()                                 the current character as the page ho
 onCharacterChange(cb)                       cb(character, { kind: "settle" | "slider", positions?, measurements? })
 setPose(id, positions | null)               temporary head positions (Float32Array, finest-level order); last non-null wins
 setExtraMesh(id, { positions, indices, normals?, color? } | null)
+poseExtraMesh(id, rotation3x3 | null, centre)   rigidly turns an extra mesh (e.g. "eyes") about centre; null restores it
 setOverlay(id, { lines?, points?, color } | null)
 pushUndo({ label, undo(), redo() })         a panel action joins the page's undo / redo history
 requestRender()
@@ -720,6 +721,88 @@ What the method cannot do, measured on those renders:
 - profile roll (a tilt toward the shoulder, seen from the side) is not observable and is not gated; the front photo's roll is;
 - expression is measured on the front photo only; the jaw-open score also rises on a long chin with the mouth closed;
 - the facing check (unchanged) can reject a straight profile of a narrow face.
+
+### Facial animation
+
+A video of a face, or a capture file, becomes a glTF animation of a character's expression blend shapes and head
+joint. Two registry commands (so the CLI, HTTP and MCP all have them):
+
+```
+gazeforge call jobs.submit --input '{"command": "animation.from_video", "input": {"video": "TAKE.mp4", "out": "OUT/take",
+  "glb": "CHARACTER.glb", "landmarker": "face_landmarker.task", "neutral": {"start_s": 0, "end_s": 1}}}'
+gazeforge call animation.from_csv --input '{"csv": "TAKE.csv", "fps": 60, "out": "OUT/take", "glb": "CHARACTER.glb"}'
+```
+
+- **Inputs.** `animation.from_video` (a job) reads a video file (`video`, decoded with OpenCV) or a folder of images in
+  name order (`frames` with `fps`). A worker runs MediaPipe's Face Landmarker in video mode on every frame: 52 blendshape
+  scores, read by category name (`_neutral` is dropped; the other 51 are the ARKit names), the facial transformation
+  matrix (head pose) and 478 landmarks. `take` reuses the frames of an earlier run without the landmarker.
+- **Per-frame gate.** A frame is rejected when no face is found (under `min_confidence`, default 0.5), when more than one
+  face is found (`max_faces`, default 2, is how many it looks for), when the head is turned past the pose limits against
+  the camera (`gate.max_yaw_deg` 40, `max_pitch_deg` 30, `max_roll_deg` 30, each less `gate.margin_deg`, default 3, for
+  the landmarker's own angle error; `gate.relative_to_neutral` measures them against the neutral pose instead), when the face is smaller than
+  `gate.min_face_px` (60) or when fewer than `gate.min_in_frame` (98 %) of its landmarks are inside the image. Rejected
+  frames are filled by linear interpolation between the nearest accepted frames (slerp for the head) and held at the
+  ends; every rejected frame and its reasons is in the report. More than `gate.max_rejected_fraction` (50 %) rejected,
+  or none accepted, is `gate_failed`.
+- **Calibration.** The rest face of a person is not zero on every channel. A neutral segment (`neutral` in seconds, else
+  the first `neutral_frames` accepted frames, default 10) gives each channel's rest value (the median), and each weight
+  becomes `clamp((score - rest) / (1 - rest) * gain, 0, 1)`; `gains` sets a channel's gain, `calibrate: false` turns
+  it off. The head rotation is taken relative to the mean rotation over the same segment (`head_reference`: `camera`,
+  the default, removes it as q0^-1 q; `face` as q q0^-1).
+- **Range-of-motion calibration (optional).** `rom` lists windows where the performer, head still, takes named channels
+  to their extreme. Each named channel's gain becomes 1 / its peak there (clamped to [1 / `rom_gain_max`, `rom_gain_max`],
+  default 16); the other channels' leak from it is fitted over the window and subtracted; and the head's expression-driven
+  motion is fitted over the windows and removed (`head_bias`). The report's `calibration_profile` holds the result and can
+  be passed back as `calibration_profile` for later takes of the same performer. A gain is linear: a landmarker whose
+  response is not proportional (on rendered faces jawOpen read high at half opening and low at full) keeps that error.
+- **Couplings.** `couplings.squint_smile` (default 0.6) removes that fraction of a side's mouthSmile from its eyeSquint (a
+  smile's cheek raise lifts the lower lid); `couplings.look_lid` (`{lo, hi}`, off by default) fades eyeLook* as the lid
+  of that side closes. Both are fixed rules, not fitted to the performer.
+- **Lid guard (opt-in).** With `glb`, `eyes` (the character's eyes JSON) and `lid_guard.enabled: true`, every frame's
+  evaluated mix is checked per level of detail: it may not put more lid vertices inside an eye or turn more triangles
+  against their normals than the worst of the neutral and the single shapes at weight 1; a failing frame's weaker
+  channels on the failing vertices are scaled down until it passes. It is off by default because a single blink shape at
+  a weight between 0 and 1 already fails that rule on the characters measured (its straight-line path crosses the
+  eyeball), so the guard cuts blinks.
+- **Smoothing.** A One Euro filter (Casiez, Roussel and Vogel, CHI 2012) per weight channel and per component of the head
+  rotation vector: `smoothing.min_cutoff` (Hz, default 1), `beta` (20), `d_cutoff` (1), `head_min_cutoff` (4),
+  `head_beta` (8); `smoothing.enabled: false` turns it off. The defaults were chosen on rendered test faces.
+- **Retarget.** By name: the channel order is the character's morph target order (`glb`: the mesh's
+  `extras.targetNames`), else `morphs`, else the source's names. A character morph with no source channel stays at 0
+  and is listed (`tongueOut` has none from the landmarker); a source channel the character lacks is listed as dropped.
+  `sides: "swap"` exchanges every Left/Right pair; `mirror: true` is for a mirrored (selfie) video and also mirrors the
+  head rotation. On unmirrored synthetic renders the landmarker's Left/Right were face-relative, like ARKit's.
+- **Outputs.** `<out>.clip.json` (`gazeforge.clip/1`: fps, times, channel names, weights per frame, head rotation per
+  frame as a quaternion in the character frame), `<out>.report.json` (the gate and every rejected frame, the calibration,
+  the smoothing settings, per channel the rest value, raw and calibrated range, mean, p95 frame-to-frame change and the
+  same on the neutral segment, the head's largest angles) and, with `glb`, `<out>.glb`: a copy of the character with
+  one animation (`name`, default `capture`): a `weights` channel on every head mesh node (LINEAR keys at the source
+  frame times) and, when the character has a rig, a rotation channel on the `head` joint (`neck_share` gives part of it
+  to `neck`). Head translation is not exported. `return_clip` also puts the clip in the result.
+- **Joint tracks (approximate).** With a face-rigged character (`export-glb --rig face`), `joint_tracks: true` adds a
+  second animation `<name>_joints` driving the facial joints instead of the blend shapes: per joint, the rest plus each
+  shape's fitted pose difference times its weight (rotations summed as quaternion differences and normalised). This is an
+  approximation of the blend shapes, not a solve; an engine plays one animation or the other, not both.
+- **Live Link Face CSV (EXPERIMENTAL).** `animation.from_csv` reads a CSV whose header names ARKit blendshapes
+  (PascalCase as the iOS app is believed to write them, or camelCase), with an optional `Timecode` column
+  (`HH:MM:SS:FF`, frames at `fps`; otherwise row index / `fps`). The app's column list, timecode format and head rotation
+  units are not documented by its maker and have not been checked against a real recording, so head rotation
+  (`HeadYaw`, `HeadPitch`, `HeadRoll`) is ignored unless `head_units` (`rad` or `deg`) is given, with `head_signs` to flip
+  axes; eye rotation columns and `TongueOut` are not used. The output carries an `experimental` note. Calibration,
+  smoothing, retarget and outputs are the same as for video.
+- **Designer.** The `Timeline` panel (`web/panels/timeline.js`) loads a clip from a file or runs either command, plays,
+  pauses, scrubs, loops and changes speed, and shows the weights on the head (from the shapes' deltas, through `rig.face`;
+  open the designer with `&face_morphs=`) and the head rotation (a rigid turn about the head joint in the preview, with
+  the angles shown; the designer's eye spheres turn with it). It offers `getState()` / `setState(state)` for a host
+  that saves panel state; the state includes the clip.
+- **Limits.** The landmarker reads one face per frame and its scores are estimates relative to an average face, not
+  measurements; channels it barely moves (brows lowering, eye look on a face whose eyeballs do not turn) come out weak
+  however the gain is set. Head pose limits are against the camera. The model file is supplied by the user.
+
+Licences: MediaPipe (the Tasks library and the Face Landmarker model cards) is Apache-2.0; the model file
+`face_landmarker.task` is not part of this repository and is passed as `landmarker` (or `GAZEFORGE_FACE_LANDMARKER`).
+The One Euro filter is written here from the paper.
 
 ### Data layout
 
