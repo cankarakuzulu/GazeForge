@@ -533,11 +533,21 @@ definition is given); another input can replace it without touching the preview,
 
 While a slider moves, the preview is the last settled mesh plus the weight changes times each target's sparse deltas
 on the game vertices (macro sliders use the macro's local slope), with normals recomputed and uploaded every frame. A
-commit settles in-process on a worker thread with the spec's placement; the settled mesh replaces the preview, a settle
-still queued when a newer one arrives is dropped before it starts, and one already running finishes and becomes the
-preview's new base. Every shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings
-overlay (`Alt+H`) shows the present rate, frame times, input-to-preview latency, settle latency and the macro slope
-cost. `GAZEFORGE_SETTLE_THREADS` (default: half the cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+commit settles in-process on a worker thread with the spec's placement; the settled mesh replaces the preview. A settle
+still queued when a newer one arrives is dropped before it starts; one already running stops at the placement's next
+safe point (between solver iterations and fit rounds) when a newer commit arrives or a slider drag begins, and never
+publishes a partial mesh. A settle stopped by a drag runs again once the drag ends, so the preview has the cores while a
+slider moves and the settle has all of them otherwise; a settle that completes is identical to `designer.settle`. Every
+shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings overlay (`Alt+H`) shows the
+present rate, frame times, input-to-preview latency, settle latency and the macro slope cost.
+`GAZEFORGE_SETTLE_THREADS` (default: all cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+
+`--bench-window SECONDS` orbits and previews continuously and prints the frame rate; `--bench-idle SECONDS` waits for
+the app to go idle and counts the frames it draws with nothing changing (none expected). When the operating system
+reports the window hidden (a minimized window, or a desktop with no display attached), the windowing layer repaints at
+most every 100 ms and the bench says so in `paced_by`. `GAZEFORGE_LOG=warn` (or `info`, `debug`) prints the GPU
+driver's and the windowing layer's log to stderr; a window whose GPU setup fails exits with a JSON error naming the
+backend.
 
 The key map is a JSON file (`--write-keymap` writes the defaults; edit and pass it with `--keymap`, or place it at the
 default location printed by `--help`): every action takes a list of bindings such as `"Alt+W"`, `"Ctrl+Shift+Z"` or

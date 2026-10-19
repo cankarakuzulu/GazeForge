@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::hud::Hud;
 use crate::preview::{Normals, Preview, Slope};
-use crate::session::Session;
+use crate::session::{EdgePairs, Session};
 use crate::shape::{ShapeEvent, ShapeModel};
 use crate::viewer::{self, Bounds, DISPLACEMENT, MODES, ViewerState};
 use crate::worker::{Done, Job, Jobs, SettleRequest};
@@ -17,7 +17,7 @@ pub struct World {
     pub shape: Option<ShapeModel>,
     pub preview: Option<Preview>,
     normals: Option<Normals>,
-    lod0: Option<Arc<Vec<u32>>>,
+    lod0: Option<Arc<EdgePairs>>,
     pub uvs_dirty: bool,
     pub epoch: u64,
     jobs: Jobs,
@@ -162,7 +162,7 @@ impl World {
                         let s = o.session;
                         preview.set_anchor(&s.head.positions, &shape.start.weights, &shape.start.macros);
                         self.normals = Some(Normals::new(&s.head.lods[0].indices, s.head.n));
-                        self.lod0 = Some(Arc::new(s.head.lods[0].indices.clone()));
+                        self.lod0 = Some(Arc::new(EdgePairs::new(&s.head.lods[0].indices)));
                         self.state.bounds = Bounds::of(&s.head.positions);
                         let b = self.state.bounds;
                         for cam in &mut self.state.cams {
@@ -314,6 +314,10 @@ impl World {
 
     pub fn shape_event(&mut self, ev: ShapeEvent) {
         let Some(shape) = self.shape.as_mut() else { return };
+        let ends = matches!(ev, ShapeEvent::Commit(_) | ShapeEvent::Reset);
+        if matches!(ev, ShapeEvent::Begin(_)) {
+            self.jobs.set_dragging(true);
+        }
         let out = shape.apply(ev);
         if out.preview {
             self.preview_dirty = true;
@@ -326,6 +330,13 @@ impl World {
         if out.settle {
             self.request_settle();
         }
+        if ends {
+            self.jobs.set_dragging(false);
+        }
+    }
+
+    pub fn release_drag(&self) {
+        self.jobs.set_dragging(false);
     }
 
     pub fn request_settle(&mut self) {
@@ -334,7 +345,7 @@ impl World {
         let input = s.settle_input(&c, true);
         s.character = c;
         let now = Instant::now();
-        self.jobs.settle(SettleRequest { epoch: self.epoch, generation: shape.generation, sent: shape.live.clone(), input, at: now, indices: self.lod0.clone() });
+        self.jobs.settle(SettleRequest { epoch: self.epoch, generation: shape.generation, sent: shape.live.clone(), input, at: now, edges: self.lod0.clone() });
         self.settle_wanted = Some(shape.generation);
         self.settle_release = Some(now);
         self.settle_error = None;
@@ -346,8 +357,9 @@ impl World {
     }
 
     pub fn settle_stats(&self) -> Value {
-        let (queued, running, cancelled) = self.jobs.settle_state();
-        json!({"queued": queued, "running": running, "cancelled_before_start": cancelled, "stale_applied_as_anchor": self.settles_stale})
+        let st = self.jobs.settle_state();
+        json!({"queued": st.queued, "running": st.running, "cancelled_before_start": st.cancelled, "aborted_while_running": st.aborted, "requeued_after_drag": st.requeued,
+               "stale_applied_as_anchor": self.settles_stale})
     }
 
     fn update_preview(&mut self) {

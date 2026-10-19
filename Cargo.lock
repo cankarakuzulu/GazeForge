@@ -907,8 +907,10 @@ dependencies = [
  "gf-core",
  "gf-geom",
  "gf-io",
+ "log",
  "png",
  "pollster",
+ "raw-window-handle",
  "rayon",
  "serde_json",
 ]

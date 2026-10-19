@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-const USAGE: &str = "gazeforge-studio [--store DIR] [--spec FILE] [--macro FILE] [--keymap FILE] [--input sliders] [--godot-config FILE] [--bench-window SECONDS] [--present vsync|immediate]
+const USAGE: &str = "gazeforge-studio [--store DIR] [--spec FILE] [--macro FILE] [--keymap FILE] [--input sliders] [--godot-config FILE] [--bench-window SECONDS | --bench-idle SECONDS] [--present vsync|immediate]
   opens the native designer window; the core runs in-process; --input picks the shape input layer (default sliders); --godot-config names the Godot render mode's settings
 gazeforge-studio --script STEPS.json --out DIR
   runs the steps against an offscreen GPU target with no window and prints one JSON report (also written to DIR/report.json)
@@ -26,7 +26,7 @@ gazeforge-studio --write-keymap FILE
   writes the default key map, to edit and pass back with --keymap (or place at the default location)
 Every scripted or keymap run prints one JSON object on stdout; a non-zero exit code means it failed.";
 
-const KEYS: &[&str] = &["store", "spec", "macro", "keymap", "input", "bench-window", "present", "script", "out", "write-keymap", "godot-config"];
+const KEYS: &[&str] = &["store", "spec", "macro", "keymap", "input", "bench-window", "present", "script", "out", "write-keymap", "godot-config", "bench-idle"];
 
 fn options(args: &[String]) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
@@ -45,7 +45,31 @@ fn emit(v: Value, code: u8) -> ExitCode {
     ExitCode::from(code)
 }
 
+struct StderrLog;
+
+static STDERR_LOG: StderrLog = StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::max_level()
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("[{} {}] {}", r.level(), r.target(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn install_log() {
+    let Some(level) = std::env::var("GAZEFORGE_LOG").ok().and_then(|v| v.parse::<log::LevelFilter>().ok()) else { return };
+    if log::set_logger(&STDERR_LOG).is_ok() {
+        log::set_max_level(level);
+    }
+}
+
 fn main() -> ExitCode {
+    install_log();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return emit(json!({"ok": true, "usage": USAGE, "keymap_default_path": keymap::default_path().map(|p| p.display().to_string()), "godot_config_default_path": godot::default_path().map(|p| p.display().to_string())}), 0);
@@ -73,17 +97,21 @@ fn main() -> ExitCode {
             }
         };
     }
-    let bench_seconds = match o.get("bench-window").map(|s| s.parse::<f64>()) {
-        Some(Ok(s)) if s > 0.0 => Some(s),
-        Some(_) => return emit(json!({"ok": false, "error": "--bench-window needs a positive number of seconds"}), 2),
-        None => None,
-    };
+    let mut bench = None;
+    for (key, idle) in [("bench-window", false), ("bench-idle", true)] {
+        match o.get(key).map(|s| s.parse::<f64>()) {
+            Some(Ok(s)) if s > 0.0 && bench.is_none() => bench = Some((s, idle)),
+            Some(Ok(s)) if s > 0.0 => return emit(json!({"ok": false, "error": "--bench-window and --bench-idle exclude each other"}), 2),
+            Some(_) => return emit(json!({"ok": false, "error": format!("--{key} needs a positive number of seconds")}), 2),
+            None => {}
+        }
+    }
     let a = app::Args {
         store: o.get("store").cloned(),
         spec: o.get("spec").cloned(),
         macro_file: o.get("macro").cloned(),
         keymap: o.get("keymap").map(PathBuf::from),
-        bench_seconds,
+        bench,
         present: o.get("present").cloned(),
         input: o.get("input").cloned(),
         godot_config: o.get("godot-config").map(PathBuf::from),

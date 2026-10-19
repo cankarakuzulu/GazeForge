@@ -16,5 +16,7 @@ gf-io = { path = "../gf-io" }
 serde_json = "1"
 eframe = { version = "=0.35.0", default-features = false, features = ["wgpu"] }
 pollster = "0.4"
+log = "0.4"
+raw-window-handle = "0.6"
 rayon = "1"
 png = "0.18"
