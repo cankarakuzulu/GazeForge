@@ -565,23 +565,31 @@ Godot's. The mode is off until it is chosen.
 How it works: choosing the mode starts Godot 4.7 as a child process on the render host project in `clients/godot-render`
 (GDScript only). The host keeps its main window minimized with the render loop off and draws on request into one
 offscreen viewport per slot. The two talk over one localhost TCP connection with a small binary protocol (protocol
-version 1, little endian; every message has a 16-byte header: magic `GFRH`, version, type, payload length):
+version 2, little endian; every message has a 16-byte header: magic `GFRH`, version, type, payload length; a host that
+speaks another version is refused with the reason):
 
 | Message | Direction | Payload |
 |---|---|---|
 | `HELLO` / `HELLO_ACK` | app -> host -> app | protocol version; the host answers with its Godot version and GPU |
 | `CONFIG` / `CONFIG_ACK` | app -> host -> app | JSON: material, environment, scene, background; the host answers what loaded and what did not |
-| `MESH` / `MESH_ACK` | app -> host | once per topology: positions, normals, UVs (game vertices split at UV seams) and triangle indices |
+| `MESH` / `MESH_ACK` | app -> host | once per topology: positions, normals, UVs (game vertices split at UV seams, one vertex set shared by every LOD) and each LOD's triangle indices |
 | `POSITIONS` / `POSITIONS_ACK` | app -> host | every new head revision (each settle, and each preview frame while a slider moves, when the host is free): positions and normals |
-| `RENDER` / `FRAME` | app -> host -> app | slot, size, perspective field of view or orthographic height, near, far, camera transform; the host answers with RGBA8 pixels and its render and readback times |
-| `READBACK` / `VERTS` | app -> host -> app | the positions the host's mesh holds (for checks) |
+| `RENDER` / `FRAME` | app -> host -> app | request number, slot, size, perspective field of view or orthographic height, near, far, camera transform, LOD; the host answers with the request number, RGBA8 pixels and its render and readback times, always in request order |
+| `READBACK` / `VERTS` | app -> host -> app | the positions the host's mesh holds, the LOD it draws and that LOD's index count (for checks) |
 | `ERROR`, `BYE` | either | a message, or the end of the session |
 
-TCP and not shared memory: GDScript has no shared-memory API (it would need a native extension), and loopback TCP is
-not the bottleneck: a 1280x800 frame (4 MB) arrives in about 2 to 3 ms, while Godot's synchronous texture readback of
-the same frame takes about 8 ms. While the camera moves the host renders at a reduced size (`orbit_scale`, default 0.5)
-and the client scales the frame up; once the camera has been still for `still_ms` (default 120) the slot is rendered at
-full size. Only the newest camera of each slot is rendered, so a slow host shows fewer frames but never a backlog.
+The host reads each frame back asynchronously (`RenderingDevice.texture_get_data_async`): the copy is queued behind
+the frame's draw and delivered a couple of draws later, so the host can draw the next request while the previous frame
+is still on its way. The client keeps at most two requests in flight and pairs every frame with the request number it
+answers, so a frame is always shown with the camera, size, LOD and head revision it was drawn for. TCP and not shared
+memory: GDScript has no shared-memory API (it would need a native extension), and loopback TCP is not the bottleneck
+(a 1280x800 frame, 4 MB, arrives in about 2 to 3 ms). On an RTX 4090 with the client pacing 144 frames a second, a
+full-size orbit shows about 106 to 114 Godot frames a second at 1280x800 and at 1920x1080, where the synchronous
+readback this replaced reached 30 to 66. `--sync-readback` in `host_args` switches the host back to the synchronous
+`get_image` path; both give byte-identical frames. While the camera moves the host renders at a reduced size
+(`orbit_scale`, default 0.5; 1.0 keeps full size) and the client scales the frame up; once the camera has been still
+for `still_ms` (default 120) the slot is rendered at full size. Only the newest camera of each slot is rendered, so a
+slow host shows fewer frames but never a backlog. A frame that has not changed is not uploaded to the GPU again.
 
 The client never waits for Godot: the connection runs on its own thread, and a slot without a current Godot frame is
 drawn by the built-in renderer. A missing binary or project, a host that does not connect within `start_timeout_ms`,
@@ -607,16 +615,19 @@ default path); `GAZEFORGE_GODOT` and `GAZEFORGE_GODOT_PROJECT` give the binary a
 }
 ```
 
-Without `material`, `environment` and `scene` the host uses a neutral look: a light grey two-sided material, three
-directional lights, flat ambient light and the viewport's background colour. To use your own look, point `project` at
+Without `material`, `environment` and `scene` the host uses a neutral studio clay that matches the client's own clay
+mode with its default studio lights: a warm grey two-sided material with wrapped diffuse and no specular, the three
+studio lights (key, fill, back) following the camera, a sky-to-ground hemisphere ambient and the viewport's background
+colour (mean difference to the client's clay under 1 of 255 per channel on the head). To use your own look, point `project` at
 your own Godot project, set `script` to the absolute path of `clients/godot-render/host.gd`, and name `res://` paths in
 that project: `material` (any `Material`, applied to the character), `environment` (an `Environment`) and `scene` (a
 `PackedScene`, instanced in place of the default lights; put your lights, probes or props in it). The project must have
 been opened in the Godot editor once so its resources are imported. Paths that do not load are reported and the
 defaults stay.
 
-Limits: the character is the game mesh's first LOD with its UVs; the slot's LOD, render mode and overlays (wireframe,
-clip planes, points and the rest) do not apply to Godot frames; morph targets, skeletons and eyes are not sent; the host
+Limits: the character is the game mesh with its UVs at the slot's LOD; the slot's render mode and overlays (wireframe,
+clip planes, points and the rest) do not apply to Godot frames, and the default look does not follow edits to the
+client's lights; morph targets, skeletons and eyes are not sent; the host
 renders one slot at a time, so in the quad layout the four slots share its frame rate. `visible: true` shows the host's
 window, for debugging only.
 
@@ -624,7 +635,8 @@ Scripted steps for the mode: `source` with `"kind": "godot"` (optional `godot` s
 `restart`), `godot_wait` (until every Godot slot shows a full-size frame of the current camera and head, or the mode
 failed), `godot_status` (state, host info and the frame, latency and transfer timings; `reset` clears them),
 `godot_readback` (writes the positions Godot holds, the client's positions and the vertex map), `godot_marker` (a marker
-sphere at a vertex, with the vertex's projected pixel in every slot), `godot_kill` and `godot_stop`.
+sphere at a vertex, with the vertex's projected pixel in every slot), `godot_track` (orbits and checks every new
+Godot frame's marker against the camera that frame says it was drawn for), `godot_kill` and `godot_stop`.
 
 ### Projects
 

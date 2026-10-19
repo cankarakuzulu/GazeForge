@@ -40,6 +40,7 @@ pub struct FrameRequest<'a> {
     pub width: u32,
     pub height: u32,
     pub mode: usize,
+    pub lod: usize,
     pub head_revision: u64,
     pub head: Option<&'a Head>,
 }
@@ -115,6 +116,7 @@ struct SlotTarget {
     depth: wgpu::TextureView,
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
+    holds: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 pub struct Composite {
@@ -366,7 +368,7 @@ impl Renderer {
         let depth = tex("depth", DEPTH, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default());
         let resolve = tex("resolve", COLOR, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST);
         let resolve_view = resolve.create_view(&Default::default());
-        self.slots[slot] = Some(SlotTarget { w, h, msaa, depth, resolve, resolve_view });
+        self.slots[slot] = Some(SlotTarget { w, h, msaa, depth, resolve, resolve_view, holds: None });
     }
 
     fn ensure_composite(&mut self, device: &wgpu::Device, w: u32, h: u32) {
@@ -464,7 +466,7 @@ impl Renderer {
             let slot = st.vp[r.slot];
             let m = cam.matrices(r.w as f64 / r.h as f64);
             if let Source::External(ext) = &mut self.sources[r.slot] {
-                let req = FrameRequest { slot: r.slot, camera: cam, matrices: &m, width: r.w, height: r.h, mode: slot.mode, head_revision: head.map_or(0, |h| h.revision), head };
+                let req = FrameRequest { slot: r.slot, camera: cam, matrices: &m, width: r.w, height: r.h, mode: slot.mode, lod: slot.lod, head_revision: head.map_or(0, |h| h.revision), head };
                 if let Some(px) = ext.frame(&req).filter(|p| p.len() == (r.w * r.h * 4) as usize) {
                     externals.push((*r, px));
                     continue;
@@ -580,8 +582,17 @@ impl Renderer {
             }
             queue.write_buffer(&self.line_buf, 0, &f32_bytes(&lines));
         }
+        for (r, _) in &plans {
+            if let Some(t) = self.slots[r.slot].as_mut() {
+                t.holds = None;
+            }
+        }
         for (r, px) in &externals {
-            let t = self.slots[r.slot].as_ref().expect("slot target");
+            let t = self.slots[r.slot].as_mut().expect("slot target");
+            if t.holds.as_ref().is_some_and(|h| std::sync::Arc::ptr_eq(h, px)) {
+                continue;
+            }
+            t.holds = Some(px.clone());
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo { texture: &t.resolve, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 px,

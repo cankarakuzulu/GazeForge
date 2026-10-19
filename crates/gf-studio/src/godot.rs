@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{ErrorKind, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use crate::render::{ExternalFrames, FrameRequest};
 use crate::viewer::Matrices;
 
-pub const PROTOCOL: u16 = 1;
+pub const PROTOCOL: u16 = 2;
+const DEPTH: usize = 2;
 const MAGIC: u32 = 0x4852_4647;
 const HELLO: u16 = 1;
 const HELLO_ACK: u16 = 2;
@@ -179,12 +180,32 @@ struct Cam {
     xf: [f32; 12],
 }
 
+impl Cam {
+    fn project(&self, p: [f64; 3], w: u32, h: u32) -> Option<[f64; 2]> {
+        let x = self.xf.map(f64::from);
+        let d = [p[0] - x[9], p[1] - x[10], p[2] - x[11]];
+        let along = |o: usize| d[0] * x[o] + d[1] * x[o + 1] + d[2] * x[o + 2];
+        let (cx, cy, depth) = (along(0), along(3), -along(6));
+        let aspect = w as f64 / h as f64;
+        let half = if self.ortho {
+            self.a as f64 / 2.0
+        } else {
+            if depth <= 0.0 {
+                return None;
+            }
+            depth * (self.a as f64 / 2.0).to_radians().tan()
+        };
+        Some([(cx / (half * aspect) * 0.5 + 0.5) * w as f64, (0.5 - cy / half * 0.5) * h as f64])
+    }
+}
+
 #[derive(Clone)]
 struct Want {
     key: Vec<u32>,
     cam: Cam,
     w: u32,
     h: u32,
+    lod: u32,
     changed: Instant,
     marker: Option<[f32; 4]>,
 }
@@ -194,10 +215,47 @@ pub struct Frame {
     h: u32,
     rgba: Arc<Vec<u8>>,
     key: Vec<u32>,
+    cam: Cam,
+    lod: u32,
     posted: Instant,
     revision: u64,
     scale: f64,
     seq: u64,
+}
+
+pub struct Shown {
+    pub seq: u64,
+    pub w: u32,
+    pub h: u32,
+    pub lod: u32,
+    pub scale: f64,
+    pub revision: u64,
+    pub rgba: Arc<Vec<u8>>,
+    cam: Cam,
+}
+
+impl Shown {
+    pub fn project(&self, p: [f64; 3]) -> Option<[f64; 2]> {
+        self.cam.project(p, self.w, self.h)
+    }
+}
+
+pub struct Readback {
+    pub revision: u64,
+    pub positions: Vec<f32>,
+    pub lod: u32,
+    pub indices: usize,
+}
+
+struct Flight {
+    seq: u64,
+    slot: usize,
+    want: Want,
+    rev: u64,
+    scale: f64,
+    sw: u32,
+    sh: u32,
+    sent: Instant,
 }
 
 struct HeadCopy {
@@ -209,22 +267,25 @@ struct HeadCopy {
 pub struct Topology {
     pub map: Vec<u32>,
     pub uvs: Vec<f32>,
-    pub indices: Vec<u32>,
+    pub lods: Vec<Vec<u32>>,
     pub reversed: bool,
 }
 
+type LodSource = (Arc<Vec<u32>>, Arc<Vec<f32>>);
+
+#[derive(Clone)]
 struct TopoSource {
-    ident: (usize, usize, usize, usize, usize),
-    indices: Arc<Vec<u32>>,
-    uvs: Arc<Vec<f32>>,
+    ident: Vec<usize>,
+    lods: Vec<LodSource>,
 }
 
 enum Cmd {
-    Readback(mpsc::Sender<Result<(u64, Vec<f32>), String>>),
+    Readback(mpsc::Sender<Result<Readback, String>>),
 }
 
 #[derive(Default)]
 struct Rings {
+    pipelined: u64,
     camera_to_shown: Vec<f64>,
     settle_to_shown: Vec<f64>,
     roundtrip: Vec<f64>,
@@ -267,6 +328,9 @@ struct State {
     rings: Rings,
     started: Instant,
     ready_ms: Option<f64>,
+    inflight: VecDeque<Flight>,
+    failure: Option<String>,
+    released: [bool; 4],
 }
 
 type Shared = Arc<(Mutex<State>, Condvar)>;
@@ -309,6 +373,9 @@ impl Host {
                 rings: Rings::default(),
                 started: Instant::now(),
                 ready_ms: None,
+                inflight: VecDeque::new(),
+                failure: None,
+                released: [false; 4],
             }),
             Condvar::new(),
         ));
@@ -371,6 +438,10 @@ impl Host {
         self.shared.1.notify_all();
     }
 
+    pub fn marker(&self) -> Option<[f32; 4]> {
+        lock(&self.shared).marker
+    }
+
     pub fn reset_stats(&self) {
         let mut st = lock(&self.shared);
         st.rings = Rings { since: Some(Instant::now()), ..Rings::default() };
@@ -384,7 +455,13 @@ impl Host {
         }
     }
 
-    pub fn readback(&self, timeout: Duration) -> Result<(u64, Vec<f32>), String> {
+    pub fn shown(&self, slot: usize) -> Option<Shown> {
+        let st = lock(&self.shared);
+        let f = st.frames[slot].as_ref().filter(|f| f.seq == st.shown_seq[slot])?;
+        Some(Shown { seq: f.seq, w: f.w, h: f.h, lod: f.lod, scale: f.scale, revision: f.revision, rgba: f.rgba.clone(), cam: f.cam.clone() })
+    }
+
+    pub fn readback(&self, timeout: Duration) -> Result<Readback, String> {
         let (tx, rx) = mpsc::channel();
         {
             let mut st = lock(&self.shared);
@@ -409,6 +486,7 @@ impl Host {
                "roundtrip_ms": s(r.roundtrip.clone()), "godot_render_ms": s(r.render.clone()), "godot_readback_ms": s(r.readback.clone()),
                "frame_transfer_ms": s(r.transfer.clone()), "positions_ms": s(r.positions.clone()),
                "frames_shown": r.shown, "frames_shown_full": r.shown_full, "frames_shown_scaled": r.shown_scaled, "frames_rendered": r.rendered,
+               "frames_sent_while_one_in_flight": r.pipelined, "in_flight_limit": DEPTH,
                "seconds": secs, "shown_per_s": secs.map(|x| r.shown as f64 / x.max(1e-9))})
     }
 
@@ -419,10 +497,13 @@ impl Host {
             return None;
         }
         if let Some(h) = req.head {
-            let lod = &h.lods[0];
-            let ident = (lod.indices.as_ptr() as usize, lod.indices.len(), lod.uvs.as_ptr() as usize, lod.uvs.len(), h.n);
+            let mut ident = vec![h.n];
+            for l in &h.lods {
+                ident.extend([l.indices.as_ptr() as usize, l.indices.len(), l.uvs.as_ptr() as usize, l.uvs.len()]);
+            }
             if st.topo_src.as_ref().is_none_or(|t| t.ident != ident) {
-                st.topo_src = Some(TopoSource { ident, indices: Arc::new(lod.indices.clone()), uvs: Arc::new(lod.uvs.clone()) });
+                let lods = h.lods.iter().map(|l| (Arc::new(l.indices.clone()), Arc::new(l.uvs.clone()))).collect();
+                st.topo_src = Some(TopoSource { ident, lods });
             }
             let hid = (h.positions.as_ptr() as usize, h.positions.len());
             if st.head.as_ref().is_none_or(|c| c.revision != h.revision) || st.head_ident != hid {
@@ -436,14 +517,15 @@ impl Host {
         }
         let cam = cam_of(req.matrices);
         let marker = st.marker;
-        let mut key: Vec<u32> = vec![req.width, req.height, cam.ortho as u32, cam.a.to_bits(), cam.near.to_bits(), cam.far.to_bits()];
+        let lod = if plant() == "lod0" { 0 } else { req.lod as u32 };
+        let mut key: Vec<u32> = vec![req.width, req.height, cam.ortho as u32, cam.a.to_bits(), cam.near.to_bits(), cam.far.to_bits(), lod];
         key.extend(cam.xf.iter().map(|x| x.to_bits()));
         key.extend(marker.unwrap_or([0.0; 4]).iter().map(|x| x.to_bits()));
         let changed = match &st.want[slot] {
             Some(w) if w.key == key => w.changed,
             _ => now,
         };
-        st.want[slot] = Some(Want { key, cam, w: req.width, h: req.height, changed, marker });
+        st.want[slot] = Some(Want { key, cam, w: req.width, h: req.height, lod, changed, marker });
         self.shared.1.notify_all();
         let (seq, w, h) = match &st.frames[slot] {
             Some(f) => (f.seq, f.w, f.h),
@@ -479,6 +561,7 @@ impl Host {
         let mut st = lock(&self.shared);
         st.want[slot] = None;
         st.frames[slot] = None;
+        st.released[slot] = true;
     }
 }
 
@@ -523,22 +606,27 @@ impl Drop for GodotSlot {
 }
 
 fn topology(src: &TopoSource, positions: &[f32], normals: &[f32]) -> Topology {
-    let idx = &src.indices;
-    let has_uv = src.uvs.len() >= idx.len() * 2;
-    let mut seen: HashMap<(u32, u32, u32), u32> = HashMap::with_capacity(idx.len());
-    let (mut map, mut uvs, mut out) = (Vec::new(), Vec::new(), Vec::with_capacity(idx.len()));
-    for (c, &v) in idx.iter().enumerate() {
-        let uv = if has_uv { [src.uvs[c * 2], src.uvs[c * 2 + 1]] } else { [0.0, 0.0] };
-        let k = (v, uv[0].to_bits(), uv[1].to_bits());
-        let id = *seen.entry(k).or_insert_with(|| {
-            map.push(v);
-            uvs.extend_from_slice(&uv);
-            (map.len() - 1) as u32
-        });
-        out.push(id);
+    let total: usize = src.lods.iter().map(|l| l.0.len()).sum();
+    let mut seen: HashMap<(u32, u32, u32), u32> = HashMap::with_capacity(total);
+    let (mut map, mut uvs, mut lods) = (Vec::new(), Vec::new(), Vec::with_capacity(src.lods.len()));
+    for (idx, corner_uvs) in &src.lods {
+        let has_uv = corner_uvs.len() >= idx.len() * 2;
+        let mut out = Vec::with_capacity(idx.len());
+        for (c, &v) in idx.iter().enumerate() {
+            let uv = if has_uv { [corner_uvs[c * 2], corner_uvs[c * 2 + 1]] } else { [0.0, 0.0] };
+            let k = (v, uv[0].to_bits(), uv[1].to_bits());
+            let id = *seen.entry(k).or_insert_with(|| {
+                map.push(v);
+                uvs.extend_from_slice(&uv);
+                (map.len() - 1) as u32
+            });
+            out.push(id);
+        }
+        lods.push(out);
     }
     let p = |i: u32| [0, 1, 2].map(|k| positions[i as usize * 3 + k] as f64);
     let mut facing = 0.0;
+    let idx: &[u32] = src.lods.first().map_or(&[], |l| l.0.as_slice());
     for t in idx.chunks_exact(3) {
         let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
         let (e1, e2) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
@@ -548,11 +636,13 @@ fn topology(src: &TopoSource, positions: &[f32], normals: &[f32]) -> Topology {
     }
     let reversed = facing > 0.0;
     if reversed {
-        for t in out.chunks_exact_mut(3) {
-            t.swap(1, 2);
+        for out in &mut lods {
+            for t in out.chunks_exact_mut(3) {
+                t.swap(1, 2);
+            }
         }
     }
-    Topology { map, uvs, indices: out, reversed }
+    Topology { map, uvs, lods, reversed }
 }
 
 fn gather(t: &Topology, v: &[f32]) -> Vec<f32> {
@@ -704,6 +794,114 @@ fn upscale(src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Vec<u8> {
     out
 }
 
+fn read_full(s: &mut TcpStream, buf: &mut [u8], shared: &Shared, timeout: Duration, idle_ok: bool) -> Result<(), String> {
+    let (mut got, mut last) = (0usize, Instant::now());
+    while got < buf.len() {
+        match s.read(&mut buf[got..]) {
+            Ok(0) => return Err("Godot closed the connection".into()),
+            Ok(k) => {
+                got += k;
+                last = Instant::now();
+            }
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => {
+                let st = lock(shared);
+                if st.stop {
+                    return Err("stopped".into());
+                }
+                if got == 0 && idle_ok {
+                    if st.inflight.front().is_some_and(|f| f.sent.elapsed() > timeout) {
+                        return Err(format!("Godot did not return a frame within {} ms", timeout.as_millis()));
+                    }
+                } else if last.elapsed() > timeout {
+                    return Err(format!("Godot stalled for {} ms inside a message", timeout.as_millis()));
+                }
+            }
+            Err(e) => return Err(format!("Godot did not answer: {e}")),
+        }
+    }
+    Ok(())
+}
+
+fn take_frame(shared: &Shared, fh: &[u8; 20], px: Vec<u8>, first: Instant, done_at: Instant) -> Result<(), String> {
+    let (req, fw, fhh) = (rd_u32(fh, 0), rd_u32(fh, 4), rd_u32(fh, 8));
+    let (fl, claimed) = {
+        let mut st = lock(shared);
+        let fl = st.inflight.pop_front().ok_or_else(|| format!("Godot returned frame {req} that was not asked for"))?;
+        if req != fl.seq as u32 {
+            return Err(format!("Godot returned frame {req}, the oldest open request is {}", fl.seq));
+        }
+        let claimed = if plant() == "pair" { st.inflight.back().map_or_else(|| fl.want.clone(), |b| b.want.clone()) } else { fl.want.clone() };
+        (fl, claimed)
+    };
+    if (fw, fhh) != (fl.sw, fl.sh) || px.len() != (fw as usize) * (fhh as usize) * 4 {
+        return Err(format!("Godot returned a {fw}x{fhh} frame of {} bytes for a {}x{} request", px.len(), fl.sw, fl.sh));
+    }
+    let px = if (fl.sw, fl.sh) == (fl.want.w, fl.want.h) { px } else { upscale(&px, fl.sw, fl.sh, fl.want.w, fl.want.h) };
+    let mut st = lock(shared);
+    let r = &mut st.rings;
+    r.rendered += 1;
+    push(&mut r.roundtrip, (done_at - fl.sent).as_secs_f64() * 1000.0);
+    push(&mut r.render, rd_f32(fh, 12) as f64);
+    push(&mut r.readback, rd_f32(fh, 16) as f64);
+    push(&mut r.transfer, (done_at - first).as_secs_f64() * 1000.0);
+    if st.want[fl.slot].is_some() {
+        let lod = claimed.lod;
+        st.frames[fl.slot] = Some(Frame { w: claimed.w, h: claimed.h, rgba: Arc::new(px), key: claimed.key, cam: claimed.cam, lod, posted: claimed.changed, revision: fl.rev, scale: fl.scale, seq: fl.seq });
+    }
+    drop(st);
+    shared.1.notify_all();
+    Ok(())
+}
+
+fn reader(s: &mut TcpStream, shared: &Shared, timeout: Duration, tx: &mpsc::Sender<(u16, Vec<u8>)>) -> Result<(), String> {
+    loop {
+        let mut h = [0u8; 16];
+        read_full(s, &mut h, shared, timeout, true)?;
+        let first = Instant::now();
+        let u32_at = |o: usize| u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
+        if u32_at(0) != MAGIC {
+            return Err("Godot sent a bad header".into());
+        }
+        let version = u16::from_le_bytes([h[4], h[5]]);
+        if version != PROTOCOL {
+            return Err(format!("Godot render host speaks protocol {version}, the app speaks {PROTOCOL}"));
+        }
+        let t = u16::from_le_bytes([h[6], h[7]]);
+        let len = u32_at(8) as usize;
+        if len > MAX_PAYLOAD {
+            return Err(format!("Godot sent a {len}-byte payload, over the {MAX_PAYLOAD}-byte limit"));
+        }
+        if t == FRAME {
+            if len < 20 {
+                return Err(format!("Godot sent a {len}-byte frame message"));
+            }
+            let mut fh = [0u8; 20];
+            read_full(s, &mut fh, shared, timeout, false)?;
+            let mut px = vec![0u8; len - 20];
+            read_full(s, &mut px, shared, timeout, false)?;
+            take_frame(shared, &fh, px, first, Instant::now())?;
+            continue;
+        }
+        let mut p = vec![0u8; len];
+        read_full(s, &mut p, shared, timeout, false)?;
+        if t == ERROR {
+            return Err(format!("Godot render host: {}", String::from_utf8_lossy(&p)));
+        }
+        if tx.send((t, p)).is_err() {
+            return Ok(());
+        }
+    }
+}
+
+fn ack(rx: &mpsc::Receiver<(u16, Vec<u8>)>, shared: &Shared, want: u16, timeout: Duration) -> Result<Vec<u8>, String> {
+    match rx.recv_timeout(timeout) {
+        Ok((t, p)) if t == want => Ok(p),
+        Ok((t, _)) => Err(format!("Godot answered message type {t}, expected {want}")),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("Godot did not answer within {} ms", timeout.as_millis())),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(lock(shared).failure.clone().unwrap_or_else(|| "Godot connection closed".into())),
+    }
+}
+
 fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> Result<(), String> {
     if !cfg.problems.is_empty() {
         return Err(cfg.problems.join("; "));
@@ -717,7 +915,24 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
     send(&mut s, CONFIG, conf.to_string().as_bytes())?;
     let (p, _) = expect(&mut s, CONFIG_ACK)?;
     let applied: Value = serde_json::from_slice(&p).unwrap_or(Value::Null);
-    s.set_read_timeout(Some(Duration::from_millis(cfg.frame_timeout_ms))).map_err(|e| e.to_string())?;
+    s.set_read_timeout(Some(Duration::from_millis(25))).map_err(|e| e.to_string())?;
+    let timeout = Duration::from_millis(cfg.frame_timeout_ms);
+    let mut rs = s.try_clone().map_err(|e| format!("Godot socket: {e}"))?;
+    let (tx, rx) = mpsc::channel();
+    let rshared = shared.clone();
+    let reader = std::thread::Builder::new()
+        .name("godot-reader".into())
+        .spawn(move || {
+            if let Err(e) = reader(&mut rs, &rshared, timeout, &tx) {
+                let mut st = lock(&rshared);
+                if st.failure.is_none() {
+                    st.failure = Some(e);
+                }
+                drop(st);
+                rshared.1.notify_all();
+            }
+        })
+        .map_err(|e| format!("cannot start the Godot reader thread: {e}"))?;
     {
         let mut st = lock(shared);
         st.status = Status::Ready;
@@ -726,8 +941,15 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
         st.ready_ms = Some(st.started.elapsed().as_secs_f64() * 1000.0);
     }
     shared.1.notify_all();
+    let r = pump(&mut s, shared, cfg, &rx, timeout);
+    let _ = s.shutdown(Shutdown::Both);
+    let _ = reader.join();
+    r
+}
+
+fn pump(s: &mut TcpStream, shared: &Shared, cfg: &Config, rx: &mpsc::Receiver<(u16, Vec<u8>)>, timeout: Duration) -> Result<(), String> {
     let mut done: [Option<(Vec<u32>, u64, f64)>; 4] = Default::default();
-    let mut topo_ident = None;
+    let mut topo_ident: Option<Vec<usize>> = None;
     let mut seq = 0u64;
     let mut rr = 0usize;
     let mut built: Option<Arc<Topology>> = None;
@@ -738,14 +960,22 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
                 if st.stop {
                     break Job::Stop;
                 }
+                if let Some(e) = st.failure.clone() {
+                    return Err(e);
+                }
+                for (d, r) in done.iter_mut().zip(st.released.iter_mut()) {
+                    if *r && plant() != "stale" {
+                        *r = false;
+                        *d = None;
+                    }
+                }
                 if let Some(c) = st.cmds.pop_front() {
                     break Job::Cmd(c);
                 }
                 if let (Some(src), Some(h)) = (&st.topo_src, &st.head) {
-                    if topo_ident != Some(src.ident) {
-                        topo_ident = Some(src.ident);
-                        let src = TopoSource { ident: src.ident, indices: src.indices.clone(), uvs: src.uvs.clone() };
-                        break Job::Mesh(src, h.positions.clone(), h.normals.clone(), h.revision);
+                    if topo_ident.as_ref() != Some(&src.ident) {
+                        topo_ident = Some(src.ident.clone());
+                        break Job::Mesh(src.clone(), h.positions.clone(), h.normals.clone(), h.revision);
                     }
                     if st.sent_revision != Some(h.revision) {
                         break Job::Positions(h.positions.clone(), h.normals.clone(), h.revision);
@@ -754,14 +984,16 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
                 let now = Instant::now();
                 let rev = st.sent_revision.unwrap_or(0);
                 let mut pick = None;
-                for k in 0..4 {
-                    let i = (rr + k) % 4;
-                    if let Some(w) = &st.want[i] {
-                        let moving = (now - w.changed).as_secs_f64() * 1000.0 < cfg.still_ms;
-                        let fresh = matches!(&done[i], Some((key, r, sc)) if *key == w.key && *r == rev && (*sc >= 1.0 || moving));
-                        if !fresh && built.is_some() {
-                            pick = Some((i, w.clone(), if moving { cfg.orbit_scale } else { 1.0 }));
-                            break;
+                if st.inflight.len() < DEPTH {
+                    for k in 0..4 {
+                        let i = (rr + k) % 4;
+                        if let Some(w) = &st.want[i] {
+                            let moving = (now - w.changed).as_secs_f64() * 1000.0 < cfg.still_ms;
+                            let fresh = matches!(&done[i], Some((key, r, sc)) if *key == w.key && *r == rev && (*sc >= 1.0 || moving));
+                            if !fresh && built.is_some() {
+                                pick = Some((i, w.clone(), if moving { cfg.orbit_scale } else { 1.0 }));
+                                break;
+                            }
                         }
                     }
                 }
@@ -776,16 +1008,22 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
             Job::Stop => return Ok(()),
             Job::Cmd(Cmd::Readback(tx)) => {
                 let r = (|| {
-                    send(&mut s, READBACK, &[])?;
-                    let (p, _) = expect(&mut s, VERTS)?;
+                    send(s, READBACK, &[])?;
+                    let p = ack(rx, shared, VERTS, timeout)?;
+                    if p.len() < 12 {
+                        return Err(format!("Godot sent a {}-byte vertex readback", p.len()));
+                    }
                     let n = rd_u32(&p, 0) as usize;
-                    let v: Vec<f32> = (0..n * 3).map(|i| rd_f32(&p, 4 + i * 4)).collect();
-                    Ok((lock(shared).sent_revision.unwrap_or(0), v))
+                    if p.len() != 12 + n * 12 {
+                        return Err(format!("Godot sent {} bytes for {n} vertices", p.len()));
+                    }
+                    let positions: Vec<f32> = (0..n * 3).map(|i| rd_f32(&p, 12 + i * 4)).collect();
+                    Ok(Readback { revision: lock(shared).sent_revision.unwrap_or(0), positions, lod: rd_u32(&p, 4), indices: rd_u32(&p, 8) as usize })
                 })();
-                let failed = r.is_err();
-                let _ = tx.send(r.clone());
-                if failed {
-                    return r.map(|_| ());
+                let failed = r.as_ref().err().cloned();
+                let _ = tx.send(r);
+                if let Some(e) = failed {
+                    return Err(e);
                 }
             }
             Job::Mesh(src, pos, nrm, rev) => {
@@ -797,16 +1035,21 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
                     gp[0] += 0.01;
                 }
                 let gn = gather(&t, &nrm);
-                let mut p: Vec<u8> = Vec::with_capacity(8 + t.map.len() * 32 + t.indices.len() * 4);
+                let total: usize = t.lods.iter().map(Vec::len).sum();
+                let mut p: Vec<u8> = Vec::with_capacity(8 + t.map.len() * 32 + t.lods.len() * 4 + total * 4);
                 p.extend_from_slice(&(t.map.len() as u32).to_le_bytes());
-                p.extend_from_slice(&(t.indices.len() as u32).to_le_bytes());
+                p.extend_from_slice(&(t.lods.len() as u32).to_le_bytes());
                 p.extend(f32_bytes(&gp));
                 p.extend(f32_bytes(&gn));
                 p.extend(f32_bytes(&t.uvs));
-                p.extend(t.indices.iter().flat_map(|x| x.to_le_bytes()));
-                send(&mut s, MESH, &p)?;
-                expect(&mut s, MESH_ACK)?;
+                for l in &t.lods {
+                    p.extend_from_slice(&(l.len() as u32).to_le_bytes());
+                    p.extend(l.iter().flat_map(|x| x.to_le_bytes()));
+                }
+                send(s, MESH, &p)?;
+                ack(rx, shared, MESH_ACK, timeout)?;
                 built = Some(t);
+                done = Default::default();
                 let mut st = lock(shared);
                 st.sent_revision = Some(rev);
                 push(&mut st.rings.positions, t0.elapsed().as_secs_f64() * 1000.0);
@@ -824,8 +1067,8 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
                 p.extend_from_slice(&(t.map.len() as u32).to_le_bytes());
                 p.extend(f32_bytes(&gp));
                 p.extend(f32_bytes(&gn));
-                send(&mut s, POSITIONS, &p)?;
-                expect(&mut s, POSITIONS_ACK)?;
+                send(s, POSITIONS, &p)?;
+                ack(rx, shared, POSITIONS_ACK, timeout)?;
                 let mut st = lock(shared);
                 st.sent_revision = Some(rev);
                 push(&mut st.rings.positions, t0.elapsed().as_secs_f64() * 1000.0);
@@ -833,32 +1076,24 @@ fn worker(shared: &Shared, child: &Arc<Mutex<Option<Child>>>, cfg: &Config) -> R
             Job::Render(slot, w, rev, scale) => {
                 let (sw, sh) = (((w.w as f64 * scale).round() as u32).max(1), ((w.h as f64 * scale).round() as u32).max(1));
                 let flags = w.cam.ortho as u32 | if w.marker.is_some() { 2 } else { 0 };
-                let mut p: Vec<u8> = Vec::with_capacity(96);
+                let mut p: Vec<u8> = Vec::with_capacity(100);
                 for x in [seq as u32, slot as u32, sw, sh, flags] {
                     p.extend_from_slice(&x.to_le_bytes());
                 }
                 p.extend(f32_bytes(&[w.cam.a, w.cam.near, w.cam.far]));
                 p.extend(f32_bytes(&w.cam.xf));
                 p.extend(f32_bytes(&w.marker.unwrap_or([0.0; 4])));
-                let t0 = Instant::now();
-                send(&mut s, RENDER, &p)?;
-                let (f, first) = expect(&mut s, FRAME)?;
-                let done_at = Instant::now();
-                let (fw, fh) = (rd_u32(&f, 4), rd_u32(&f, 8));
-                if (fw, fh) != (sw, sh) || f.len() != 20 + (fw * fh * 4) as usize {
-                    return Err(format!("Godot returned a {fw}x{fh} frame for a {sw}x{sh} request"));
-                }
-                let px = if (sw, sh) == (w.w, w.h) { f[20..].to_vec() } else { upscale(&f[20..], sw, sh, w.w, w.h) };
-                seq += 1;
+                p.extend_from_slice(&w.lod.to_le_bytes());
                 done[slot] = Some((w.key.clone(), rev, scale));
-                let mut st = lock(shared);
-                let r = &mut st.rings;
-                r.rendered += 1;
-                push(&mut r.roundtrip, (done_at - t0).as_secs_f64() * 1000.0);
-                push(&mut r.render, rd_f32(&f, 12) as f64);
-                push(&mut r.readback, rd_f32(&f, 16) as f64);
-                push(&mut r.transfer, (done_at - first).as_secs_f64() * 1000.0);
-                st.frames[slot] = Some(Frame { w: w.w, h: w.h, rgba: Arc::new(px), key: w.key, posted: w.changed, revision: rev, scale, seq });
+                {
+                    let mut st = lock(shared);
+                    if !st.inflight.is_empty() {
+                        st.rings.pipelined += 1;
+                    }
+                    st.inflight.push_back(Flight { seq, slot, want: w, rev, scale, sw, sh, sent: Instant::now() });
+                }
+                send(s, RENDER, &p)?;
+                seq += 1;
             }
         }
     }
@@ -874,17 +1109,38 @@ mod tests {
         let normals = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
         let indices = vec![0, 1, 2, 2, 1, 3];
         let uvs = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.5, 1.0, 1.0, 0.0, 1.0, 1.0];
-        let src = TopoSource { ident: (0, 0, 0, 0, 0), indices: Arc::new(indices.clone()), uvs: Arc::new(uvs) };
+        let coarse = vec![0, 1, 3];
+        let coarse_uvs = vec![0.0, 0.0, 1.0, 0.0, 0.9, 0.9];
+        let src = TopoSource { ident: vec![0], lods: vec![(Arc::new(indices.clone()), Arc::new(uvs)), (Arc::new(coarse.clone()), Arc::new(coarse_uvs))] };
         let t = topology(&src, &positions, &normals);
-        assert_eq!(t.map.len(), 5);
+        assert_eq!(t.map.len(), 6);
         assert!(t.reversed);
-        for (tri, out) in indices.chunks_exact(3).zip(t.indices.chunks_exact(3)) {
-            assert_eq!([t.map[out[0] as usize], t.map[out[2] as usize], t.map[out[1] as usize]], [tri[0], tri[1], tri[2]]);
+        assert_eq!(t.lods.len(), 2);
+        for (lod, tris) in [(0, &indices), (1, &coarse)] {
+            assert_eq!(t.lods[lod].len(), tris.len());
+            for (tri, out) in tris.chunks_exact(3).zip(t.lods[lod].chunks_exact(3)) {
+                assert_eq!([t.map[out[0] as usize], t.map[out[2] as usize], t.map[out[1] as usize]], [tri[0], tri[1], tri[2]]);
+            }
         }
+        assert_eq!(t.lods[1][0], t.lods[0][0]);
         let gathered = gather(&t, &positions);
         for (i, &v) in t.map.iter().enumerate() {
             assert_eq!(&gathered[i * 3..i * 3 + 3], &positions[v as usize * 3..v as usize * 3 + 3]);
         }
+    }
+
+    #[test]
+    fn camera_projection_matches_the_view_basis() {
+        let cam = Cam { ortho: false, a: 90.0, near: 0.1, far: 10.0, xf: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0] };
+        let c = cam.project([0.0, 0.0, 0.0], 200, 100).expect("in front");
+        assert!((c[0] - 100.0).abs() < 1e-9 && (c[1] - 50.0).abs() < 1e-9);
+        let top = cam.project([0.0, 2.0, 0.0], 200, 100).expect("in front");
+        assert!((top[1] - 0.0).abs() < 1e-9, "{top:?}");
+        let right = cam.project([4.0, 0.0, 0.0], 200, 100).expect("in front");
+        assert!((right[0] - 200.0).abs() < 1e-9, "{right:?}");
+        assert!(cam.project([0.0, 0.0, 3.0], 200, 100).is_none());
+        let ortho = Cam { ortho: true, a: 4.0, ..cam };
+        assert!((ortho.project([0.0, 2.0, -5.0], 200, 100).expect("ortho")[1]).abs() < 1e-9);
     }
 
     #[test]
