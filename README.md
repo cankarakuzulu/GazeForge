@@ -415,7 +415,10 @@ target's exact delta at the game vertices, computed in WebAssembly (`gf-wasm`, w
 On release (150 ms debounce) the server settles the character (weights and macros -> dense -> the spec's placement ->
 game mesh), and the settled mesh replaces the preview and becomes the base of the next one. Under the default placement
 the settled mesh can differ from the preview, because the placement re-fits game vertices along the surface. Macro
-sliders preview with a one-sided slope fetched when the drag starts (`designer.macro_delta`).
+sliders preview from samples: after each settle the page fetches, in the background, the settled game mesh at a few
+values of the age and gender sliders (every part boundary of the slider plus a 0.25 grid, `designer.macro_delta` with
+`sampled`), and a drag interpolates between them. Until a slider's samples exist its drag uses a one-sided slope, and the
+status line says so.
 
 Everything heavy stays on the server: the dense pack, the catalog and the placement never reach the browser. The page
 downloads one preview pack per target set (game triangles plus each target's i16 delta at the game vertices and a scale,
@@ -532,12 +535,13 @@ first input (categories, search, reset, right click for a slider's start value, 
 definition is given); another input can replace it without touching the preview, the settle or the history.
 
 While a slider moves, the preview is the last settled mesh plus the weight changes times each target's sparse deltas
-on the game vertices (macro sliders use the macro's local slope), with normals recomputed and uploaded every frame. A
+on the game vertices (macro sliders interpolate settled samples taken in the background, or use the macro's local slope
+until those exist, which the overlay reports), with normals recomputed and uploaded every frame. A
 commit settles in-process on a worker thread with the spec's placement; the settled mesh replaces the preview, a settle
 still queued when a newer one arrives is dropped before it starts, and one already running finishes and becomes the
 preview's new base. Every shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings
-overlay (`Alt+H`) shows the present rate, frame times, input-to-preview latency, settle latency and the macro slope
-cost. `GAZEFORGE_SETTLE_THREADS` (default: half the cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+overlay (`Alt+H`) shows the present rate, frame times, input-to-preview latency, settle latency, the macro slope and
+sample costs. `GAZEFORGE_SETTLE_THREADS` (default: half the cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
 
 The key map is a JSON file (`--write-keymap` writes the defaults; edit and pass it with `--keymap`, or place it at the
 default location printed by `--help`): every action takes a list of bindings such as `"Alt+W"`, `"Ctrl+Shift+Z"` or

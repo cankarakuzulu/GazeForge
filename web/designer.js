@@ -26,7 +26,7 @@ const decodeF32 = (b64) => new Float32Array(bytesOf(b64));
 const decodeU32 = (b64) => new Uint32Array(bytesOf(b64));
 
 const D = {
-  targets: [], index: new Map(), w: null, w0: null, start: {}, macros: null, macroW: {}, macroW0: {}, macroDelta: {},
+  targets: [], index: new Map(), w: null, w0: null, start: {}, macros: null, macroW: {}, macroW0: {}, macroDelta: {}, macroSamples: {}, macroSampling: null, macroFallback: [], anchorKeys: {},
   base: {}, kernel: 0, wasm: null, n: 0, tri: 0, settled: null, preview: null, settleCount: 0, settling: false,
   stats: { frames: [], used: [], intervals: [], settles: [], errors: [], flips: [] }, measure: params.get("measure") === "1",
   dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
@@ -205,14 +205,95 @@ function computePreview() {
   for (let i = 0; i < D.targets.length; i++) v.weights[i] = D.w[i] - D.w0[i];
   let extra = 0;
   v.extra.fill(0);
-  for (const [name, d] of Object.entries(D.macroDelta)) {
-    const dm = (D.macroW[name] ?? 0) - (D.macroW0[name] ?? 0);
+  const fallback = [];
+  for (const name of Object.keys(D.macroW)) {
+    const to = D.macroW[name] ?? 0, from = D.macroW0[name] ?? 0, dm = to - from;
     if (dm === 0) continue;
+    const sm = macroSampled(name);
+    if (sm) {
+      for (const [k, c] of macroCoefficients(sm.values, from, to)) {
+        const L = sm.layers[k];
+        for (let i = 0; i < L.length; i++) v.extra[i] += c * L[i];
+      }
+      extra = 1;
+      continue;
+    }
+    const d = D.macroDelta[name];
+    if (!d) continue;
     const s = dm > 0 ? d.up : d.down;
     for (let i = 0; i < s.length; i++) v.extra[i] += dm * s[i];
+    fallback.push(name);
     extra = 1;
   }
+  if (fallback.length) {
+    const text = `preview (approximate; macro ${fallback.join(", ")}: single slope until its samples arrive)`;
+    if ($("status").textContent !== text) setStatus("preview", text);
+    if (fallback.join() !== D.macroFallback.join()) for (const name of fallback) macroSamplesFor(name);
+  } else if (D.macroFallback.length && changed()) setStatus("preview", "preview (approximate)");
+  D.macroFallback = fallback;
   return D.wasm.gf_preview(D.kernel, extra);
+}
+
+const MACRO_PREFETCH = ["age", "gender"];
+function anchorInput() {
+  const weights = {};
+  D.targets.forEach((t, i) => { if (D.w0[i] > 0) weights[t.id] = D.w0[i]; });
+  const input = { store, pack: D.base.pack, catalog: D.base.catalog, game: D.base.game, placement: D.start.placement, name: D.start.name, weights, residual: D.start.residual,
+                  macros: { sliders: { ...D.macroW0 }, mode: D.start.macros?.mode || "gf", head_scale: D.start.macros?.head_scale ?? 1 }, macro: opt("macro") };
+  if (opt("eyes")) input.eyes = opt("eyes");
+  return input;
+}
+function macroKey(name) {
+  if (D.keyW0 !== D.w0 || D.keyM0 !== D.macroW0) { D.keyW0 = D.w0; D.keyM0 = D.macroW0; D.anchorKeys = {}; }
+  if (!(name in D.anchorKeys)) {
+    const input = anchorInput();
+    delete input.macros.sliders[name];
+    D.anchorKeys[name] = `${name} ${JSON.stringify(input)}`;
+  }
+  return D.anchorKeys[name];
+}
+function macroSampled(name) {
+  const key = macroKey(name);
+  return (D.macroSamples[name] || []).find((s) => s.key === key);
+}
+function sampleSegment(values, x) {
+  const last = values.length - 1;
+  x = Math.min(Math.max(x, values[0]), values[last]);
+  let i = 0;
+  while (i < last - 1 && values[i + 1] <= x) i++;
+  const span = values[i + 1] - values[i];
+  return [i, span > 0 ? Math.min(Math.max((x - values[i]) / span, 0), 1) : 0];
+}
+function macroCoefficients(values, from, to) {
+  const [a, ta] = sampleSegment(values, to), [b, tb] = sampleSegment(values, from);
+  const c = new Map();
+  for (const [k, w] of [[a, 1 - ta], [a + 1, ta], [b, tb - 1], [b + 1, -tb]]) c.set(k, (c.get(k) || 0) + w);
+  return [...c].filter(([, w]) => w !== 0);
+}
+async function macroSamplesFor(name) {
+  if (!D.macros?.available || D.macroSampling || macroSampled(name) || !(name in D.macroW0)) return;
+  const key = macroKey(name), input = { ...anchorInput(), slider: name, sampled: true };
+  D.macroSampling = name;
+  const t0 = performance.now();
+  try {
+    const r = await api("designer.macro_delta", input);
+    const list = (D.macroSamples[name] || []).filter((s) => s.key !== key);
+    list.unshift({ key, values: r.values, layers: r.layers_f32_b64.map(decodeF32), ms: performance.now() - t0 });
+    D.macroSamples[name] = list.slice(0, 4);
+    request(true);
+  } catch (e) {
+    $("label").textContent = `macro samples unavailable: ${e.message}`;
+    D.macroSampling = null;
+    return;
+  }
+  D.macroSampling = null;
+  prefetchMacroSamples();
+}
+function prefetchMacroSamples() {
+  if (!D.macros?.available || D.macroSampling) return;
+  const names = [...D.macroFallback, ...MACRO_PREFETCH].filter((n) => D.macros.sliders.some((s) => s.name === n));
+  const next = names.find((n) => !macroSampled(n));
+  if (next) macroSamplesFor(next);
 }
 
 function activePose() { let last = null; for (const p of D.poses.values()) last = p; return last; }
@@ -327,6 +408,7 @@ async function settle(full) {
   D.w0 = wSent;
   D.macroW0 = mSent;
   D.macroDelta = {};
+  prefetchMacroSamples();
   D.settled = r;
   D.settledPositions = pos;
   D.settleCount++;
@@ -499,13 +581,14 @@ function buildMacros() {
       }
       scheduleSettle();
     }, async () => {
-      if (D.macroDelta[m.name]) return;
+      if (D.macroDelta[m.name] || macroSampled(m.name)) return;
+      macroSamplesFor(m.name);
       const input = { ...settleInput(), macro: opt("macro"), slider: m.name, macros: { sliders: { ...D.macroW0 }, mode: D.start.macros?.mode || "gf", head_scale: D.start.macros?.head_scale ?? 1 } };
       delete input.eyes;
       delete input.uvs;
       try {
         const r = await api("designer.macro_delta", input);
-        D.macroDelta[m.name] = { up: decodeF32(r.up_f32_b64), down: decodeF32(r.down_f32_b64) };
+        D.macroDelta[m.name] = { up: decodeF32(r.up_f32_b64), down: decodeF32(r.down_f32_b64).map((x) => -x) };
         request(true);
       } catch (e) {
         $("label").textContent = `macro preview unavailable: ${e.message}`;
@@ -1490,7 +1573,7 @@ async function main() {
   if (P.loadUnresolved?.length) $("p-status").textContent = `not found, kept as typed: ${unresolvedText(P.loadUnresolved)}`;
   else if (P.relinked) $("p-status").textContent = "resources relinked: save to keep the new locations";
   D.ui = { setMode, setLod, setLayout, namedView, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
-           setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"),
+           setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"), macroReady: (name) => !!macroSampled(name),
            project: { save: saveProject, saveAs: saveProjectAs, open: openProject, newProject, autosave, viewerState, applyViewerState, panelStates, projectSig, updateDirty, dialog } };
   D.ready = true;
   P.savedSig = projectSig();

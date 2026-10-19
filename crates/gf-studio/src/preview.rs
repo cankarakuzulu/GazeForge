@@ -78,6 +78,42 @@ pub struct Slope {
     pub down: Vec<f32>,
 }
 
+pub struct Sampled {
+    pub key: String,
+    pub values: Vec<f64>,
+    pub layers: Vec<Vec<f32>>,
+}
+
+const SAMPLED_STATES: usize = 4;
+
+fn segment(values: &[f64], x: f64) -> (usize, f64) {
+    let last = values.len() - 1;
+    let x = x.clamp(values[0], values[last]);
+    let i = values.partition_point(|&s| s <= x).saturating_sub(1).min(last.saturating_sub(1));
+    let span = values[i + 1] - values[i];
+    (i, if span > 0.0 { ((x - values[i]) / span).clamp(0.0, 1.0) } else { 0.0 })
+}
+
+impl Sampled {
+    pub fn valid(&self) -> bool {
+        self.values.len() >= 2 && self.layers.len() == self.values.len() && self.values.windows(2).all(|w| w[0] < w[1])
+    }
+
+    pub fn coefficients(&self, from: f64, to: f64) -> Vec<(usize, f64)> {
+        let (a, ta) = segment(&self.values, to);
+        let (b, tb) = segment(&self.values, from);
+        let mut c: Vec<(usize, f64)> = Vec::with_capacity(4);
+        for (i, w) in [(a, 1.0 - ta), (a + 1, ta), (b, tb - 1.0), (b + 1, -tb)] {
+            match c.iter_mut().find(|e| e.0 == i) {
+                Some(e) => e.1 += w,
+                None => c.push((i, w)),
+            }
+        }
+        c.retain(|e| e.1 != 0.0);
+        c
+    }
+}
+
 pub struct Preview {
     pub ids: Vec<String>,
     offsets: Vec<u32>,
@@ -87,6 +123,8 @@ pub struct Preview {
     pub anchor_w: Vec<f64>,
     pub anchor_macros: BTreeMap<String, f64>,
     pub slopes: HashMap<String, Slope>,
+    pub samples: HashMap<String, Vec<Sampled>>,
+    pub state_keys: HashMap<String, String>,
     pool: Option<rayon::ThreadPool>,
     pub threads: usize,
 }
@@ -95,6 +133,8 @@ pub struct Computed {
     pub targets: usize,
     pub macros: usize,
     pub missing_slopes: Vec<String>,
+    pub sampled: Vec<String>,
+    pub slope_fallback: Vec<String>,
 }
 
 impl Preview {
@@ -112,6 +152,8 @@ impl Preview {
             delta: d.delta,
             anchor_macros: BTreeMap::new(),
             slopes: HashMap::new(),
+            samples: HashMap::new(),
+            state_keys: HashMap::new(),
             pool,
             threads: threads.max(1),
         })
@@ -126,6 +168,22 @@ impl Preview {
         self.anchor_w = self.ids.iter().map(|id| weights.get(id).copied().unwrap_or(0.0)).collect();
         self.anchor_macros = macros.clone();
         self.slopes.clear();
+        self.state_keys.clear();
+    }
+
+    pub fn sampled_for(&self, name: &str) -> Option<&Sampled> {
+        let key = self.state_keys.get(name)?;
+        self.samples.get(name)?.iter().find(|s| &s.key == key)
+    }
+
+    pub fn add_samples(&mut self, name: &str, s: Sampled) {
+        if !s.valid() || s.layers.iter().any(|l| l.len() != self.anchor.len()) {
+            return;
+        }
+        let list = self.samples.entry(name.to_string()).or_default();
+        list.retain(|e| e.key != s.key);
+        list.insert(0, s);
+        list.truncate(SAMPLED_STATES);
     }
 
     pub fn compute(&self, weights: &BTreeMap<String, f64>, macros: &BTreeMap<String, f64>, out: &mut [f32]) -> Computed {
@@ -138,15 +196,24 @@ impl Preview {
                 (dw != 0.0).then_some((t, dw))
             })
             .collect();
-        let mut missing = Vec::new();
+        let (mut missing, mut sampled, mut fallback) = (Vec::new(), Vec::new(), Vec::new());
         let mut layers: Vec<(f32, &[f32])> = Vec::new();
         for (name, &v) in macros {
-            let dm = (v - self.anchor_macros.get(name).copied().unwrap_or(v)) as f32;
+            let v0 = self.anchor_macros.get(name).copied().unwrap_or(v);
+            let dm = (v - v0) as f32;
             if dm == 0.0 {
                 continue;
             }
+            if let Some(s) = self.sampled_for(name) {
+                layers.extend(s.coefficients(v0, v).into_iter().map(|(i, c)| (c as f32, s.layers[i].as_slice())));
+                sampled.push(name.clone());
+                continue;
+            }
             match self.slopes.get(name) {
-                Some(s) => layers.push((dm, if dm > 0.0 { &s.up } else { &s.down })),
+                Some(s) => {
+                    layers.push((dm, if dm > 0.0 { &s.up } else { &s.down }));
+                    fallback.push(name.clone());
+                }
                 None => missing.push(name.clone()),
             }
         }
@@ -178,7 +245,7 @@ impl Preview {
             Some(p) => p.install(|| out.par_chunks_mut(CHUNK * 3).enumerate().for_each(work)),
             None => out.chunks_mut(CHUNK * 3).enumerate().for_each(work),
         }
-        Computed { targets: active.len(), macros: layers.len(), missing_slopes: missing }
+        Computed { targets: active.len(), macros: sampled.len() + fallback.len(), missing_slopes: missing, sampled, slope_fallback: fallback }
     }
 
     pub fn normals(&self, normals: &mut Normals, pos: &[f32], idx: &[u32], out: &mut [f32]) {
@@ -229,5 +296,43 @@ mod tests {
         assert_eq!((c.targets, c.macros), (0, 1));
         assert_eq!(out[0], 1.0);
         assert_eq!(out[7500], 0.5);
+        assert_eq!(c.slope_fallback, vec!["age".to_string()]);
+    }
+
+    fn kinked(x: f64) -> f64 {
+        if x < 0.5 { 0.01 * x } else { 0.005 + 0.04 * (x - 0.5) }
+    }
+
+    #[test]
+    fn a_sampled_layer_follows_a_kinked_macro_across_the_knot_and_falls_back_to_the_slope_without_samples() {
+        let d = TargetDeltas { vertices: 1, ids: vec![], offsets: vec![0], index: vec![], delta: vec![] };
+        let mut p = Preview::new(d, 1).unwrap();
+        let macros = |age: f64| BTreeMap::from([("age".to_string(), age), ("gender".to_string(), 0.3)]);
+        p.set_anchor(&[0.0, 0.0, kinked(0.45) as f32], &BTreeMap::new(), &macros(0.45));
+        p.slopes.insert("age".into(), Slope { up: vec![0.0, 0.0, 0.01], down: vec![0.0, 0.0, 0.01] });
+        let mut out = vec![0.0f32; 3];
+        let c = p.compute(&BTreeMap::new(), &macros(0.85), &mut out);
+        assert_eq!((c.slope_fallback.len(), c.sampled.len()), (1, 0));
+        assert!((out[2] as f64 - kinked(0.85)).abs() > 0.01);
+        let values = vec![0.0, 0.25, 0.5, 0.75, 1.0];
+        let layers = values.iter().map(|&x| vec![0.0, 0.0, kinked(x) as f32]).collect();
+        p.state_keys.insert("age".into(), "gender 0.3".into());
+        p.add_samples("age", Sampled { key: "gender 0.4".into(), values: values.clone(), layers });
+        assert!(p.sampled_for("age").is_none());
+        let layers = values.iter().map(|&x| vec![0.0, 0.0, kinked(x) as f32]).collect();
+        p.add_samples("age", Sampled { key: "gender 0.3".into(), values, layers });
+        for to in [0.0, 0.2, 0.45, 0.5, 0.51, 0.85, 1.0] {
+            let c = p.compute(&BTreeMap::new(), &macros(to), &mut out);
+            assert_eq!(c.sampled.len(), (to != 0.45) as usize);
+            assert!((out[2] as f64 - kinked(to)).abs() < 1e-7, "{to}: {} vs {}", out[2], kinked(to));
+        }
+        p.set_anchor(&[0.0, 0.0, kinked(0.7) as f32], &BTreeMap::new(), &macros(0.7));
+        assert!(p.sampled_for("age").is_none());
+        p.state_keys.insert("age".into(), "gender 0.3".into());
+        assert!(p.sampled_for("age").is_some() && p.slopes.is_empty());
+        p.compute(&BTreeMap::new(), &macros(0.3), &mut out);
+        assert!((out[2] as f64 - kinked(0.3)).abs() < 1e-7);
+        p.state_keys.insert("age".into(), "gender 0.9".into());
+        assert!(p.sampled_for("age").is_none());
     }
 }

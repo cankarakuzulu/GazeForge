@@ -59,6 +59,7 @@ pub struct Hud {
     pub settle_latency: Ring,
     pub settle_worker: Ring,
     pub slope: Ring,
+    pub samples: Ring,
     pub presents: VecDeque<Instant>,
 }
 
@@ -74,6 +75,7 @@ impl Default for Hud {
             settle_latency: Ring::new(64),
             settle_worker: Ring::new(64),
             slope: Ring::new(64),
+            samples: Ring::new(64),
             presents: VecDeque::new(),
         }
     }
@@ -110,12 +112,13 @@ impl Hud {
             format!("input to preview p50/p95 {}", q(&self.preview_latency)),
             format!("settle latency p50/p95 {}", q(&self.settle_latency)),
             format!("macro slope p50/p95 {}", q(&self.slope)),
+            format!("macro samples p50/p95 {}", q(&self.samples)),
         ]
     }
 
     pub fn json(&self) -> Value {
         json!({"present_hz": self.present_hz(), "frame_interval_ms": self.frame_interval.json(), "frame_cpu_ms": self.frame_cpu.json(), "frame_gpu_complete_ms": self.frame_gpu.json(),
                "preview_compute_ms": self.preview_compute.json(), "input_to_preview_ms": self.preview_latency.json(), "settle_latency_ms": self.settle_latency.json(),
-               "settle_worker_ms": self.settle_worker.json(), "macro_slope_ms": self.slope.json()})
+               "settle_worker_ms": self.settle_worker.json(), "macro_slope_ms": self.slope.json(), "macro_samples_ms": self.samples.json()})
     }
 }

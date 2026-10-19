@@ -77,6 +77,13 @@ impl Offscreen {
         let frames = num("frames").unwrap_or(30.0).max(1.0) as usize;
         let edit = |v: f64| if mac.is_some() { Edit::Macro(key.clone(), v) } else { Edit::Weight(key.clone(), v) };
         let t0 = Instant::now();
+        let samples_wait_ms = if mac.is_some() && step.get("wait_samples").and_then(Value::as_bool).unwrap_or(false) {
+            let k = key.clone();
+            self.world.wait(move |w| w.samples_ready(&k), 120.0)?;
+            Some(ms(t0))
+        } else {
+            None
+        };
         self.world.shape_event(ShapeEvent::Begin(vec![key.clone()]));
         let slope_wait_ms = if mac.is_some() && step.get("wait_slope").and_then(Value::as_bool).unwrap_or(true) {
             self.world.wait(|w| w.idle(), 120.0)?;
@@ -84,7 +91,7 @@ impl Offscreen {
         } else {
             None
         };
-        let (mut latency, mut complete, mut compute, mut missing) = (Vec::new(), Vec::new(), Vec::new(), 0usize);
+        let (mut latency, mut complete, mut compute, mut missing, mut fallback, mut sampled) = (Vec::new(), Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
         let first = self.world.hud.preview_latency.total;
         for i in 1..=frames {
             let v = from + (to - from) * i as f64 / frames as f64;
@@ -98,8 +105,12 @@ impl Offscreen {
             if self.world.last_preview["missing_slopes"].as_array().is_some_and(|a| !a.is_empty()) {
                 missing += 1;
             }
+            let has = |k: &str| self.world.last_preview[k].as_array().is_some_and(|a| !a.is_empty());
+            fallback += has("slope_fallback") as usize;
+            sampled += has("sampled") as usize;
         }
-        let mut out = json!({"key": key, "from": from, "to": to, "frames": frames, "slope_wait_ms": slope_wait_ms, "frames_without_macro_preview": missing,
+        let mut out = json!({"key": key, "from": from, "to": to, "frames": frames, "slope_wait_ms": slope_wait_ms, "samples_wait_ms": samples_wait_ms, "frames_without_macro_preview": missing,
+                             "frames_slope_fallback": fallback, "frames_sampled": sampled, "busy_text": self.world.busy_text(),
                              "input_to_preview_ms": stats(latency), "frame_complete_ms": stats(complete), "preview_compute_ms": stats(compute), "last_preview": self.world.last_preview});
         if step.get("release").and_then(Value::as_bool).unwrap_or(true) {
             let previewed = self.world.session.as_ref().map(|s| s.head.positions.clone()).unwrap_or_default();
@@ -503,7 +514,7 @@ impl Offscreen {
                 std::fs::write(&inp, serde_json::to_string(&input).unwrap_or_default()).map_err(|e| format!("{}: {e}", inp.display()))?;
                 json!({"positions": pos.display().to_string(), "input": inp.display().to_string(), "settled_revision": s.settled.as_ref().map(|x| x.revision.clone()), "idle": w.idle()})
             }
-            "hud" => json!({"hud": w.hud.json(), "settle": w.settle_stats(), "last_settle": w.last_settle, "last_preview": w.last_preview}),
+            "hud" => json!({"hud": w.hud.json(), "settle": w.settle_stats(), "last_settle": w.last_settle, "last_preview": w.last_preview, "samples": w.samples_info}),
             "source" => {
                 let kind = text("kind").unwrap_or("native");
                 for s in slots_of(step, w) {
