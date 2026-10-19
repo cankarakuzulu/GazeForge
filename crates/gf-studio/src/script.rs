@@ -417,7 +417,7 @@ impl Offscreen {
                 if let Some(n) = num("preview_threads") {
                     w.preview_threads = (n as usize).max(1);
                 }
-                w.request_load(store, text("spec"), text("macro"));
+                w.request_load(store, text("spec"), text("macro"), text("eyes"));
                 w.wait(|w| w.loading.is_none(), 600.0)?;
                 let r = w.load_result.clone().ok_or("the load returned nothing")??;
                 w.wait(|w| w.idle(), 600.0)?;

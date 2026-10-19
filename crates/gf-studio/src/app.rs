@@ -17,6 +17,7 @@ pub struct Args {
     pub store: Option<String>,
     pub spec: Option<String>,
     pub macro_file: Option<String>,
+    pub eyes: Option<String>,
     pub keymap: Option<PathBuf>,
     pub bench: Option<(f64, bool)>,
     pub present: Option<String>,
@@ -43,6 +44,7 @@ pub struct StudioApp {
     store: String,
     spec: String,
     macro_file: String,
+    eyes: String,
     status: String,
     texture: Option<egui::TextureId>,
     texture_generation: u64,
@@ -116,6 +118,7 @@ impl StudioApp {
             store: args.store.clone().unwrap_or_default(),
             spec: args.spec.clone().unwrap_or_default(),
             macro_file: args.macro_file.clone().unwrap_or_default(),
+            eyes: args.eyes.clone().unwrap_or_default(),
             status: "open a store".into(),
             texture: None,
             texture_generation: 0,
@@ -141,8 +144,8 @@ impl StudioApp {
 
     fn load(&mut self) {
         let opt = |s: &String| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
-        let (spec, mac) = (opt(&self.spec), opt(&self.macro_file));
-        self.world.request_load(self.store.trim(), spec.as_deref(), mac.as_deref());
+        let (spec, mac, eyes) = (opt(&self.spec), opt(&self.macro_file), opt(&self.eyes));
+        self.world.request_load(self.store.trim(), spec.as_deref(), mac.as_deref(), eyes.as_deref());
         self.status = "loading".into();
     }
 
@@ -265,6 +268,7 @@ impl StudioApp {
             ui.checkbox(&mut o.wire, "wire");
             ui.checkbox(&mut o.xray, "x-ray");
             ui.checkbox(&mut o.points, "points");
+            ui.checkbox(&mut o.eyes, "eyes");
             ui.checkbox(&mut o.back_hi, "back faces");
             ui.checkbox(&mut o.seams, "seams");
             ui.checkbox(&mut o.clip[0].on, "clip");
@@ -287,6 +291,8 @@ impl StudioApp {
         ui.text_edit_singleline(&mut self.spec);
         ui.label("macro definition (optional)");
         ui.text_edit_singleline(&mut self.macro_file);
+        ui.label("eyes (optional)");
+        ui.text_edit_singleline(&mut self.eyes);
         ui.horizontal(|ui| {
             if ui.add_enabled(self.world.loading.is_none(), egui::Button::new("load")).clicked() {
                 self.load();

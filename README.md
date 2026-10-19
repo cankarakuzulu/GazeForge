@@ -518,7 +518,7 @@ loading a store and settling a character call the registry's typed cores directl
 
 ```
 cargo build --release -p gf-studio
-gazeforge-studio --store DIR [--spec FILE] [--macro FILE] [--keymap FILE] [--input sliders] [--godot-config FILE]
+gazeforge-studio --store DIR [--spec FILE] [--macro FILE] [--eyes FILE] [--keymap FILE] [--input sliders] [--godot-config FILE]
 gazeforge-studio --script STEPS.json --out DIR
 gazeforge-studio --write-keymap FILE
 ```
@@ -529,10 +529,18 @@ the same orbit, pan, zoom, pivot, focus, perspective and orthographic cameras, n
 quad layouts and the LOD switch. Each viewport slot takes its pixels from a frame source: the built-in renderer, or an
 external source that hands back RGBA frames for the slot's camera and size.
 
+`--eyes` takes the same eyes file as the browser designer: its eyeballs are drawn as spheres in the built-in renderer
+(the `eyes` toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. The
+spheres stay where the file puts them; a target that moves the eye sockets does not move them.
+
 Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
 weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the
-first input (categories, search, reset, right click for a slider's start value, and the macro sliders when a macro
-definition is given); another input can replace it without touching the preview, the settle or the history.
+first input: a tab for the macro sliders (when a macro definition is given), one per target category and one with every
+target; search across all targets; reset; right click for a slider's start value. Targets that are opposites of each
+other (`decr`/`incr`, `down`/`up`, `in`/`out`, `backward`/`forward`, `concave`/`convex`, `compress`/`uncompress` on the
+same name) share one slider from -1 (full first) through 0 to 1 (full second), which sets one of the two and clears the
+other; a character that has both set shows the difference and names both in the slider's tooltip until the slider is
+moved. Another input can replace it without touching the preview, the settle or the history.
 
 While a slider moves, the preview is the last settled mesh plus the weight changes times each target's sparse deltas
 on the game vertices (macro sliders interpolate settled samples taken in the background, or use the macro's local slope

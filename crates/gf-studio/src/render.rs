@@ -107,6 +107,12 @@ struct GpuHead {
     revision: u64,
     wind: f32,
     n: usize,
+    eyes: Option<GpuEyes>,
+}
+
+struct GpuEyes {
+    tri: u32,
+    bind: wgpu::BindGroup,
 }
 
 struct SlotTarget {
@@ -143,6 +149,7 @@ enum LinePipe {
 
 enum Draw {
     Mesh(MeshPipe, u32, usize),
+    Eyes(u32),
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
 }
@@ -334,7 +341,25 @@ impl Renderer {
                     GpuLod { tri: l.triangles() as u32, verts: l.verts.len() as u32, uvs, flags, bind }
                 })
                 .collect();
-            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n });
+            let eyes = head.eyes.as_ref().filter(|e| !e.indices.is_empty()).map(|e| {
+                let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
+                let entries = [
+                    buf("eye indices", u32_bytes(&e.indices)),
+                    buf("eye positions", f32_bytes(&e.positions)),
+                    buf("eye normals", f32_bytes(&e.normals)),
+                    buf("eye reference", f32_bytes(&e.positions)),
+                    buf("eye uvs", f32_bytes(&vec![0.0; tri * 6])),
+                    buf("eye flags", u32_bytes(&vec![0; tri])),
+                    buf("eye verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
+                ];
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("eyes"),
+                    layout: &self.g1,
+                    entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
+                });
+                GpuEyes { tri: tri as u32, bind }
+            });
+            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes });
             return;
         }
         let g = self.head.as_mut().expect("checked above");
@@ -482,6 +507,15 @@ impl Renderer {
             let base_chunk = chunk(base, &mut uni);
             if has_head {
                 first.draws.push(Draw::Mesh(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, base_chunk, lod));
+            }
+            if o.eyes && self.head.as_ref().is_some_and(|g| g.eyes.is_some()) {
+                let mut u = base;
+                u[72..75].copy_from_slice(&[0.93f32, 0.93, 0.95].map(|x| x.powf(2.2)));
+                u[88] = 0.0;
+                u[92] = 0.0;
+                u[96..98].copy_from_slice(&[0.0, 0.0]);
+                u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, 0.0]);
+                first.draws.push(Draw::Eyes(chunk(u, &mut uni)));
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
@@ -641,6 +675,13 @@ impl Renderer {
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &l.bind, &[]);
                             pass.draw(0..l.tri * 3, 0..1);
+                        }
+                        Draw::Eyes(c) => {
+                            let e = self.head.as_ref().and_then(|g| g.eyes.as_ref()).expect("eyes");
+                            pass.set_pipeline(&self.mesh[0]);
+                            pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
+                            pass.set_bind_group(1, &e.bind, &[]);
+                            pass.draw(0..e.tri * 3, 0..1);
                         }
                         Draw::Points(c, lod) => {
                             let g = self.head.as_ref().expect("head");

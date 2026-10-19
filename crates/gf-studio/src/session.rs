@@ -190,6 +190,40 @@ pub struct Head {
     pub wind: f32,
     pub reference: Option<Vec<f32>>,
     pub revision: u64,
+    pub eyes: Option<EyeMesh>,
+}
+
+pub struct EyeMesh {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+const EYE_RINGS: u32 = 24;
+const EYE_SEGMENTS: u32 = 48;
+
+pub fn eye_mesh(spheres: &[([f64; 3], f64)]) -> EyeMesh {
+    let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+    for &(c, r) in spheres {
+        let first = (positions.len() / 3) as u32;
+        for i in 0..=EYE_RINGS {
+            let theta = std::f64::consts::PI * i as f64 / EYE_RINGS as f64;
+            for j in 0..EYE_SEGMENTS {
+                let phi = std::f64::consts::TAU * j as f64 / EYE_SEGMENTS as f64;
+                let n = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
+                positions.extend((0..3).map(|k| (c[k] + r * n[k]) as f32));
+                normals.extend(n.iter().map(|&x| x as f32));
+            }
+        }
+        let at = |i: u32, j: u32| first + i * EYE_SEGMENTS + j % EYE_SEGMENTS;
+        for i in 0..EYE_RINGS {
+            for j in 0..EYE_SEGMENTS {
+                let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+                indices.extend([a, b, c, a, c, d]);
+            }
+        }
+    }
+    EyeMesh { positions, normals, indices }
 }
 
 pub struct Session {
@@ -198,6 +232,7 @@ pub struct Session {
     pub catalog: String,
     pub game: String,
     pub macro_file: Option<String>,
+    pub eyes_file: Option<String>,
     pub character: Character,
     pub start: Character,
     pub head: Head,
@@ -215,8 +250,12 @@ fn ms(t: Instant) -> f64 {
 }
 
 impl Session {
-    pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>) -> Result<(Session, Value), String> {
+    pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes_file: Option<&str>) -> Result<(Session, Value), String> {
         let ctx = Ctx::from_env();
+        let eyes = match eyes_file {
+            Some(p) => Some(eye_mesh(&gf_io::load_eyes(std::path::Path::new(p))?.iter().map(|e| (e.centre, e.radius)).collect::<Vec<_>>())),
+            None => None,
+        };
         let mut timings = BTreeMap::new();
         let t = Instant::now();
         let mut input = json!({"store": store});
@@ -250,7 +289,7 @@ impl Session {
         }
         timings.insert("lods_ms".into(), ms(t));
         let n = scene.vertices;
-        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, revision: 0 };
+        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, revision: 0, eyes };
         let targets = sl["targets"].as_array().map_or(0, |a| a.len());
         let mut s = Session {
             store: store.to_string(),
@@ -258,6 +297,7 @@ impl Session {
             catalog,
             game,
             macro_file: macro_file.map(str::to_string),
+            eyes_file: eyes_file.map(str::to_string),
             character: start.clone(),
             start,
             head,
@@ -272,6 +312,9 @@ impl Session {
     pub fn settle_input(&self, c: &Character, uvs: bool) -> Value {
         let mut input = json!({"store": self.store, "pack": self.pack, "catalog": self.catalog, "game": self.game, "placement": c.placement,
                                "name": c.name, "weights": c.weights, "residual": c.residual});
+        if let Some(e) = &self.eyes_file {
+            input["eyes"] = json!(e);
+        }
         if !c.macros.is_null() {
             input["macros"] = c.macros.clone();
             if let Some(m) = &self.macro_file {
@@ -405,6 +448,25 @@ mod tests {
             }
         }
         (flags, boundary, seams / 2)
+    }
+
+    #[test]
+    fn eye_spheres_are_closed_outward_and_on_their_radius() {
+        let spheres = [([0.03, -0.11, 1.5], 0.015), ([-0.03, -0.11, 1.5], 0.012)];
+        let m = eye_mesh(&spheres);
+        let per = ((EYE_RINGS + 1) * EYE_SEGMENTS) as usize;
+        assert_eq!(m.positions.len(), 2 * per * 3);
+        assert_eq!(m.indices.len(), 2 * (EYE_RINGS * EYE_SEGMENTS * 6) as usize);
+        for (k, &(c, r)) in spheres.iter().enumerate() {
+            let idx: Vec<u32> = m.indices[k * m.indices.len() / 2..(k + 1) * m.indices.len() / 2].to_vec();
+            assert_eq!(winding_sign(&m.positions, &idx), 1.0);
+            for v in k * per..(k + 1) * per {
+                let d: Vec<f64> = (0..3).map(|i| m.positions[v * 3 + i] as f64 - c[i]).collect();
+                let len = d.iter().map(|x| x * x).sum::<f64>().sqrt();
+                assert!((len - r).abs() < 1e-6, "{len} vs {r}");
+                assert!((0..3).map(|i| d[i] * m.normals[v * 3 + i] as f64).sum::<f64>() > 0.0);
+            }
+        }
     }
 
     #[test]

@@ -10,6 +10,63 @@ pub struct TargetInfo {
     pub label: String,
 }
 
+pub type Ends = (&'static str, &'static str);
+
+pub const OPPOSITES: [Ends; 6] = [("decr", "incr"), ("down", "up"), ("in", "out"), ("backward", "forward"), ("concave", "convex"), ("compress", "uncompress")];
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Slider {
+    One(usize),
+    Pair { label: String, neg: usize, pos: usize, ends: Ends },
+}
+
+impl Slider {
+    pub fn first(&self) -> usize {
+        match self {
+            Slider::One(i) => *i,
+            Slider::Pair { neg, pos, .. } => *neg.min(pos),
+        }
+    }
+
+    pub fn matches(&self, targets: &[TargetInfo], q: &str) -> bool {
+        match self {
+            Slider::One(i) => targets[*i].id.to_lowercase().contains(q),
+            Slider::Pair { neg, pos, .. } => targets[*neg].id.to_lowercase().contains(q) || targets[*pos].id.to_lowercase().contains(q),
+        }
+    }
+}
+
+pub fn pair_sliders(targets: &[TargetInfo]) -> Vec<Slider> {
+    let at: BTreeMap<&str, usize> = targets.iter().enumerate().map(|(i, t)| (t.id.as_str(), i)).collect();
+    let mut partner: Vec<Option<(usize, bool, Ends)>> = vec![None; targets.len()];
+    for (i, t) in targets.iter().enumerate() {
+        let Some((stem, end)) = t.id.rsplit_once('-') else { continue };
+        for &(neg, pos) in &OPPOSITES {
+            if let (true, Some(&j)) = (end == neg, at.get(format!("{stem}-{pos}").as_str())) {
+                partner[i] = Some((j, true, (neg, pos)));
+                partner[j] = Some((i, false, (neg, pos)));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, t) in targets.iter().enumerate() {
+        match partner[i] {
+            None => out.push(Slider::One(i)),
+            Some((j, is_neg, ends)) if i < j => {
+                let (neg, pos) = if is_neg { (i, j) } else { (j, i) };
+                let stem = t.label.rsplit_once('-').map_or(t.label.as_str(), |(s, _)| s).to_string();
+                out.push(Slider::Pair { label: stem, neg, pos, ends });
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
+pub fn pair_edits(neg: &str, pos: &str, x: f64) -> Vec<Edit> {
+    vec![Edit::Weight(neg.to_string(), (-x).max(0.0)), Edit::Weight(pos.to_string(), x.max(0.0))]
+}
+
 pub struct MacroInfo {
     pub name: String,
     pub base: f64,
@@ -60,6 +117,7 @@ pub struct Outcome {
 
 pub struct ShapeModel {
     pub targets: Vec<TargetInfo>,
+    pub sliders: Vec<Slider>,
     pub categories: Vec<(String, usize)>,
     pub macros: Vec<MacroInfo>,
     pub macros_available: bool,
@@ -126,8 +184,10 @@ impl ShapeModel {
             .unwrap_or_default();
         let weights: BTreeMap<String, f64> = start["weights"].as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_f64().filter(|x| *x != 0.0).map(|x| (k.clone(), x))).collect()).unwrap_or_default();
         let start_values = Values { weights, macros: macros.iter().map(|m| (m.name.clone(), m.start)).collect() };
+        let sliders = pair_sliders(&targets);
         ShapeModel {
             targets,
+            sliders,
             categories,
             macros,
             macros_available: m["available"].as_bool().unwrap_or(false),
@@ -231,6 +291,28 @@ mod tests {
             "macros": {"available": true, "sliders": [{"name": "age", "base": 0.5, "value": 0.5}]},
             "start": {"weights": {"chin/a": 0.25}, "macros": null}
         }))
+    }
+
+    #[test]
+    fn opposite_targets_pair_into_one_slider_and_the_rest_stay_single() {
+        let m = ShapeModel::from_sliders(&json!({
+            "targets": [{"id": "cheek/l-cheek-bones-incr", "category": "cheek"}, {"id": "cheek/l-cheek-bones-decr", "category": "cheek"},
+                        {"id": "nose/nose-trans-in", "category": "nose"}, {"id": "nose/nose-trans-out", "category": "nose"},
+                        {"id": "nose/nose-scale-incr", "category": "nose"}, {"id": "chin/chin-triangle", "category": "chin"},
+                        {"id": "chin/chin-width-incr", "category": "chin"}],
+            "macros": {"available": false}, "start": {"weights": {}, "macros": null}
+        }));
+        let id = |i: usize| m.targets[i].id.as_str();
+        let pairs: Vec<(String, &str, &str, (&str, &str))> =
+            m.sliders.iter().filter_map(|s| if let Slider::Pair { label, neg, pos, ends } = s { Some((label.clone(), id(*neg), id(*pos), *ends)) } else { None }).collect();
+        assert_eq!(pairs, vec![
+            ("l-cheek-bones".to_string(), "cheek/l-cheek-bones-decr", "cheek/l-cheek-bones-incr", ("decr", "incr")),
+            ("nose-trans".to_string(), "nose/nose-trans-in", "nose/nose-trans-out", ("in", "out")),
+        ]);
+        let singles: Vec<&str> = m.sliders.iter().filter_map(|s| if let Slider::One(i) = s { Some(id(*i)) } else { None }).collect();
+        assert_eq!(singles, vec!["chin/chin-triangle", "chin/chin-width-incr", "nose/nose-scale-incr"]);
+        assert_eq!(pair_edits("a", "b", -0.4), vec![Edit::Weight("a".into(), 0.4), Edit::Weight("b".into(), 0.0)]);
+        assert_eq!(pair_edits("a", "b", 0.7), vec![Edit::Weight("a".into(), 0.0), Edit::Weight("b".into(), 0.7)]);
     }
 
     #[test]

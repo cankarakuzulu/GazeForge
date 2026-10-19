@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-const USAGE: &str = "gazeforge-studio [--store DIR] [--spec FILE] [--macro FILE] [--keymap FILE] [--input sliders] [--godot-config FILE] [--bench-window SECONDS | --bench-idle SECONDS] [--present vsync|immediate]
+const USAGE: &str = "gazeforge-studio [--store DIR] [--spec FILE] [--macro FILE] [--eyes FILE] [--keymap FILE] [--input sliders] [--godot-config FILE] [--bench-window SECONDS | --bench-idle SECONDS] [--present vsync|immediate]
   opens the native designer window; the core runs in-process; --input picks the shape input layer (default sliders); --godot-config names the Godot render mode's settings
 gazeforge-studio --script STEPS.json --out DIR
   runs the steps against an offscreen GPU target with no window and prints one JSON report (also written to DIR/report.json)
@@ -26,7 +26,7 @@ gazeforge-studio --write-keymap FILE
   writes the default key map, to edit and pass back with --keymap (or place at the default location)
 Every scripted or keymap run prints one JSON object on stdout; a non-zero exit code means it failed.";
 
-const KEYS: &[&str] = &["store", "spec", "macro", "keymap", "input", "bench-window", "present", "script", "out", "write-keymap", "godot-config", "bench-idle"];
+const KEYS: &[&str] = &["store", "spec", "macro", "eyes", "keymap", "input", "bench-window", "present", "script", "out", "write-keymap", "godot-config", "bench-idle"];
 
 fn options(args: &[String]) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
@@ -110,6 +110,7 @@ fn main() -> ExitCode {
         store: o.get("store").cloned(),
         spec: o.get("spec").cloned(),
         macro_file: o.get("macro").cloned(),
+        eyes: o.get("eyes").cloned(),
         keymap: o.get("keymap").map(PathBuf::from),
         bench,
         present: o.get("present").cloned(),

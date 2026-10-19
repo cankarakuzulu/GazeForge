@@ -121,11 +121,11 @@ impl World {
         }
     }
 
-    pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>) {
+    pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>) {
         self.load_seq += 1;
         self.loading = Some(Instant::now());
         self.load_result = None;
-        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: spec.map(str::to_string), macro_file: macro_file.map(str::to_string) });
+        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: spec.map(str::to_string), macro_file: macro_file.map(str::to_string), eyes: eyes.map(str::to_string) });
     }
 
     pub fn idle(&self) -> bool {
