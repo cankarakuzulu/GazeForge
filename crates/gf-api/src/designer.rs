@@ -387,7 +387,25 @@ pub fn scene_output() -> Value {
     shape(json!({"vertices": {"type": "integer"}, "triangles": {"type": "integer"}, "lods": {"type": "array"}, "eyes": {"type": "array"}}))
 }
 
-pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+pub struct SceneLod {
+    pub target: usize,
+    pub game: String,
+    pub vertices: usize,
+    pub triangles: usize,
+    pub dropped_triangles: usize,
+    pub indices: Vec<u32>,
+    pub triangle_uvs: Vec<f64>,
+}
+
+pub struct SceneMesh {
+    pub vertices: usize,
+    pub triangles: Vec<[u32; 3]>,
+    pub triangle_uvs: Vec<[gf_geom::Uv; 3]>,
+    pub lods: Vec<SceneLod>,
+    pub cached: bool,
+}
+
+pub fn scene_mesh(input: &Value) -> Result<SceneMesh, ApiError> {
     let (loaded, cached) = load(input)?;
     let game = text(input, "game");
     let manifest: GameManifest = loaded.store.get_manifest("game", game).map_err(ApiError::not_found)?;
@@ -410,16 +428,28 @@ pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 uvs.extend(uv.iter().flatten().map(|&x| x as f64));
             }
         }
-        let bytes: Vec<u8> = indices.iter().flat_map(|v| v.to_le_bytes()).collect();
-        lods.push(json!({"target": lod.target, "game": lod.game, "vertices": m.vertices, "triangles": m.triangles, "dropped_triangles": dropped,
-                         "triangles_u32_b64": base64(&bytes), "triangle_uvs_f32_b64": f32_base64(uvs.into_iter())}));
+        lods.push(SceneLod { target: lod.target, game: lod.game.clone(), vertices: m.vertices, triangles: m.triangles, dropped_triangles: dropped, indices, triangle_uvs: uvs });
     }
+    Ok(SceneMesh { vertices: loaded.game.kept.len(), triangles: loaded.game.triangles.clone(), triangle_uvs: loaded.game.triangle_uvs.clone(), lods, cached })
+}
+
+pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let mesh = scene_mesh(input)?;
+    let lods: Vec<Value> = mesh
+        .lods
+        .iter()
+        .map(|l| {
+            let bytes: Vec<u8> = l.indices.iter().flat_map(|v| v.to_le_bytes()).collect();
+            json!({"target": l.target, "game": l.game, "vertices": l.vertices, "triangles": l.triangles, "dropped_triangles": l.dropped_triangles,
+                   "triangles_u32_b64": base64(&bytes), "triangle_uvs_f32_b64": f32_base64(l.triangle_uvs.iter().copied())})
+        })
+        .collect();
     let eyes: Vec<Value> = match input.get("eyes").and_then(Value::as_str) {
         Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?.iter().map(|e| json!({"centre": e.centre, "radius": e.radius})).collect(),
         None => Vec::new(),
     };
-    let base_uvs = f32_base64(loaded.game.triangle_uvs.iter().flatten().flatten().map(|&x| x as f64));
-    Ok(json!({"vertices": loaded.game.kept.len(), "triangles": loaded.game.triangles.len(), "triangle_uvs_f32_b64": base_uvs, "lods": lods, "eyes": eyes, "cached": cached,
+    let base_uvs = f32_base64(mesh.triangle_uvs.iter().flatten().flatten().map(|&x| x as f64));
+    Ok(json!({"vertices": mesh.vertices, "triangles": mesh.triangles.len(), "triangle_uvs_f32_b64": base_uvs, "lods": lods, "eyes": eyes, "cached": mesh.cached,
               "definition": "each coarser level's triangles as indices into the finest game base's vertex order (the levels are nested subsets of it); a triangle with a vertex outside the finest level is dropped and counted"}))
 }
 
@@ -562,7 +592,106 @@ pub fn pack(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
               "cached": cached, "seconds": started.elapsed().as_secs_f64()}))
 }
 
-pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+pub struct TargetDeltas {
+    pub vertices: usize,
+    pub ids: Vec<String>,
+    pub offsets: Vec<u32>,
+    pub index: Vec<u32>,
+    pub delta: Vec<[f32; 3]>,
+}
+
+pub fn preview_deltas(input: &Value) -> Result<TargetDeltas, ApiError> {
+    let (loaded, _) = load(input)?;
+    let ids: Vec<String> = match input.get("targets").and_then(Value::as_array) {
+        Some(list) => list.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => loaded.catalog.targets.iter().filter(|(_, e)| HEAD_CATEGORIES.contains(&e.category.as_str())).map(|(id, _)| id.clone()).collect(),
+    };
+    let mesh = &loaded.game;
+    let mut game_of = vec![u32::MAX; loaded.dense.positions.len()];
+    for (g, &d) in mesh.kept.iter().enumerate() {
+        game_of[d as usize] = g as u32;
+    }
+    let per_target = gf_geom::map_range(ids.len(), |i| -> Result<Vec<(u32, [f32; 3])>, ApiError> {
+        let target = loaded.target(&ids[i])?;
+        let mut rows: Vec<(u32, [f32; 3])> = target
+            .indices
+            .iter()
+            .zip(&target.deltas)
+            .filter(|(d, v)| game_of[**d as usize] != u32::MAX && v.iter().any(|x| *x != 0.0))
+            .map(|(&d, v)| (game_of[d as usize], *v))
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        Ok(rows)
+    });
+    let (mut offsets, mut index, mut delta) = (vec![0u32], Vec::new(), Vec::new());
+    for rows in per_target {
+        for (g, v) in rows? {
+            index.push(g);
+            delta.push(v);
+        }
+        offsets.push(index.len() as u32);
+    }
+    Ok(TargetDeltas { vertices: mesh.kept.len(), ids, offsets, index, delta })
+}
+
+pub struct MacroSlope {
+    pub value: f64,
+    pub step: f64,
+    pub up: Vec<f32>,
+    pub down: Vec<f32>,
+    pub vertices: usize,
+}
+
+pub fn macro_slope(input: &Value) -> Result<MacroSlope, ApiError> {
+    let (loaded, _) = load(input)?;
+    let source = macro_source(input)?.ok_or_else(|| ApiError::invalid("macro_delta needs macro, the macro definition file"))?;
+    let spec = spec_of(&with(input.clone(), json!({"macros": input.get("macros").cloned().filter(|m| !m.is_null()).unwrap_or(json!({}))})), &loaded, Some(&source))?;
+    let m = spec.macros.clone().expect("set above");
+    let slider = text(input, "slider");
+    let value = *m.sliders.get(slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
+    let step = input.get("step").and_then(Value::as_f64).unwrap_or(0.05);
+    let at = |v: f64| -> Result<Vec<[f64; 3]>, ApiError> {
+        let mut sliders = m.sliders.clone();
+        sliders.insert(slider.to_string(), v);
+        let layer = loaded.macro_layer(&source, &m.mode, &sliders, m.head_scale)?;
+        Ok(loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
+    };
+    let (hi, lo) = ((value + step).min(1.0), (value - step).max(0.0));
+    let mid = at(value)?;
+    let slope = |far: &[[f64; 3]], span: f64| -> Vec<f32> {
+        if span <= 0.0 {
+            return vec![0.0; mid.len() * 3];
+        }
+        far.iter().zip(&mid).flat_map(|(f, c)| [0, 1, 2].map(|k| ((f[k] - c[k]) / span) as f32)).collect()
+    };
+    let up = slope(&at(hi)?, hi - value);
+    let down = slope(&at(lo)?, value - lo);
+    Ok(MacroSlope { value, step, up, down, vertices: mid.len() })
+}
+
+pub struct Settled {
+    pub positions: Vec<[f64; 3]>,
+    pub triangle_uvs: Option<Vec<[gf_geom::Uv; 3]>>,
+    pub report: serde_json::Map<String, Value>,
+    pub measurements: serde_json::Map<String, Value>,
+    pub revision: String,
+    pub placement: String,
+    pub cached: bool,
+    pub approximate: bool,
+    pub prepared_cached: bool,
+    pub seconds: SettleSeconds,
+    pub started: Instant,
+}
+
+pub struct SettleSeconds {
+    pub load: f64,
+    pub placer: f64,
+    pub evaluated: f64,
+    pub prepared: f64,
+    pub placed: f64,
+}
+
+pub fn settle_mesh(input: &Value) -> Result<Settled, ApiError> {
     let started = Instant::now();
     let (loaded, cached) = load(input)?;
     let t_load = started.elapsed().as_secs_f64();
@@ -593,47 +722,49 @@ pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let t_prepared = started.elapsed().as_secs_f64();
     let placed = placement.place_prepared(&dense, &DenseMesh { triangles: &loaded.dense.triangles, triangle_uvs: &loaded.dense.triangle_uvs }, &loaded.game, prepared);
     let t2 = started.elapsed().as_secs_f64();
-    let mut out = json!({"vertices": placed.game.len(), "revision": spec.revision(), "placement": placement.version().to_string(),
-                         "positions_f32_b64": f32_base64(placed.game.iter().flatten().copied()), "cached": cached, "approximate": draft,
+    let triangle_uvs = if input.get("uvs").and_then(Value::as_bool).unwrap_or(false) {
+        Some(placed.triangle_uvs.unwrap_or_else(|| loaded.game.triangle_uvs.clone()))
+    } else {
+        None
+    };
+    Ok(Settled {
+        positions: placed.game,
+        triangle_uvs,
+        report: placed.report,
+        measurements,
+        revision: spec.revision(),
+        placement: placement.version().to_string(),
+        cached,
+        approximate: draft,
+        prepared_cached: ready,
+        seconds: SettleSeconds { load: t_load, placer: t0, evaluated: t1, prepared: t_prepared, placed: t2 },
+        started,
+    })
+}
+
+pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let s = settle_mesh(input)?;
+    let draft = s.approximate;
+    let mut out = json!({"vertices": s.positions.len(), "revision": s.revision, "placement": s.placement,
+                         "positions_f32_b64": f32_base64(s.positions.iter().flatten().copied()), "cached": s.cached, "approximate": draft,
                          "draft": if draft { json!({"rounds": DRAFT_ROUNDS, "full_rounds": f3_defaults().rounds, "note": "designer-only draft; save and export use the full placement"}) } else { Value::Null }});
-    if input.get("uvs").and_then(Value::as_bool).unwrap_or(false) {
-        let uvs = placed.triangle_uvs.unwrap_or_else(|| loaded.game.triangle_uvs.clone());
+    if let Some(uvs) = &s.triangle_uvs {
         out["triangle_uvs_f32_b64"] = json!(f32_base64(uvs.iter().flatten().flatten().map(|&x| x as f64)));
     }
-    let t3 = started.elapsed().as_secs_f64();
+    let t3 = s.started.elapsed().as_secs_f64();
+    let SettleSeconds { load: t_load, placer: t0, evaluated: t1, prepared: t_prepared, placed: t2 } = s.seconds;
     out["timing_ms"] = json!({"load": t_load * 1000.0, "evaluate": (t1 - t0) * 1000.0, "prepare": (t_prepared - t1) * 1000.0, "place": (t2 - t_prepared) * 1000.0,
-                             "encode": (t3 - t2) * 1000.0, "total": t3 * 1000.0, "prepared_cached": ready});
-    out["measurements"] = Value::Object(measurements);
-    out["report"] = Value::Object(placed.report);
+                             "encode": (t3 - t2) * 1000.0, "total": t3 * 1000.0, "prepared_cached": s.prepared_cached});
+    out["measurements"] = Value::Object(s.measurements);
+    out["report"] = Value::Object(s.report);
     Ok(out)
 }
 
 pub fn macro_delta(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let started = Instant::now();
-    let (loaded, _) = load(input)?;
-    let source = macro_source(input)?.ok_or_else(|| ApiError::invalid("macro_delta needs macro, the macro definition file"))?;
-    let spec = spec_of(&with(input.clone(), json!({"macros": input.get("macros").cloned().filter(|m| !m.is_null()).unwrap_or(json!({}))})), &loaded, Some(&source))?;
-    let m = spec.macros.clone().expect("set above");
-    let slider = text(input, "slider");
-    let value = *m.sliders.get(slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
-    let step = input.get("step").and_then(Value::as_f64).unwrap_or(0.05);
-    let at = |v: f64| -> Result<Vec<[f64; 3]>, ApiError> {
-        let mut sliders = m.sliders.clone();
-        sliders.insert(slider.to_string(), v);
-        let layer = loaded.macro_layer(&source, &m.mode, &sliders, m.head_scale)?;
-        Ok(loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
-    };
-    let (hi, lo) = ((value + step).min(1.0), (value - step).max(0.0));
-    let mid = at(value)?;
-    let slope = |far: &[[f64; 3]], span: f64| -> String {
-        if span <= 0.0 {
-            return f32_base64(std::iter::repeat_n(0.0, mid.len() * 3));
-        }
-        f32_base64(far.iter().zip(&mid).flat_map(|(f, c)| [0, 1, 2].map(|k| (f[k] - c[k]) / span)))
-    };
-    let up = slope(&at(hi)?, hi - value);
-    let down = slope(&at(lo)?, value - lo);
-    Ok(json!({"slider": slider, "value": value, "step": step, "up_f32_b64": up, "down_f32_b64": down, "vertices": mid.len(),
+    let s = macro_slope(input)?;
+    let encode = |v: &[f32]| f32_base64(v.iter().map(|&x| x as f64));
+    Ok(json!({"slider": text(input, "slider"), "value": s.value, "step": s.step, "up_f32_b64": encode(&s.up), "down_f32_b64": encode(&s.down), "vertices": s.vertices,
               "definition": "metres per unit slider at each game vertex: (L(v + step) - L(v)) / step and (L(v) - L(v - step)) / step, clamped to [0, 1]",
               "seconds": started.elapsed().as_secs_f64()}))
 }

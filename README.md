@@ -32,7 +32,8 @@ The workspace is layered, and every edge points down: `gf-geom` (pure maths: no 
 `wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
 catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
 `gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
-`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only.
+`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only. `gf-studio` (the native studio,
+binary `gazeforge-studio`) is another front door: it links `gf-api` in-process and nothing depends on it.
 `python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
 against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
 `-D warnings`, the wasm32 build, and a build of `gf-core`, `gf-io` and `gf-api` in a copy of the workspace without its
@@ -506,6 +507,125 @@ other than 1 shows the scaled head through `setPose`; while the character change
 re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
 moves and refits after the settle.
 
+### Native client
+
+`gazeforge-studio` is a native designer (Rust, wgpu and egui; Windows and macOS) that runs the core in the same process:
+loading a store and settling a character call the registry's typed cores directly (`designer::scene_mesh`,
+`designer::settle_mesh`), so no mesh crosses HTTP, JSON or base64. The browser designer stays as the other client.
+
+```
+cargo build --release -p gf-studio
+gazeforge-studio --store DIR [--spec FILE] [--macro FILE] [--keymap FILE] [--input sliders] [--godot-config FILE]
+gazeforge-studio --script STEPS.json --out DIR
+gazeforge-studio --write-keymap FILE
+```
+
+The viewport ports the browser viewer: the same twelve render modes (clay by default) and overlays (wireframe, hidden
+edges, vertex points, back faces, seams and boundaries, clip planes with capped sections, a clip box, light gizmo),
+the same orbit, pan, zoom, pivot, focus, perspective and orthographic cameras, named views, the single, side-by-side and
+quad layouts and the LOD switch. Each viewport slot takes its pixels from a frame source: the built-in renderer, or an
+external source that hands back RGBA frames for the slot's camera and size.
+
+Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
+weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the
+first input (categories, search, reset, right click for a slider's start value, and the macro sliders when a macro
+definition is given); another input can replace it without touching the preview, the settle or the history.
+
+While a slider moves, the preview is the last settled mesh plus the weight changes times each target's sparse deltas
+on the game vertices (macro sliders use the macro's local slope), with normals recomputed and uploaded every frame. A
+commit settles in-process on a worker thread with the spec's placement; the settled mesh replaces the preview, a settle
+still queued when a newer one arrives is dropped before it starts, and one already running finishes and becomes the
+preview's new base. Every shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings
+overlay (`Alt+H`) shows the present rate, frame times, input-to-preview latency, settle latency and the macro slope
+cost. `GAZEFORGE_SETTLE_THREADS` (default: half the cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+
+The key map is a JSON file (`--write-keymap` writes the defaults; edit and pass it with `--keymap`, or place it at the
+default location printed by `--help`): every action takes a list of bindings such as `"Alt+W"`, `"Ctrl+Shift+Z"` or
+`"Ctrl+Alt+1"`, and an empty list unbinds it. No default is a bare letter or digit: view toggles use `Alt`, editing
+uses `Ctrl` (`Ctrl+Z` undo, `Ctrl+Y` or `Ctrl+Shift+Z` redo, `Ctrl+S` save) and `F1` lists the keys.
+
+`--script` runs a list of steps against an offscreen GPU target with no window and prints one JSON report (also
+written to `DIR/report.json`): `load`, `layout`, `active`, `mode`, `lod`, `view`, `ortho`, `camera`, `orbit`, `pan`,
+`zoom`, `fov`, `focus`, `action` (any key-map action, including `undo` and `redo`), `option` (viewer options by name,
+such as `wire` or `clip.0.offset`), `weights` (target weights and macro values committed through the input layer, then
+the settle awaited), `edit` (the same as a preview change, optionally committed without waiting), `drag` (a slider moved
+over a number of rendered frames, then released: input-to-preview latency per frame, frame times during the drag and
+during the settle, release-to-settled latency), `settle`, `wait`, `save`, `dump_settle` (the settled positions and the
+exact settle input), `hud`, `source`, `screenshot` (PNG of the layout or the active viewport), `frames` (frame timings),
+`dump_positions`, `keymap` and `summary`, plus the Godot render mode's steps below. A step that fails stops the run
+with a non-zero exit code.
+
+#### Godot render mode
+
+Any viewport slot can be drawn by Godot's renderer instead of the built-in one (the toolbar's renderer choice, or the
+`source` step with `"kind": "godot"`), so a character can be looked at under a game's own materials, environment and
+lights without leaving the client. The frames are shown in the viewport like any other; the client's camera drives
+Godot's. The mode is off until it is chosen.
+
+How it works: choosing the mode starts Godot 4.7 as a child process on the render host project in `clients/godot-render`
+(GDScript only). The host keeps its main window minimized with the render loop off and draws on request into one
+offscreen viewport per slot. The two talk over one localhost TCP connection with a small binary protocol (protocol
+version 1, little endian; every message has a 16-byte header: magic `GFRH`, version, type, payload length):
+
+| Message | Direction | Payload |
+|---|---|---|
+| `HELLO` / `HELLO_ACK` | app -> host -> app | protocol version; the host answers with its Godot version and GPU |
+| `CONFIG` / `CONFIG_ACK` | app -> host -> app | JSON: material, environment, scene, background; the host answers what loaded and what did not |
+| `MESH` / `MESH_ACK` | app -> host | once per topology: positions, normals, UVs (game vertices split at UV seams) and triangle indices |
+| `POSITIONS` / `POSITIONS_ACK` | app -> host | every new head revision (each settle, and each preview frame while a slider moves, when the host is free): positions and normals |
+| `RENDER` / `FRAME` | app -> host -> app | slot, size, perspective field of view or orthographic height, near, far, camera transform; the host answers with RGBA8 pixels and its render and readback times |
+| `READBACK` / `VERTS` | app -> host -> app | the positions the host's mesh holds (for checks) |
+| `ERROR`, `BYE` | either | a message, or the end of the session |
+
+TCP and not shared memory: GDScript has no shared-memory API (it would need a native extension), and loopback TCP is
+not the bottleneck: a 1280x800 frame (4 MB) arrives in about 2 to 3 ms, while Godot's synchronous texture readback of
+the same frame takes about 8 ms. While the camera moves the host renders at a reduced size (`orbit_scale`, default 0.5)
+and the client scales the frame up; once the camera has been still for `still_ms` (default 120) the slot is rendered at
+full size. Only the newest camera of each slot is rendered, so a slow host shows fewer frames but never a backlog.
+
+The client never waits for Godot: the connection runs on its own thread, and a slot without a current Godot frame is
+drawn by the built-in renderer. A missing binary or project, a host that does not connect within `start_timeout_ms`,
+does not answer a frame within `frame_timeout_ms`, exits or is killed, puts the mode into a failed state with the
+reason shown in the slot's label, and the slot falls back to the built-in renderer until the mode is chosen again.
+
+Settings live in a JSON file (`--godot-config FILE`, or `studio-godot.json` next to the key map; `--help` prints the
+default path); `GAZEFORGE_GODOT` and `GAZEFORGE_GODOT_PROJECT` give the binary and project when the file does not:
+
+```json
+{
+  "godot": "path/to/Godot_v4.7-stable_win64_console.exe",
+  "project": "path/to/clients/godot-render",
+  "script": "res://host.gd",
+  "material": "res://materials/skin.tres",
+  "environment": "res://environments/studio.tres",
+  "scene": "res://lighting/key_fill_rim.tscn",
+  "orbit_scale": 0.5,
+  "still_ms": 120,
+  "start_timeout_ms": 30000,
+  "frame_timeout_ms": 3000,
+  "visible": false
+}
+```
+
+Without `material`, `environment` and `scene` the host uses a neutral look: a light grey two-sided material, three
+directional lights, flat ambient light and the viewport's background colour. To use your own look, point `project` at
+your own Godot project, set `script` to the absolute path of `clients/godot-render/host.gd`, and name `res://` paths in
+that project: `material` (any `Material`, applied to the character), `environment` (an `Environment`) and `scene` (a
+`PackedScene`, instanced in place of the default lights; put your lights, probes or props in it). The project must have
+been opened in the Godot editor once so its resources are imported. Paths that do not load are reported and the
+defaults stay.
+
+Limits: the character is the game mesh's first LOD with its UVs; the slot's LOD, render mode and overlays (wireframe,
+clip planes, points and the rest) do not apply to Godot frames; morph targets, skeletons and eyes are not sent; the host
+renders one slot at a time, so in the quad layout the four slots share its frame rate. `visible: true` shows the host's
+window, for debugging only.
+
+Scripted steps for the mode: `source` with `"kind": "godot"` (optional `godot` settings object or `config` file,
+`restart`), `godot_wait` (until every Godot slot shows a full-size frame of the current camera and head, or the mode
+failed), `godot_status` (state, host info and the frame, latency and transfer timings; `reset` clears them),
+`godot_readback` (writes the positions Godot holds, the client's positions and the vertex map), `godot_marker` (a marker
+sphere at a vertex, with the vertex's projected pixel in every slot), `godot_kill` and `godot_stop`.
+
 ### Projects
 
 A project file `<name>.gfproj.json` keeps an ongoing piece of work: its characters (each a spec with a revision history;
@@ -841,6 +961,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
+| Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development
 
