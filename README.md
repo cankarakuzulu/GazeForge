@@ -239,6 +239,16 @@ fitted poses, errors, and the shapes' blend deltas), and the designer panel `web
 sliders and presets as blend shapes or through the joints, per-joint pose controls, a joint overlay, undo for every
 change. Open the designer with `&face_morphs=<dir of the shapes' .npz>` (and `&face_prefix=` if their ids differ).
 
+`--rig face2` is an opt-in second version of the face rig; `--rig face` is unchanged. It replaces the four lid joints
+with twelve (`lid_upper/lower_in/mid/out_L/R`, three along each lid, all turning about the eye centre), starts their
+weights from the eye geometry (the canthus landmarks and the lid seed vertices) instead of distance alone, gives the
+mouth corners more translation reach, keeps up to 8 influences per vertex (`JOINTS_1` / `WEIGHTS_1` beside `JOINTS_0` /
+`WEIGHTS_0`), and adds a barrier term to the pose fit that keeps vertices outside the eye surface. With
+`--rig-correctives on` every shape also gets a corrective morph target (`<shape>.corrective`) that each animation drives
+from 0 to 1 through a glTF `weights` channel, so the joint pose plus its corrective reproduces the blend shape exactly,
+at the cost of one more morph target per shape on every LOD. `gates rig` reads both influence sets and applies
+animated morph weights before skinning.
+
 Morphs carry no UVs in glTF, so every LOD keeps the neutral character's UVs; the sidecar records, per morph, how far the
 placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_lod0`).
 

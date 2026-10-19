@@ -32,7 +32,31 @@ pub fn face_animations(names: &[String], fits: &[(Vec<JointPose>, ShapeError)], 
                     gltf::Channel { joint: j, rotation: [[0.0, 0.0, 0.0, 1.0], q.map(|x| x as f32)], translation: [rest, t.map(|x| x as f32)] }
                 })
                 .collect();
-            gltf::Animation { name: name.clone(), channels }
+            gltf::Animation { name: name.clone(), channels, morph: None }
+        })
+        .collect()
+}
+
+pub fn face2_animations(names: &[String], fits: &[(Vec<JointPose>, ShapeError)], pivots: &[Point]) -> Vec<gltf::Animation> {
+    use gf_core::face_rig2 as fr2;
+    let parents = fr2::parents();
+    let pg: Vec<Point> = pivots.iter().map(|p| frame(*p)).collect();
+    names
+        .iter()
+        .zip(fits)
+        .map(|(name, fit)| {
+            let poses: Vec<JointPose> = fit.0.iter().map(|p| JointPose { rotation: frame(p.rotation), translation: frame(p.translation) }).collect();
+            let locals = fr::local_pose(&parents, &pg, &poses);
+            let channels = (0..fr2::count())
+                .filter(|&j| fr::is_free(j))
+                .map(|j| {
+                    let parent = parents[j].map(|p| pg[p]).unwrap_or([0.0; 3]);
+                    let rest = [0, 1, 2].map(|k| (pg[j][k] - parent[k]) as f32);
+                    let (q, t) = locals[j];
+                    gltf::Channel { joint: j, rotation: [[0.0, 0.0, 0.0, 1.0], q.map(|x| x as f32)], translation: [rest, t.map(|x| x as f32)] }
+                })
+                .collect();
+            gltf::Animation { name: name.clone(), channels, morph: None }
         })
         .collect()
 }
@@ -81,9 +105,10 @@ fn f32_of(v: &Value) -> f64 {
 
 struct Skinned {
     name: String,
+    node: usize,
     mesh: usize,
-    joints: Vec<[usize; 4]>,
-    weights: Vec<[f32; 4]>,
+    joints: Vec<[usize; 8]>,
+    weights: Vec<[f32; 8]>,
 }
 
 fn globals(doc: &Value, parent: &[Option<usize>], local: &[Affine], joints: &[usize]) -> Vec<Affine> {
@@ -107,16 +132,18 @@ fn globals(doc: &Value, parent: &[Option<usize>], local: &[Affine], joints: &[us
 fn skin_points(skin: &Skinned, mats: &[Affine], positions: &[[f32; 3]], normals: &[[f32; 3]]) -> (Vec<Point>, Vec<Point>) {
     let mut p = Vec::with_capacity(positions.len());
     let mut n = Vec::with_capacity(positions.len());
-    for v in 0..positions.len() {
-        let x = positions[v].map(f64::from);
+    for (v, position) in positions.iter().enumerate() {
+        let x = position.map(f64::from);
         let nn = normals.get(v).map(|q| q.map(f64::from)).unwrap_or([0.0; 3]);
         let (mut y, mut m) = ([0.0; 3], [0.0; 3]);
-        for k in 0..4 {
+        for k in 0..8 {
             let w = skin.weights[v][k] as f64;
             if w == 0.0 {
                 continue;
             }
-            let a = &mats[skin.joints[v][k]];
+            let Some(a) = mats.get(skin.joints[v][k]) else {
+                continue;
+            };
             let r = fr::apply(&a.0, x);
             let rn = fr::apply(&a.0, nn);
             for c in 0..3 {
@@ -177,13 +204,21 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
         let attributes = &doc["meshes"][m as usize]["primitives"][0]["attributes"];
         let j = gltf::read_plain(&doc, bin, attributes["JOINTS_0"].as_u64().ok_or("a skinned mesh has no JOINTS_0")?)?;
         let w = gltf::read_plain(&doc, bin, attributes["WEIGHTS_0"].as_u64().ok_or("a skinned mesh has no WEIGHTS_0")?)?;
+        let (j1, w1) = match (attributes["JOINTS_1"].as_u64(), attributes["WEIGHTS_1"].as_u64()) {
+            (Some(a), Some(b)) => (gltf::read_plain(&doc, bin, a)?, gltf::read_plain(&doc, bin, b)?),
+            (None, None) => (vec![0.0; j.len()], vec![0.0; w.len()]),
+            _ => return Err("a skinned mesh has only one of JOINTS_1 / WEIGHTS_1".into()),
+        };
+        if j1.len() != j.len() || w1.len() != w.len() {
+            return Err("JOINTS_1 / WEIGHTS_1 do not match JOINTS_0 / WEIGHTS_0".into());
+        }
         skinned.push(Skinned {
             name: node["name"].as_str().unwrap_or("").to_string(),
+            node: i,
             mesh: m as usize,
-            joints: j.chunks_exact(4).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize, c[3] as usize]).collect(),
-            weights: w.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+            joints: j.chunks_exact(4).zip(j1.chunks_exact(4)).map(|(c, d)| [c[0], c[1], c[2], c[3], d[0], d[1], d[2], d[3]].map(|x| x as usize)).collect(),
+            weights: w.chunks_exact(4).zip(w1.chunks_exact(4)).map(|(c, d)| [c[0], c[1], c[2], c[3], d[0], d[1], d[2], d[3]]).collect(),
         });
-        let _ = i;
     }
     if skinned.is_empty() {
         return Err(format!("{path}: no skinned mesh"));
@@ -207,7 +242,7 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
         let mesh = &meshes[s.mesh];
         let (p, _) = skin_points(s, &rest_mats, &mesh.positions, &mesh.normals);
         let bind = p.iter().zip(&mesh.positions).map(|(a, b)| (0..3).map(|k| (a[k] - b[k] as f64).abs()).fold(0.0, f64::max)).fold(0.0, f64::max);
-        let sum_error = s.weights.iter().map(|w| ((w[0] + w[1] + w[2] + w[3]) as f64 - 1.0).abs()).fold(0.0, f64::max);
+        let sum_error = s.weights.iter().map(|w| ((w[0] + w[1] + w[2] + w[3] + w[4] + w[5] + w[6] + w[7]) as f64 - 1.0).abs()).fold(0.0, f64::max);
         let negative = s.weights.iter().flatten().filter(|w| **w < 0.0).count();
         let bad_joint = s.joints.iter().flatten().filter(|j| **j >= joint_nodes.len()).count();
         if bind > 0.0 {
@@ -229,6 +264,7 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
     for animation in doc["animations"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
         let name = animation["name"].as_str().unwrap_or("").to_string();
         let mut local = rest.clone();
+        let mut morph_weights: HashMap<usize, Vec<f32>> = HashMap::new();
         for ch in animation["channels"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let node = ch["target"]["node"].as_u64().ok_or("a channel has no node")? as usize;
             let sampler = &animation["samplers"][ch["sampler"].as_u64().ok_or("a channel has no sampler")? as usize];
@@ -242,6 +278,9 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
                     let t = &out[out.len() - 3..];
                     local[node].1 = [t[0] as f64, t[1] as f64, t[2] as f64];
                 }
+                Some("weights") => {
+                    morph_weights.insert(node, out[out.len() / 2..].to_vec());
+                }
                 _ => {}
             }
         }
@@ -249,7 +288,26 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
         let mut rows = Vec::new();
         for s in &skinned {
             let mesh = &meshes[s.mesh];
-            let (p, n) = skin_points(s, &posed, &mesh.positions, &mesh.normals);
+            let (p, n) = match morph_weights.get(&s.node) {
+                Some(w) => {
+                    let mut mp = mesh.positions.clone();
+                    let mut mn = mesh.normals.clone();
+                    for (k, m) in mesh.morphs.iter().enumerate() {
+                        let wk = w.get(k).copied().unwrap_or(0.0);
+                        if wk == 0.0 {
+                            continue;
+                        }
+                        for (a, d) in mp.iter_mut().zip(&m.positions) {
+                            *a = [0, 1, 2].map(|c| a[c] + wk * d[c]);
+                        }
+                        for (a, d) in mn.iter_mut().zip(&m.normals) {
+                            *a = [0, 1, 2].map(|c| a[c] + wk * d[c]);
+                        }
+                    }
+                    skin_points(s, &posed, &mp, &mn)
+                }
+                None => skin_points(s, &posed, &mesh.positions, &mesh.normals),
+            };
             let tris: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
             let joint_facing = tris.iter().filter(|t| gm::facing_dot(&p, &n, t) < 0.0).count();
             let mut weld: HashMap<[u32; 3], u32> = HashMap::new();

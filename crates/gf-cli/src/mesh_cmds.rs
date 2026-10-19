@@ -35,6 +35,7 @@ const GLB_KEYS: &[&str] = &[
     "rig",
     "rig-jaw",
     "rig-rounds",
+    "rig-correctives",
     "morph-dir",
     "morph-floor",
     "lids",
@@ -609,8 +610,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let (rigged, face_mode) = match opts.get("rig").map(String::as_str).unwrap_or("none") {
         "none" => (false, false),
         "head" => (true, false),
-        "face" => (true, true),
-        other => return Err(format!("--rig must be none, head or face, got {other}")),
+        "face" | "face2" => (true, true),
+        other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
+    };
+    let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let correctives = match opts.get("rig-correctives").map(String::as_str) {
+        None | Some("off") => false,
+        Some("on") if face_version == 2 => true,
+        Some("on") => return Err("--rig-correctives goes with --rig face2".into()),
+        Some(other) => return Err(format!("--rig-correctives must be on or off, got {other}")),
     };
     if !face_mode && opts.contains_key("rig-rounds") {
         return Err("--rig-rounds goes with --rig face".into());
@@ -818,6 +826,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut rig_data: Option<(gltf::Rig, Vec<[f64; 3]>)> = None;
     let mut face_meta = Value::Null;
     let mut face_skin: Option<gf_core::face_rig::Influences> = None;
+    let mut face2_correctives: Option<(Vec<Vec<gf_core::face_rig::JointPose>>, Vec<Point>)> = None;
     if rigged {
         use gf_core::rig;
         let mut eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
@@ -865,7 +874,61 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             attachments,
             animations: Vec::new(),
         };
-        if face_mode {
+        if face_mode && face_version == 2 {
+            use gf_core::face_rig as fr;
+            use gf_core::face_rig2 as fr2;
+            if ids.is_empty() {
+                return Err("--rig face2 needs --morphs (the shapes the joint poses are fitted to)".into());
+            }
+            let fit_started = std::time::Instant::now();
+            let targets: Vec<gf_core::catalog::SparseTarget> = ids.iter().map(|id| load(id)).collect::<Result<_, _>>()?;
+            let base_rig = fr2::base_rig(&dense.positions, &base.kept, &base.triangles, &jaw, &targets, rig_rounds)?;
+            let pivots = fr2::character_pivots([neck, hinge_now, left.centre, right.centre], &base_rig.regions, &positions);
+            let deltas: Vec<Vec<Point>> = morph_games.iter().map(|mg| mg.iter().zip(&neutral.game).map(|(a, b)| [0, 1, 2].map(|k| a[k] - b[k])).collect()).collect();
+            let emphasis = fr::lid_emphasis(&neutral.game, &[(left.centre, left.radius), (right.centre, right.radius)]);
+            let problem = fr::Problem { rest: &neutral.game, influences: &base_rig.influences, pivots: &pivots, emphasis: Some(&emphasis) };
+            let bounds = fr2::bounds();
+            let bar = fr2::barrier(&neutral.game, &eyes, LID_FRONT_DEG);
+            let fits = fr2::fit_shapes(&problem, &deltas, &bounds, Some(&bar));
+            rig_value.names = fr2::names();
+            rig_value.parents = fr2::parents();
+            rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
+            rig_value.animations = crate::rig_cmds::face2_animations(&names, &fits, &pivots);
+            let parents = fr2::parents();
+            let all_names = fr2::names();
+            let spec = fr2::joints();
+            let joint_rows: Vec<Value> = (0..fr2::count())
+                .map(|j| {
+                    let mut row = json!({"name": all_names[j], "parent": parents[j].map(|p| all_names[p].clone()), "position_gltf_m": rig_value.global[j],
+                                         "posed": fr::is_free(j), "bound_deg_mm": [bounds[j].0.to_degrees(), bounds[j].1 * 1000.0]});
+                    if let Some(f) = j.checked_sub(rig::JOINTS.len()).and_then(|f| spec.get(f)) {
+                        row["kind"] = json!(f.kind);
+                        if let fr2::Kind::Seed(s) = f.kind {
+                            row["seed_dense_vertex"] = json!(fr::FACE[s].seed);
+                            row["seed_rule"] = json!(fr::FACE[s].rule);
+                            row["falloff_mm"] = json!(fr::FACE[s].radius_mm);
+                        }
+                    }
+                    row
+                })
+                .collect();
+            face_meta = json!({
+                "version": fr2::VERSION, "joints": joint_rows, "weights": base_rig.report, "lid_frames": base_rig.lids, "lid_vertices": base_rig.lid_vertices,
+                "fit": crate::rig_cmds::fit_report(&names, &fits), 
+                "correctives": if correctives { json!(format!("one corrective morph target per shape, named <shape>.corrective, on every LOD: per vertex the rest-space delta c with sum_j w_j (R_j (x + c - p_j) + p_j + t_j) = the blend shape position at weight 1 (and the normal likewise); each animation also drives its corrective weight 0 -> 1 through a glTF weights channel on every head LOD node, so joints plus corrective reproduce the blend shape; vertices whose blended rotation has |det| < {} take the plain difference", fr2::SINGULAR_DET)) } else { Value::Null },
+                "seconds": fit_started.elapsed().as_secs_f64(),
+                "pivots": format!("each seeded facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; the 12 lid joints (3 along each lid margin) sit at the eye centres; every joint position is rounded to 1/{} m", fr::REGION_MM, fr::PIVOT_GRID),
+                "poses": format!("per shape, every posed joint gets a rotation about its rest position and a translation, solved by Gauss-Newton on the game LOD0 against F(c + e) - F(c) with the exported weights, bounded per joint (bound_deg_mm); vertices within {} eye radii of an eye centre count {} times, and every vertex outside an eye at rest within {} eye radii of its centre is pushed out of the eye surface (+{} mm) by a barrier term", fr::LID_EMPHASIS_REACH, fr::LID_EMPHASIS, fr2::BARRIER_REACH, fr2::BARRIER_MARGIN_MM),
+                "influences": format!("up to {} per vertex: JOINTS_0 / WEIGHTS_0 hold the first 4, JOINTS_1 / WEIGHTS_1 the rest", fr2::MAX_INFLUENCES),
+                "animations": "one glTF animation per shape, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the fitted pose) for the posed joints' rotation and translation; neck, head and the eyes are not animated"});
+            if correctives {
+                face2_correctives = Some((fits.iter().map(|f| f.0.clone()).collect::<Vec<_>>(), pivots.clone()));
+                for (k, a) in rig_value.animations.iter_mut().enumerate() {
+                    a.morph = Some(names.len() + k);
+                }
+            }
+            face_skin = Some(base_rig.influences);
+        } else if face_mode {
             use gf_core::face_rig as fr;
             if ids.is_empty() {
                 return Err("--rig face needs --morphs (the shapes the joint poses are fitted to)".into());
@@ -913,7 +976,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             "eyes": "Eye_L / Eye_R spheres (radius from the eyes file) are children of eye_L / eye_R",
             "bind": "joints are translation-only; each inverse bind matrix is the negated sum of the joint chain's local translations"});
         if face_mode {
-            rig_meta["mode"] = json!("face");
+            rig_meta["mode"] = json!(if face_version == 2 { "face2" } else { "face" });
             rig_meta["weights"] = json!("face: see face.weights.method; the neck / head / jaw split the facial weights start from is the head rig's");
             rig_meta["face"] = face_meta.clone();
         }
@@ -948,7 +1011,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 uvs: surface.uvs.clone(),
                 indices: surface.indices,
                 morphs: Vec::new(),
-                skin: rig_data.as_ref().map(|_| gltf::SkinData { joints: vec![[0, 1, 2, 0]; surface.source.len()], weights: vec![[1.0, 0.0, 0.0, 0.0]; surface.source.len()] }),
+                skin: rig_data.as_ref().map(|_| gltf::SkinData {
+                    joints: vec![[0, 1, 2, 0]; surface.source.len()],
+                    weights: vec![[1.0, 0.0, 0.0, 0.0]; surface.source.len()],
+                    joints_1: Vec::new(),
+                    weights_1: Vec::new(),
+                }),
             });
         }
         if !failures.is_empty() {
@@ -972,6 +1040,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let pick = |v: &[Point]| -> Vec<Point> { surface.source.iter().map(|&g| v[g as usize]).collect() };
         let (gp, gn) = (pick(&game), pick(&normals));
         let mut morphs = Vec::new();
+        let mut corrective_morphs = Vec::new();
         for mg in &morph_games {
             let (eg, mut en) = lod_state(level, mg);
             if let Some(over) = shared {
@@ -994,23 +1063,49 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
             }
             morphs.push(MorphData { positions: positions_delta, normals: normals_delta });
+            if let (Some((poses, pivots)), Some(influences)) = (&face2_correctives, &face_skin) {
+                let inf: Vec<&[(usize, f64)]> = surface.source.iter().map(|&g| influences[level.map[g as usize] as usize].as_slice()).collect();
+                let c = gf_core::face_rig2::corrective(&gp, &gn, &inf, pivots, &poses[corrective_morphs.len()], &ep, &enn);
+                let mut positions: Vec<[f32; 3]> = c.positions.iter().map(|d| gm::to_gltf(*d)).collect();
+                let mut normals: Vec<[f32; 3]> = c.normals.iter().map(|d| gm::to_gltf(*d)).collect();
+                if let Some(floor) = floor_m {
+                    let length = |v: &[f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                    for (p, q) in positions.iter_mut().zip(normals.iter_mut()) {
+                        if (length(p) as f64) < floor {
+                            *p = [0.0; 3];
+                        }
+                        if length(q) < NORMAL_FLOOR {
+                            *q = [0.0; 3];
+                        }
+                    }
+                }
+                corrective_morphs.push(MorphData { positions, normals });
+            }
         }
+        morphs.extend(corrective_morphs);
         lod_meta.push(json!({"node": level.name, "game_vertices": level.mesh.kept.len(), "vertices": surface.source.len(),
                              "triangles": level.triangles.len(),
                              "screen_size": if i == 0 { 1.0 } else { screens[i - 1] }}));
         let face_lod_skin = face_skin.as_ref().map(|influences| {
+            let wide = influences.iter().any(|i| i.len() > 4);
             let mut joints = Vec::with_capacity(surface.source.len());
             let mut weights = Vec::with_capacity(surface.source.len());
+            let mut joints_1 = Vec::new();
+            let mut weights_1 = Vec::new();
             for &g in &surface.source {
-                let (mut j, mut w) = ([0u8; 4], [0.0f32; 4]);
+                let (mut j, mut w) = ([0u8; 8], [0.0f32; 8]);
                 for (k, &(joint, weight)) in influences[level.map[g as usize] as usize].iter().enumerate() {
                     j[k] = joint as u8;
                     w[k] = weight as f32;
                 }
-                joints.push(j);
-                weights.push(w);
+                joints.push([j[0], j[1], j[2], j[3]]);
+                weights.push([w[0], w[1], w[2], w[3]]);
+                if wide {
+                    joints_1.push([j[4], j[5], j[6], j[7]]);
+                    weights_1.push([w[4], w[5], w[6], w[7]]);
+                }
             }
-            gltf::SkinData { joints, weights }
+            gltf::SkinData { joints, weights, joints_1, weights_1 }
         });
         let skin = if face_lod_skin.is_some() { face_lod_skin } else { rig_data.as_ref().map(|(_, weights)| {
             let w: Vec<[f32; 4]> = surface
@@ -1024,7 +1119,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     [neck, 1.0 - neck - jaw, jaw, 0.0]
                 })
                 .collect();
-            gltf::SkinData { joints: vec![[0, 1, 2, 0]; w.len()], weights: w }
+            gltf::SkinData { joints: vec![[0, 1, 2, 0]; w.len()], weights: w, joints_1: Vec::new(), weights_1: Vec::new() }
         }) };
         lods.push(Lod {
             name: level.name.clone(),
@@ -1049,7 +1144,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let tool = format!("gazeforge {}", env!("CARGO_PKG_VERSION"));
     let extras = json!({"spec": spec.revision(), "pack": spec.base.pack, "game_base": game_ref,
                         "placement": placement.version().to_string(), "tool": tool});
-    let (bytes, report) = gltf::glb_full(&lods, &body_lods, &names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
+    let glb_names: Vec<String> = if face2_correctives.is_some() { names.iter().cloned().chain(names.iter().map(|n| format!("{n}.corrective"))).collect() } else { names.clone() };
+    let (bytes, report) = gltf::glb_full(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
