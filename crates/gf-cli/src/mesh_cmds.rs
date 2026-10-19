@@ -1,0 +1,1217 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+use gf_core::game_mesh::{self as gm, Point};
+use gf_core::gates::{self, DenseSurface, ShellLimits};
+use gf_core::hash;
+use gf_core::placement::{DenseMesh, Placed, Placement, PlacementVersion};
+use gf_geom::Uv;
+use gf_geom::decimate::Decimated;
+use gf_geom::lids;
+use gf_io::character as ch;
+use gf_io::dense::{self, Dense};
+use gf_io::gltf::{self, Lod, MorphData, Sparse};
+use gf_io::store::Store;
+use gf_io::{game_base, obj};
+use serde_json::{Value, json};
+
+use crate::{Options, count, need, number, only, placement_keys, placer};
+
+const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
+const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles"];
+const LIDS_GATE_KEYS: &[&str] = &["glb", "eyes", "states", "front-deg", "tolerance-mm"];
+const PATH_KEYS: &[&str] = &["dense", "base", "start", "delta", "steps", "placement", "pop-limit", "plant"];
+const GLB_KEYS: &[&str] = &[
+    "store",
+    "spec",
+    "macro",
+    "out",
+    "morphs",
+    "sparse",
+    "lod-screen",
+    "lod-pixels",
+    "lod-height",
+    "facing",
+    "rig",
+    "rig-jaw",
+    "rig-rounds",
+    "rig-correctives",
+    "morph-dir",
+    "morph-floor",
+    "lids",
+    "lod0-out",
+];
+const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
+const EYES_KEY: &[&str] = &["eyes"];
+const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
+
+fn body_options(opts: &Options) -> Result<Option<(gf_core::body::BodyPack, Value, gf_core::body::Controls)>, String> {
+    let Some(dir) = opts.get("body") else {
+        if let Some(k) = BODY_KEYS.iter().find(|k| opts.contains_key(**k)) {
+            return Err(format!("--{k} needs --body PACK"));
+        }
+        return Ok(None);
+    };
+    let (manifest, pack) = gf_io::body::load(Path::new(dir))?;
+    let controls = gf_core::body::Controls {
+        blend_m: number(opts, "body-blend-mm", 60.0)? / 1000.0,
+        neck_offset_m: number(opts, "body-neck-offset-mm", 0.0)? / 1000.0,
+        head_scale: number(opts, "head-scale", 1.0)?,
+        body_scale: number(opts, "body-scale", 1.0)?,
+        smooth: number(opts, "body-smooth", 0.0)?.round().max(0.0) as usize,
+        tangent: number(opts, "body-tangent", 0.5)?,
+    };
+    controls.check()?;
+    Ok(Some((pack, manifest, controls)))
+}
+const LID_FRONT_DEG: f64 = 75.0;
+const FACING_ROUNDS: usize = 8;
+const UNTANGLE_ITERATIONS: usize = 200;
+const UNTANGLE_MAX_MM: f64 = 2.0;
+const STATE_UNTANGLE_ITERATIONS: usize = 400;
+const STATE_UNTANGLE_MAX_MM: f64 = 4.0;
+const TOUCH_ROUNDS: usize = 4;
+const SETTLE_ROUNDS: usize = 4;
+const TOUCH_MARGIN: f64 = 1e-5;
+const WEIGHT_STEPS: f64 = 65536.0;
+const EYE_RINGS: u32 = 16;
+const EYE_SEGMENTS: u32 = 24;
+const NORMAL_FLOOR: f32 = 1e-3;
+const GAME_GATES: &[&str] = &["triq", "uv", "census", "seams"];
+
+pub(crate) fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
+    let pass = failed.is_empty();
+    let mut out = json!({"ok": pass, "command": command, "pass": pass, "gates": gates, "failed": failed});
+    if !pass {
+        out["error"] = json!(format!("gates failed: {}", out["failed"].as_array().unwrap().iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>().join(", ")));
+    }
+    if let Value::Object(map) = extra {
+        for (k, v) in map {
+            out[k] = v;
+        }
+    }
+    out
+}
+
+pub fn gates_shell(opts: &Options) -> Result<Value, String> {
+    only(opts, "gates shell", &[SHELL_KEYS])?;
+    let limits = ShellLimits {
+        fold_tolerance: count(opts, "fold-tolerance", 10)?,
+        inner_tolerance: count(opts, "inner-tolerance", 15)?,
+        rough_mm: number(opts, "rough-mm", 0.02)?,
+        rough_relative: number(opts, "rough-rel", 0.05)?,
+        rough_tolerance: count(opts, "rough-tolerance", 200)?,
+    };
+    let dense = Dense::load(Path::new(need(opts, "dense")?))?;
+    let quads = dense.quads()?;
+    let before = dense.positions_from(need(opts, "before")?)?;
+    let after = dense.positions_from(need(opts, "after")?)?;
+    let report = gates::shell(&before, &after, &quads, &limits)?;
+    gates::check_frame(&before, report.tip)?;
+    let failed = if report.pass { Vec::new() } else { vec!["shell".to_string()] };
+    let failures = report.failures.clone();
+    Ok(verdict("gates shell", json!({"shell": report}), failed, json!({"failures": failures})))
+}
+
+pub fn gates_game(opts: &Options) -> Result<Value, String> {
+    only(opts, "gates game", &[GAME_KEYS])?;
+    let chosen: Vec<String> = match opts.get("gates") {
+        Some(list) => list.split(',').map(str::to_string).collect(),
+        None => GAME_GATES.iter().map(|s| s.to_string()).collect(),
+    };
+    if let Some(bad) = chosen.iter().find(|g| !GAME_GATES.contains(&g.as_str())) {
+        return Err(format!("--gates takes a list of {}, got {bad}", GAME_GATES.join(",")));
+    }
+    let seam_limit = number(opts, "seam-limit-mm", 0.05)?;
+    let dense = Dense::load(Path::new(need(opts, "dense")?))?;
+    let base = game_base::load(Path::new(need(opts, "base")?))?;
+    let face = dense.positions_from(need(opts, "face")?)?;
+    let tip = dense.nose_tip(&face, count(opts, "tip-vertex", dense::NOSE_TIP_VERTEX)?)?;
+    gates::check_frame(&face, tip)?;
+    let path = Path::new(need(opts, "obj")?);
+    let mesh = obj::read(path)?;
+    if mesh.positions.len() != base.kept.len() {
+        return Err(format!("{} has {} vertices, the game base keeps {}", path.display(), mesh.positions.len(), base.kept.len()));
+    }
+    let own_triangles = match opts.get("triangles").map(String::as_str).unwrap_or("base") {
+        "base" => false,
+        "obj" => true,
+        other => return Err(format!("--triangles must be base or obj, got {other}")),
+    };
+    let triangles = if own_triangles {
+        let own = mesh.triangles();
+        if own.iter().flatten().any(|&i| i as usize >= mesh.positions.len()) {
+            return Err(format!("a triangle of {} indexes past its vertices", path.display()));
+        }
+        own
+    } else {
+        if mesh.triangles() != base.triangles {
+            return Err(format!("the triangles of {} differ from the game base's (--triangles obj reads a re-triangulated mesh)", path.display()));
+        }
+        base.triangles.clone()
+    };
+    let uvs = mesh.corner_uvs();
+    let game = &mesh.positions;
+    let mut out = serde_json::Map::new();
+    let mut failed = Vec::new();
+    for name in &chosen {
+        let (value, pass) = match name.as_str() {
+            "triq" => {
+                let r = gates::triangle_quality(game, &triangles, tip);
+                (json!(r), r.pass)
+            }
+            "uv" => {
+                let r = gates::uv_health(game, &triangles, &uvs);
+                (json!(r), r.pass)
+            }
+            "census" => {
+                let r = gates::census_on(&face, &dense.triangles, &base, &triangles, game, tip);
+                (json!(r), r.pass)
+            }
+            _ => {
+                let surface = DenseSurface { positions: &face, triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs };
+                let r = gates::seams(game, &triangles, &uvs, (&base.triangles, &base.triangle_uvs), &surface, tip, seam_limit);
+                (json!(r), r.pass)
+            }
+        };
+        if !pass {
+            failed.push(name.clone());
+        }
+        out.insert(name.clone(), value);
+    }
+    let mut extra = json!({"tip_m": tip, "obj": path.display().to_string()});
+    if own_triangles {
+        extra["triangles"] = json!({"source": "obj", "count": triangles.len(), "differ_from_base": triangles != base.triangles});
+    }
+    Ok(verdict("gates game", Value::Object(out), failed, extra))
+}
+
+pub fn gates_path(opts: &Options) -> Result<Value, String> {
+    let default = gf_core::placement::DEFAULT.to_string();
+    let given = opts.get("placement").map(String::as_str).unwrap_or(&default);
+    let version = PlacementVersion::parse(given)?;
+    let mut allowed: Vec<&[&str]> = vec![PATH_KEYS];
+    allowed.extend_from_slice(placement_keys(version.name));
+    only(opts, &format!("gates path --placement {given}"), &allowed)?;
+    let placement = placer(opts, version)?;
+    let steps = count(opts, "steps", 20)?;
+    if steps == 0 {
+        return Err("--steps must be at least 1".into());
+    }
+    let limit = count(opts, "pop-limit", 10)?;
+    let dense = Dense::load(Path::new(need(opts, "dense")?))?;
+    let base = game_base::load(Path::new(need(opts, "base")?))?;
+    let start = dense.positions_from(need(opts, "start")?)?;
+    let delta = dense::read_points(Path::new(need(opts, "delta")?))?;
+    if delta.len() != start.len() {
+        return Err(format!("--delta has {} vertices, the dense base {}", delta.len(), start.len()));
+    }
+    let plant = match opts.get("plant") {
+        Some(text) => {
+            let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+            let parsed = match parts.as_slice() {
+                [s, v, mm] => s.parse::<usize>().ok().zip(v.parse::<usize>().ok()).zip(mm.parse::<f64>().ok().filter(|x| x.is_finite())),
+                _ => None,
+            };
+            let ((s, v), mm) = parsed.ok_or_else(|| format!("--plant takes STEP,GAME_VERTEX,MM, got {text}"))?;
+            if s > steps || v >= base.kept.len() {
+                return Err(format!("--plant {text}: the step must be at most {steps} and the vertex below {}", base.kept.len()));
+            }
+            Some((s, v, mm))
+        }
+        None => None,
+    };
+    let mesh = DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs };
+    let mut placed = Vec::new();
+    let mut subset = Vec::new();
+    for k in 0..=steps {
+        let t = k as f64 / steps as f64;
+        let shape: Vec<Point> = start.iter().zip(&delta).map(|(s, d)| [0, 1, 2].map(|i| (s[i] + t * d[i]) as f32 as f64)).collect();
+        let mut game = placement.place(&shape, &mesh, &base).game;
+        if let Some((_, v, mm)) = plant.filter(|p| p.0 == k) {
+            game[v][1] -= mm / 1000.0;
+        }
+        placed.push(game);
+        subset.push(base.kept.iter().map(|&i| shape[i as usize]).collect::<Vec<_>>());
+    }
+    let report = gates::path_pops(&placed, &subset, limit)?;
+    let failed = if report.pass { Vec::new() } else { vec!["path".to_string()] };
+    let planted = plant.map(|(s, v, mm)| json!({"step": s, "game_vertex": v, "mm_forward": mm}));
+    Ok(verdict("gates path", json!({"path": report}), failed, json!({"placement_version": placement.version().to_string(), "plant": planted})))
+}
+
+fn list_arg(text: &str) -> Result<Vec<String>, String> {
+    if let Some(path) = text.strip_prefix('@') {
+        let body = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        return serde_json::from_str(&body).map_err(|e| format!("{path}: expected a JSON list of target ids: {e}"));
+    }
+    Ok(text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+}
+
+struct Level<'a> {
+    name: String,
+    mesh: &'a Decimated,
+    map: Vec<u32>,
+    uvs: Vec<[Uv; 3]>,
+    triangles: Vec<[u32; 3]>,
+}
+
+fn lod_state(level: &Level, game0: &[Point]) -> (Vec<Point>, Vec<Point>) {
+    let game: Vec<Point> = level.map.iter().map(|&j| game0[j as usize]).collect();
+    let normals = gm::game_normals(&game, &level.triangles);
+    (game, normals)
+}
+
+fn uv_slip(neutral: &[[Uv; 3]], moved: &[[Uv; 3]]) -> Value {
+    let mut d: Vec<f64> = neutral
+        .iter()
+        .zip(moved)
+        .flat_map(|(a, b)| (0..3).map(move |c| (((a[c][0] - b[c][0]) as f64).powi(2) + ((a[c][1] - b[c][1]) as f64).powi(2)).sqrt()))
+        .collect();
+    d.sort_by(f64::total_cmp);
+    let n = d.len().max(1);
+    json!({"corners": d.len(), "over_1e-4": d.iter().filter(|x| **x > 1e-4).count(), "max_uv": d.last().copied().unwrap_or(0.0),
+           "p99_uv": d.get(((n - 1) as f64 * 0.99) as usize).copied().unwrap_or(0.0),
+           "max_texels_2048": d.last().copied().unwrap_or(0.0) * 2048.0})
+}
+
+fn neck_loop(triangles: &[[u32; 3]], game: &[Point]) -> Result<Vec<u32>, String> {
+    let loops = gf_core::rig::boundary_loops(triangles);
+    let mean_up = |l: &Vec<u32>| l.iter().map(|&v| game[v as usize][2]).sum::<f64>() / l.len() as f64;
+    loops.into_iter().min_by(|a, b| mean_up(a).total_cmp(&mean_up(b))).ok_or_else(|| "the game base has no open boundary for the neck".to_string())
+}
+
+fn mean_point(points: impl Iterator<Item = Point>) -> Point {
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for p in points {
+        for k in 0..3 {
+            sum[k] += p[k];
+        }
+        n += 1.0;
+    }
+    sum.map(|s| s / n)
+}
+
+pub fn gates_facing(opts: &Options) -> Result<Value, String> {
+    only(opts, "gates facing", &[&["glb", "states"]])?;
+    let path = need(opts, "glb")?;
+    let states = opts.get("states").map(String::as_str).unwrap_or("neutral");
+    if !matches!(states, "neutral" | "all") {
+        return Err(format!("--states must be neutral or all, got {states}"));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let (_, meshes) = gltf::read_glb(&bytes)?;
+    let mut failed = Vec::new();
+    let mut rows = Vec::new();
+    for mesh in &meshes {
+        if mesh.normals.is_empty() {
+            continue;
+        }
+        let tris: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let to64 = |v: &[[f32; 3]]| -> Vec<Point> { v.iter().map(|p| p.map(f64::from)).collect() };
+        let count = |p: &[Point], n: &[Point]| tris.iter().filter(|t| gm::facing_dot(p, n, t) < 0.0).count();
+        let (p0, n0) = (to64(&mesh.positions), to64(&mesh.normals));
+        let neutral = count(&p0, &n0);
+        let mut morph_counts = serde_json::Map::new();
+        let mut worst = 0usize;
+        for (k, m) in mesh.morphs.iter().enumerate() {
+            let p: Vec<Point> = p0.iter().zip(&m.positions).map(|(a, d)| [0, 1, 2].map(|i| a[i] + d[i] as f64)).collect();
+            let n: Vec<Point> = n0.iter().zip(&m.normals).map(|(a, d)| [0, 1, 2].map(|i| a[i] + d[i] as f64)).collect();
+            let c = count(&p, &n);
+            worst = worst.max(c);
+            morph_counts.insert(mesh.morph_names.get(k).cloned().unwrap_or_else(|| k.to_string()), json!(c));
+        }
+        if neutral > 0 || (states == "all" && worst > 0) {
+            failed.push(mesh.name.clone());
+        }
+        rows.push(json!({"mesh": mesh.name, "triangles": tris.len(), "against_vertex_normals": neutral,
+                         "morph_states_worst": worst, "morph_states": morph_counts}));
+    }
+    if rows.is_empty() {
+        return Err(format!("{path}: no mesh with normals to check"));
+    }
+    Ok(verdict("gates facing", json!({"facing": rows}), failed, json!({"glb": path, "states": states})))
+}
+
+pub(crate) fn from_gltf(p: [f32; 3]) -> Point {
+    [f64::from(p[0]), -f64::from(p[2]), f64::from(p[1])]
+}
+
+pub(crate) fn lid_settings(opts: &Options) -> Result<(f64, f64), String> {
+    let front = number(opts, "front-deg", LID_FRONT_DEG)?;
+    if front > 90.0 {
+        return Err(format!("--front-deg must be at most 90, got {front}"));
+    }
+    Ok((front, number(opts, "tolerance-mm", 0.0)? / 1000.0))
+}
+
+pub fn gates_lids(opts: &Options) -> Result<Value, String> {
+    only(opts, "gates lids", &[LIDS_GATE_KEYS])?;
+    let path = need(opts, "glb")?;
+    let eyes = gf_io::load_eyes(Path::new(need(opts, "eyes")?))?;
+    let states = opts.get("states").map(String::as_str).unwrap_or("all");
+    if !matches!(states, "neutral" | "all") {
+        return Err(format!("--states must be neutral or all, got {states}"));
+    }
+    let (front, tolerance) = lid_settings(opts)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let (_, meshes) = gltf::read_glb(&bytes)?;
+    let mut failed = Vec::new();
+    let mut rows = Vec::new();
+    for mesh in meshes.iter().filter(|m| !m.normals.is_empty() && !m.name.starts_with("Eye_")) {
+        let mut seen: HashMap<[u32; 3], ()> = HashMap::new();
+        let unique: Vec<usize> = (0..mesh.positions.len()).filter(|&i| seen.insert(mesh.positions[i].map(f32::to_bits), ()).is_none()).collect();
+        let check = |dp: Option<&MorphData>| {
+            let p: Vec<Point> = unique.iter().map(|&i| {
+                let d = dp.map_or([0.0; 3], |m| m.positions[i]);
+                from_gltf([0, 1, 2].map(|k| mesh.positions[i][k] + d[k]))
+            }).collect();
+            let n: Vec<Point> = unique.iter().map(|&i| {
+                let d = dp.map_or([0.0; 3], |m| m.normals[i]);
+                from_gltf([0, 1, 2].map(|k| mesh.normals[i][k] + d[k]))
+            }).collect();
+            lids::lid_check(&p, &n, &eyes, front, tolerance)
+        };
+        let neutral = check(None);
+        let mut morph_counts = serde_json::Map::new();
+        let (mut worst, mut failing, mut deepest) = (0usize, 0usize, 0.0f64);
+        if states == "all" {
+            for (k, m) in mesh.morphs.iter().enumerate() {
+                let c = check(Some(m));
+                worst = worst.max(c.inside);
+                failing += (c.inside > 0) as usize;
+                deepest = deepest.max(c.deepest_mm);
+                morph_counts.insert(mesh.morph_names.get(k).cloned().unwrap_or_else(|| k.to_string()), json!(c.inside));
+            }
+        }
+        if neutral.inside > 0 || worst > 0 {
+            failed.push(mesh.name.clone());
+        }
+        rows.push(json!({"mesh": mesh.name, "vertices": unique.len(), "neutral_inside": neutral.inside, "neutral_deepest_mm": neutral.deepest_mm,
+                         "candidates": neutral.candidates, "morph_states_worst": worst, "morph_states_failing": failing,
+                         "morph_states_deepest_mm": deepest, "morph_states": morph_counts}));
+    }
+    if rows.is_empty() {
+        return Err(format!("{path}: no mesh with normals to check"));
+    }
+    let rule = "a vertex fails when it lies within 0.5..1.3 eye radii of an eye centre, within front-deg of its gaze, its normal points away from the centre, and it is closer to the centre than the larger of the eye radius and the eye mesh's outermost surface along that direction, by more than tolerance-mm";
+    Ok(verdict("gates lids", json!({"lids": rows}), failed, json!({"glb": path, "states": states, "front_deg": front, "tolerance_mm": tolerance * 1000.0, "rule": rule})))
+}
+
+struct LidRun {
+    eyes: Vec<lids::Eye>,
+    step: f64,
+    max: f64,
+    front: f64,
+    tolerance: f64,
+    smooth: usize,
+}
+
+fn lid_check_game(run: &LidRun, game: &[Point], triangles: &[[u32; 3]]) -> lids::LidCheck {
+    let normals = gm::game_normals(game, triangles);
+    lids::lid_check(game, &normals, &run.eyes, run.front, run.tolerance)
+}
+
+fn lid_check_lods(run: &LidRun, game: &[Point], lods: &[(&[u32], &[[u32; 3]])]) -> lids::LidCheck {
+    let mut total = lids::LidCheck { front_deg: run.front, tolerance_mm: run.tolerance * 1000.0, ..Default::default() };
+    for (map, triangles) in lods {
+        let local: Vec<Point> = map.iter().map(|&j| game[j as usize]).collect();
+        let c = lid_check_game(run, &local, triangles);
+        total.vertices += c.vertices;
+        total.candidates += c.candidates;
+        total.inside += c.inside;
+        total.deepest_mm = total.deepest_mm.max(c.deepest_mm);
+        total.inside_vertices.extend(c.inside_vertices.iter().map(|&i| map[i] as usize));
+    }
+    total.pass = total.inside == 0;
+    total
+}
+
+fn lid_touch_up(run: &LidRun, game: &mut [Point], lods: &[(&[u32], &[[u32; 3]])]) -> Value {
+    let (mut moved, mut largest, mut rounds) = (0usize, 0.0f64, 0usize);
+    for _ in 0..TOUCH_ROUNDS {
+        let c = lid_check_lods(run, game, lods);
+        if c.pass {
+            break;
+        }
+        rounds += 1;
+        let mut vertices = c.inside_vertices;
+        vertices.sort_unstable();
+        vertices.dedup();
+        for g in vertices {
+            if let Some(q) = lids::push_out(&run.eyes, game[g], run.front, run.tolerance + TOUCH_MARGIN) {
+                let p = game[g];
+                largest = largest.max(((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2)).sqrt());
+                game[g] = q;
+                moved += 1;
+            }
+        }
+    }
+    let after = lid_check_lods(run, game, lods);
+    json!({"rounds": rounds, "moved": moved, "largest_mm": largest * 1000.0, "inside_after": after.inside, "pass": after.pass})
+}
+
+fn settle(run: &LidRun, game: &mut [Point], lods: &[(&[u32], &[[u32; 3]])], untangle: Option<(usize, f64)>) -> Value {
+    let mut rounds = Vec::new();
+    for _ in 0..SETTLE_ROUNDS {
+        let touch = lid_touch_up(run, game, lods);
+        let mut changed = touch["moved"].as_u64().unwrap_or(0) > 0;
+        let mut row = json!({"lids": touch});
+        if let Some((iterations, cap)) = untangle {
+            let project = |p: Point| lids::push_out(&run.eyes, p, run.front, run.tolerance + TOUCH_MARGIN).unwrap_or(p);
+            let (shift, report) = gm::untangle_projected(game, lods, iterations, cap, &project);
+            if report.moved_vertices > 0 {
+                changed = true;
+                for (p, d) in game.iter_mut().zip(&shift) {
+                    for k in 0..3 {
+                        p[k] += d[k];
+                    }
+                }
+            }
+            row["untangle"] = json!(report);
+        }
+        rounds.push(row);
+        if !changed {
+            break;
+        }
+    }
+    let last = lid_check_lods(run, game, lods);
+    rounds.push(json!({"final_inside": last.inside}));
+    json!(rounds)
+}
+
+fn place_clear(
+    placement: &dyn Placement,
+    run: Option<&LidRun>,
+    positions: &[Point],
+    dmesh: &DenseMesh,
+    base: &Decimated,
+    lods: &[(&[u32], &[[u32; 3]])],
+) -> (Option<Vec<Point>>, Placed, Value) {
+    let placed = placement.place(positions, dmesh, base);
+    let Some(run) = run else {
+        return (None, placed, Value::Null);
+    };
+    let first = lid_check_lods(run, &placed.game, lods);
+    if first.pass {
+        return (None, placed, json!({"inside_before": 0, "collided": false, "pass": true}));
+    }
+    let mut tried = Vec::new();
+    let mut forced: Vec<u32> = first.inside_vertices.iter().map(|&g| base.kept[g]).collect();
+    for k in 0.. {
+        let clearance = k as f64 * run.step;
+        if clearance > run.max + 1e-12 {
+            break;
+        }
+        let settings = lids::CollideSettings { clearance, front_deg: run.front, smooth_iterations: run.smooth };
+        let (moved, stats) = lids::collide_dense_forced(positions, dmesh.triangles, &run.eyes, &settings, &forced);
+        let p = placement.place(&moved, dmesh, base);
+        let c = lid_check_lods(run, &p.game, lods);
+        tried.push(json!({"clearance_mm": clearance * 1000.0, "inside": c.inside, "deepest_mm": c.deepest_mm, "forced": forced.len()}));
+        if c.pass {
+            return (
+                Some(moved),
+                p,
+                json!({"inside_before": first.inside, "deepest_before_mm": first.deepest_mm, "collided": true, "clearance_mm": clearance * 1000.0,
+                       "dense_pushed": stats.pushed, "dense_deepest_mm": stats.deepest_mm, "dense_smoothed": stats.smoothed, "tried": tried, "pass": true}),
+            );
+        }
+        for &g in &c.inside_vertices {
+            let d = base.kept[g];
+            if !forced.contains(&d) {
+                forced.push(d);
+            }
+        }
+    }
+    let report = json!({"inside_before": first.inside, "deepest_before_mm": first.deepest_mm, "collided": false, "tried": tried, "pass": false,
+                        "note": "no clearance up to lids-max-mm passed; the dense shape is left untouched"});
+    (None, placed, report)
+}
+
+fn lid_final(run: &LidRun, levels: &[Level], neutral: &[Point], states: &[Vec<Point>], names: &[String]) -> (Value, bool) {
+    let mut rows = Vec::new();
+    let mut pass = true;
+    for level in levels {
+        let pick = |g: &[Point]| -> Vec<Point> { level.map.iter().map(|&j| g[j as usize]).collect() };
+        let n = lid_check_game(run, &pick(neutral), &level.triangles);
+        let checks: Vec<lids::LidCheck> = states.iter().map(|g| lid_check_game(run, &pick(g), &level.triangles)).collect();
+        let worst = checks.iter().map(|c| c.inside).max().unwrap_or(0);
+        let failing: Vec<Value> =
+            checks.iter().zip(names).filter(|(c, _)| c.inside > 0).map(|(c, name)| json!({"morph": name, "inside": c.inside, "deepest_mm": c.deepest_mm})).collect();
+        pass &= n.inside == 0 && worst == 0;
+        rows.push(json!({"node": level.name, "neutral_inside": n.inside, "neutral_deepest_mm": n.deepest_mm, "morph_states_worst": worst,
+                         "morph_states_failing": failing}));
+    }
+    (json!({"lods": rows, "pass": pass}), pass)
+}
+
+fn delta(a: Point, b: Point) -> [f32; 3] {
+    gm::to_gltf([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+}
+
+pub fn export_glb(opts: &Options) -> Result<Value, String> {
+    let store = Store::open(Path::new(need(opts, "store")?))?;
+    let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
+    let version = PlacementVersion::parse(&spec.base.placement)?;
+    let mut allowed: Vec<&[&str]> = vec![GLB_KEYS];
+    allowed.extend_from_slice(placement_keys(version.name));
+    allowed.push(BODY_KEYS);
+    if opts.get("lids").map(String::as_str) == Some("auto") {
+        allowed.push(LID_EXPORT_KEYS);
+        if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
+            allowed.push(EYES_KEY);
+        }
+    }
+    only(opts, &format!("export-glb (spec placement {version})"), &allowed)?;
+    let placement = placer(opts, version)?;
+    let mode = Sparse::parse(opts.get("sparse").map(String::as_str).unwrap_or("auto"))?;
+    let out = Path::new(need(opts, "out")?);
+    let started = std::time::Instant::now();
+    let source = match opts.get("macro") {
+        Some(p) => Some(ch::read_macro_definition(Path::new(p))?),
+        None => None,
+    };
+    let (positions, evaluation) = ch::evaluate(&store, &spec, source.as_ref())?;
+    let (_, dense) = store.load_pack(&spec.base.pack)?;
+    let catalog = store.load_catalog(&spec.base.catalog)?;
+    let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
+    let (manifest, base) = store.load_game(&game_ref)?;
+    let body = body_options(opts)?;
+    let head_scale = body.as_ref().map(|(p, _, c)| (p.pivot(), c.head_scale)).filter(|(_, s)| *s != 1.0);
+    let facing = opts.get("facing").map(String::as_str).unwrap_or("keep");
+    if !matches!(facing, "keep" | "repair" | "repair-states") {
+        return Err(format!("--facing must be keep, repair or repair-states, got {facing}"));
+    }
+    let lid_run = match opts.get("lids").map(String::as_str).unwrap_or("off") {
+        "off" => None,
+        "auto" => {
+            let eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--lids auto needs --eyes EYES.json")?))?;
+            let step = number(opts, "lids-step-mm", 0.05)? / 1000.0;
+            if step <= 0.0 {
+                return Err("--lids-step-mm must be positive".into());
+            }
+            let front = number(opts, "lids-front-deg", LID_FRONT_DEG)?;
+            if front > 90.0 {
+                return Err(format!("--lids-front-deg must be at most 90, got {front}"));
+            }
+            Some(LidRun {
+                eyes,
+                step,
+                max: number(opts, "lids-max-mm", 1.0)? / 1000.0,
+                front,
+                tolerance: number(opts, "lids-tolerance-mm", 0.0)? / 1000.0,
+                smooth: count(opts, "lids-smooth", 4)?,
+            })
+        }
+        other => return Err(format!("--lids must be off or auto, got {other}")),
+    };
+    let lod0_out = opts.get("lod0-out").map(Path::new);
+    let (rigged, face_mode) = match opts.get("rig").map(String::as_str).unwrap_or("none") {
+        "none" => (false, false),
+        "head" => (true, false),
+        "face" | "face2" => (true, true),
+        other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
+    };
+    let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let correctives = match opts.get("rig-correctives").map(String::as_str) {
+        None | Some("off") => false,
+        Some("on") if face_version == 2 => true,
+        Some("on") => return Err("--rig-correctives goes with --rig face2".into()),
+        Some(other) => return Err(format!("--rig-correctives must be on or off, got {other}")),
+    };
+    if !face_mode && opts.contains_key("rig-rounds") {
+        return Err("--rig-rounds goes with --rig face".into());
+    }
+    let rig_rounds = count(opts, "rig-rounds", 2)?;
+    let morph_dir = opts.get("morph-dir").map(Path::new);
+    let floor_m = if opts.contains_key("morph-floor") { Some(number(opts, "morph-floor", 0.0)? / 1000.0) } else { None };
+    let measured = opts.get("lod-screen").map(String::as_str) == Some("measured");
+    let lod_pixels = number(opts, "lod-pixels", 1.0)?;
+    let lod_height = number(opts, "lod-height", 1080.0)?;
+    if !measured && (opts.contains_key("lod-pixels") || opts.contains_key("lod-height")) {
+        return Err("--lod-pixels and --lod-height go with --lod-screen measured".into());
+    }
+    if measured && (lod_pixels <= 0.0 || lod_height <= 0.0) {
+        return Err("--lod-pixels and --lod-height must be positive".into());
+    }
+    let extended = facing != "keep" || rigged || measured || morph_dir.is_some() || floor_m.is_some() || lid_run.is_some();
+    let load = |id: &str| -> Result<gf_core::catalog::SparseTarget, String> {
+        if let Some(dir) = morph_dir {
+            let path = dir.join(format!("{id}.npz"));
+            if path.exists() {
+                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let target = gf_io::store::sparse_from_npz(&bytes).map_err(|e| format!("{id}: {e}"))?;
+                target.check(positions.len()).map_err(|e| format!("{id}: {e}"))?;
+                return Ok(target);
+            }
+        }
+        store.load_target(&catalog, id)
+    };
+    let screens: Vec<f64> = match opts.get("lod-screen") {
+        _ if measured => Vec::new(),
+        Some(text) => text.split(',').map(|s| s.trim().parse::<f64>().map_err(|_| format!("--lod-screen takes numbers, got {text}"))).collect::<Result<_, _>>()?,
+        None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or(0.02)).collect(),
+    };
+    if !measured && (screens.len() != manifest.lods.len() || screens.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s >= 1.0)) {
+        return Err(format!("--lod-screen needs {} numbers in (0, 1), one per LOD below the finest", manifest.lods.len()));
+    }
+    let ids = match opts.get("morphs") {
+        Some(text) => list_arg(text)?,
+        None => Vec::new(),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for id in &ids {
+        let name = id.rsplit('/').next().unwrap_or(id).to_string();
+        if names.contains(&name) {
+            return Err(format!("two morphs would both be named {name}; give targets with distinct last path parts"));
+        }
+        names.push(name);
+    }
+    let dmesh = DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs };
+    let mut coarse = Vec::new();
+    for lod in &manifest.lods {
+        coarse.push(store.load_game(&lod.game)?.1);
+    }
+    let mut lid_lods: Vec<(Vec<u32>, Vec<[u32; 3]>)> = vec![((0..base.kept.len() as u32).collect(), base.triangles.clone())];
+    for mesh in &coarse {
+        lid_lods.push((gm::lod_map(&base, mesh)?, mesh.triangles.clone()));
+    }
+    let lid_refs: Vec<(&[u32], &[[u32; 3]])> = lid_lods.iter().map(|(m, t)| (m.as_slice(), t.as_slice())).collect();
+    let (collided, mut neutral, neutral_lids) = place_clear(placement.as_ref(), lid_run.as_ref(), &positions, &dmesh, &base, &lid_refs);
+    let neutral_dense = collided.unwrap_or_else(|| positions.clone());
+    let uvs0 = neutral.triangle_uvs.clone().unwrap_or_else(|| base.triangle_uvs.clone());
+    let mut morph_games = Vec::new();
+    let mut slips = Vec::new();
+    let mut morph_lids = Vec::new();
+    for id in &ids {
+        let target = load(id)?;
+        let mut moved = neutral_dense.clone();
+        target.add_scaled(1.0, &mut moved);
+        let (_, placed, lid_report) = place_clear(placement.as_ref(), lid_run.as_ref(), &moved, &dmesh, &base, &lid_refs);
+        morph_lids.push(lid_report);
+        if extended {
+            slips.push(match (&neutral.triangle_uvs, &placed.triangle_uvs) {
+                (Some(a), Some(b)) => uv_slip(a, b),
+                _ => json!({"corners": 0, "note": "the placement keeps the base UVs: no slip"}),
+            });
+        }
+        morph_games.push(placed.game);
+    }
+    if let Some((pivot, s)) = head_scale {
+        gf_core::body::scale_about(&mut neutral.game, pivot, s);
+        for mg in morph_games.iter_mut() {
+            gf_core::body::scale_about(mg, pivot, s);
+        }
+    }
+    let mut levels = vec![Level {
+        name: "Head_LOD0".into(),
+        map: (0..base.kept.len() as u32).collect(),
+        uvs: uvs0.clone(),
+        mesh: &base,
+        triangles: base.triangles.clone(),
+    }];
+    let mut lod_uv_report = Vec::new();
+    for (i, mesh) in coarse.iter().enumerate() {
+        let map = gm::lod_map(&base, mesh)?;
+        let (uvs, unmatched, worst) = gm::lod_uvs(&base, &uvs0, mesh, &map);
+        lod_uv_report.push(json!({"lod": i + 1, "corners_without_a_matching_chart": unmatched, "worst_chart_distance": worst}));
+        levels.push(Level { name: format!("Head_LOD{}", i + 1), mesh, map, uvs, triangles: mesh.triangles.clone() });
+    }
+    let mut facing_report = Vec::new();
+    if facing != "keep" {
+        for level in levels.iter_mut() {
+            let pick = |g: &[Point]| -> Vec<Point> { level.map.iter().map(|&j| g[j as usize]).collect() };
+            let states: Vec<Vec<Point>> = std::iter::once(&neutral.game).chain(&morph_games).map(|g| pick(g)).collect();
+            let refs: Vec<&[Point]> = states.iter().map(Vec::as_slice).collect();
+            let repair = gm::repair_facing(&refs, &mut level.triangles, &mut level.uvs, FACING_ROUNDS);
+            facing_report.push(json!({"node": level.name, "against_neutral_before": repair.against_before[0],
+                                      "against_neutral_after": repair.against_after[0],
+                                      "against_morph_states_before_worst": repair.against_before[1..].iter().max().copied().unwrap_or(0),
+                                      "against_morph_states_after_worst": repair.against_after[1..].iter().max().copied().unwrap_or(0),
+                                      "flips": repair.flips, "flips_relaxed": repair.flips_relaxed, "rounds": repair.rounds,
+                                      "refused_seam": repair.refused_seam, "refused_check": repair.refused_check,
+                                      "refused_neutral": repair.refused_neutral, "refused_states": repair.refused_states,
+                                      "refused_angle": repair.refused_angle}));
+        }
+        let lod_refs: Vec<(&[u32], &[[u32; 3]])> = levels.iter().map(|l| (l.map.as_slice(), l.triangles.as_slice())).collect();
+        let (shift, untangled) = gm::untangle(&neutral.game, &lod_refs, UNTANGLE_ITERATIONS, UNTANGLE_MAX_MM / 1000.0);
+        for game in std::iter::once(&mut neutral.game).chain(morph_games.iter_mut()) {
+            for (p, d) in game.iter_mut().zip(&shift) {
+                for k in 0..3 {
+                    p[k] += d[k];
+                }
+            }
+        }
+        facing_report.push(json!({"untangle": untangled, "note": "positions of the vertices of triangles still facing against their vertex normals after the flips move toward their one-ring centroids in every LOD that has them; every morph state moves by the same amount, so morph deltas are unchanged"}));
+        if facing == "repair-states" {
+            let mut rows = Vec::new();
+            let mut moved_states = 0usize;
+            for (game, name) in morph_games.iter_mut().zip(&names) {
+                let (shift, report) = gm::untangle(game, &lod_refs, STATE_UNTANGLE_ITERATIONS, STATE_UNTANGLE_MAX_MM / 1000.0);
+                if report.moved_vertices == 0 {
+                    continue;
+                }
+                moved_states += 1;
+                for (p, d) in game.iter_mut().zip(&shift) {
+                    for k in 0..3 {
+                        p[k] += d[k];
+                    }
+                }
+                rows.push(json!({"morph": name, "against_before": report.against_before, "against_after": report.against_after,
+                                 "moved_vertices": report.moved_vertices, "max_move_mm": report.max_move_mm, "capped_vertices": report.capped_vertices,
+                                 "iterations": report.iterations}));
+            }
+            facing_report.push(json!({"morph_states_untangle": rows, "morph_states_moved": moved_states,
+                                      "note": "each morph state at weight 1 whose triangles still face against its own vertex normals is untangled alone (same step, cap 4 mm); the neutral is not touched, so that morph's delta is no longer exactly F(c + e) - F(c) at the moved vertices"}));
+        }
+    }
+    let mut lid_touch = Value::Null;
+    if let Some(run) = &lid_run {
+        let lods: Vec<(&[u32], &[[u32; 3]])> = levels.iter().map(|l| (l.map.as_slice(), l.triangles.as_slice())).collect();
+        let neutral_untangle = (facing != "keep").then_some((UNTANGLE_ITERATIONS, UNTANGLE_MAX_MM / 1000.0));
+        let state_untangle = (facing == "repair-states").then_some((STATE_UNTANGLE_ITERATIONS, STATE_UNTANGLE_MAX_MM / 1000.0));
+        let before = neutral.game.clone();
+        let neutral_touch = settle(run, &mut neutral.game, &lods, neutral_untangle);
+        let shift: Vec<(usize, Point)> = before
+            .iter()
+            .zip(&neutral.game)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(g, (a, b))| (g, [b[0] - a[0], b[1] - a[1], b[2] - a[2]]))
+            .collect();
+        let mut rows = Vec::new();
+        for (game, name) in morph_games.iter_mut().zip(&names) {
+            for &(g, d) in &shift {
+                for k in 0..3 {
+                    game[g][k] += d[k];
+                }
+            }
+            let touch = settle(run, game, &lods, state_untangle);
+            if touch.as_array().is_some_and(|r| r.iter().any(|x| x["lids"]["moved"].as_u64().unwrap_or(0) > 0 || x["lids"]["pass"] != json!(true))) {
+                rows.push(json!({"morph": name, "rounds": touch}));
+            }
+        }
+        lid_touch = json!({"neutral": neutral_touch, "morph_states": rows,
+                           "note": "after the facing repair, a vertex the check still finds inside an eye on any LOD is moved along the eye's radius to its surface plus tolerance + 0.01 mm (game level, up to 4 passes); with a facing repair the untangle runs again after it, alternating up to 4 rounds until neither moves a vertex; the neutral's moves are applied to every morph state too"});
+    }
+    let lid_gate = lid_run.as_ref().map(|run| lid_final(run, &levels, &neutral.game, &morph_games, &names));
+    let mut screens = screens;
+    let mut lod_selection = Value::Null;
+    if measured {
+        let fine = &neutral.game;
+        let lo = (0..3).map(|k| fine.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min)).collect::<Vec<_>>();
+        let hi = (0..3).map(|k| fine.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max)).collect::<Vec<_>>();
+        let centre = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]));
+        let radius = fine.iter().map(|p| (0..3).map(|k| (p[k] - centre[k]).powi(2)).sum::<f64>().sqrt()).fold(0.0, f64::max);
+        let mut rows = Vec::new();
+        let mut previous = 1.0f64;
+        for level in levels.iter().skip(1) {
+            let coarse_points: Vec<Point> = level.map.iter().map(|&j| fine[j as usize]).collect();
+            let owner: Vec<u32> = base.kept.iter().map(|&d| level.mesh.owner[d as usize]).collect();
+            let error = gm::lod_error(fine, &owner, &coarse_points, &level.triangles);
+            let raw = gm::screen_size(error.max_mm / 1000.0, radius, lod_pixels, lod_height);
+            let chosen = raw.min(previous * 0.999).clamp(1e-4, 0.999);
+            previous = chosen;
+            screens.push(chosen);
+            rows.push(json!({"node": level.name, "error_to_lod0": error, "screen_size_raw": raw, "screen_size": chosen}));
+        }
+        lod_selection = json!({
+            "method": "switch to a coarser LOD when its largest distance to the finest LOD's vertices projects to at most `pixels` on a screen `screen_height_px` tall",
+            "screen_size": "the bounding sphere's diameter as a fraction of the screen height: s = 2 * pixels * radius / (error * screen_height_px); distance d = radius / (s * tan(vfov / 2))",
+            "pixels": lod_pixels, "screen_height_px": lod_height, "bounding_radius_m": radius,
+            "bounding_centre_gltf_m": gm::to_gltf(centre), "lods": rows});
+    }
+    let mut rig_meta = Value::Null;
+    let mut rig_data: Option<(gltf::Rig, Vec<[f64; 3]>)> = None;
+    let mut face_meta = Value::Null;
+    let mut face_skin: Option<gf_core::face_rig::Influences> = None;
+    let mut face2_correctives: Option<(Vec<Vec<gf_core::face_rig::JointPose>>, Vec<Point>)> = None;
+    if rigged {
+        use gf_core::rig;
+        let mut eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
+        if let Some((pivot, s)) = head_scale {
+            for e in eyes.iter_mut() {
+                let mut c = [e.centre];
+                gf_core::body::scale_about(&mut c, pivot, s);
+                e.centre = c[0];
+                e.radius *= s;
+            }
+        }
+        if eyes.len() != 2 {
+            return Err(format!("--rig head needs two eyes, the eyes file has {}", eyes.len()));
+        }
+        let jaw = load(opts.get("rig-jaw").ok_or("--rig head needs --rig-jaw TARGET (a jaw-open target)")?)?;
+        let hinge = rig::fit_hinge(&dense.positions, &jaw)?;
+        let share = rig::jaw_share(&dense.positions, &jaw, &hinge);
+        let seam = neck_loop(&base.triangles, &neutral.game)?;
+        let (weights, skin_report) = rig::game_weights(&dense.positions, &base.kept, &seam, &share, &hinge);
+        let neck = mean_point(seam.iter().map(|&g| neutral.game[g as usize]));
+        let mut hinge_now = [rig::character_hinge(&dense.positions, &positions, &hinge)];
+        if let Some((pivot, s)) = head_scale {
+            gf_core::body::scale_about(&mut hinge_now, pivot, s);
+        }
+        let hinge_now = hinge_now[0];
+        let (left, right) = if eyes[0].centre[0] >= eyes[1].centre[0] { (&eyes[0], &eyes[1]) } else { (&eyes[1], &eyes[0]) };
+        let joints = rig::joints(neck, hinge_now, left.centre, right.centre);
+        let attachments = [("Eye_L", 3usize, left.radius), ("Eye_R", 4usize, right.radius)]
+            .iter()
+            .map(|&(name, joint, radius)| {
+                let s = rig::sphere(radius, EYE_RINGS, EYE_SEGMENTS);
+                gltf::Attachment {
+                    name: name.into(),
+                    joint,
+                    positions: s.positions.iter().map(|p| gm::to_gltf(*p)).collect(),
+                    normals: s.normals.iter().map(|p| gm::to_gltf(*p)).collect(),
+                    indices: s.indices,
+                }
+            })
+            .collect();
+        let mut rig_value = gltf::Rig {
+            names: rig::JOINTS.iter().map(|s| s.to_string()).collect(),
+            parents: rig::PARENTS.to_vec(),
+            global: joints.iter().map(|p| gm::to_gltf(*p)).collect(),
+            attachments,
+            animations: Vec::new(),
+        };
+        if face_mode && face_version == 2 {
+            use gf_core::face_rig as fr;
+            use gf_core::face_rig2 as fr2;
+            if ids.is_empty() {
+                return Err("--rig face2 needs --morphs (the shapes the joint poses are fitted to)".into());
+            }
+            let fit_started = std::time::Instant::now();
+            let targets: Vec<gf_core::catalog::SparseTarget> = ids.iter().map(|id| load(id)).collect::<Result<_, _>>()?;
+            let base_rig = fr2::base_rig(&dense.positions, &base.kept, &base.triangles, &jaw, &targets, rig_rounds)?;
+            let pivots = fr2::character_pivots([neck, hinge_now, left.centre, right.centre], &base_rig.regions, &positions);
+            let deltas: Vec<Vec<Point>> = morph_games.iter().map(|mg| mg.iter().zip(&neutral.game).map(|(a, b)| [0, 1, 2].map(|k| a[k] - b[k])).collect()).collect();
+            let emphasis = fr::lid_emphasis(&neutral.game, &[(left.centre, left.radius), (right.centre, right.radius)]);
+            let problem = fr::Problem { rest: &neutral.game, influences: &base_rig.influences, pivots: &pivots, emphasis: Some(&emphasis) };
+            let bounds = fr2::bounds();
+            let bar = fr2::barrier(&neutral.game, &eyes, LID_FRONT_DEG);
+            let fits = fr2::fit_shapes(&problem, &deltas, &bounds, Some(&bar));
+            rig_value.names = fr2::names();
+            rig_value.parents = fr2::parents();
+            rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
+            rig_value.animations = crate::rig_cmds::face2_animations(&names, &fits, &pivots);
+            let parents = fr2::parents();
+            let all_names = fr2::names();
+            let spec = fr2::joints();
+            let joint_rows: Vec<Value> = (0..fr2::count())
+                .map(|j| {
+                    let mut row = json!({"name": all_names[j], "parent": parents[j].map(|p| all_names[p].clone()), "position_gltf_m": rig_value.global[j],
+                                         "posed": fr::is_free(j), "bound_deg_mm": [bounds[j].0.to_degrees(), bounds[j].1 * 1000.0]});
+                    if let Some(f) = j.checked_sub(rig::JOINTS.len()).and_then(|f| spec.get(f)) {
+                        row["kind"] = json!(f.kind);
+                        if let fr2::Kind::Seed(s) = f.kind {
+                            row["seed_dense_vertex"] = json!(fr::FACE[s].seed);
+                            row["seed_rule"] = json!(fr::FACE[s].rule);
+                            row["falloff_mm"] = json!(fr::FACE[s].radius_mm);
+                        }
+                    }
+                    row
+                })
+                .collect();
+            face_meta = json!({
+                "version": fr2::VERSION, "joints": joint_rows, "weights": base_rig.report, "lid_frames": base_rig.lids, "lid_vertices": base_rig.lid_vertices,
+                "fit": crate::rig_cmds::fit_report(&names, &fits), 
+                "correctives": if correctives { json!(format!("one corrective morph target per shape, named <shape>.corrective, on every LOD: per vertex the rest-space delta c with sum_j w_j (R_j (x + c - p_j) + p_j + t_j) = the blend shape position at weight 1 (and the normal likewise); each animation also drives its corrective weight 0 -> 1 through a glTF weights channel on every head LOD node, so joints plus corrective reproduce the blend shape; vertices whose blended rotation has |det| < {} take the plain difference", fr2::SINGULAR_DET)) } else { Value::Null },
+                "seconds": fit_started.elapsed().as_secs_f64(),
+                "pivots": format!("each seeded facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; the 12 lid joints (3 along each lid margin) sit at the eye centres; every joint position is rounded to 1/{} m", fr::REGION_MM, fr::PIVOT_GRID),
+                "poses": format!("per shape, every posed joint gets a rotation about its rest position and a translation, solved by Gauss-Newton on the game LOD0 against F(c + e) - F(c) with the exported weights, bounded per joint (bound_deg_mm); vertices within {} eye radii of an eye centre count {} times, and every vertex outside an eye at rest within {} eye radii of its centre is pushed out of the eye surface (+{} mm) by a barrier term", fr::LID_EMPHASIS_REACH, fr::LID_EMPHASIS, fr2::BARRIER_REACH, fr2::BARRIER_MARGIN_MM),
+                "influences": format!("up to {} per vertex: JOINTS_0 / WEIGHTS_0 hold the first 4, JOINTS_1 / WEIGHTS_1 the rest", fr2::MAX_INFLUENCES),
+                "animations": "one glTF animation per shape, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the fitted pose) for the posed joints' rotation and translation; neck, head and the eyes are not animated"});
+            if correctives {
+                face2_correctives = Some((fits.iter().map(|f| f.0.clone()).collect::<Vec<_>>(), pivots.clone()));
+                for (k, a) in rig_value.animations.iter_mut().enumerate() {
+                    a.morph = Some(names.len() + k);
+                }
+            }
+            face_skin = Some(base_rig.influences);
+        } else if face_mode {
+            use gf_core::face_rig as fr;
+            if ids.is_empty() {
+                return Err("--rig face needs --morphs (the shapes the joint poses are fitted to)".into());
+            }
+            let fit_started = std::time::Instant::now();
+            let targets: Vec<gf_core::catalog::SparseTarget> = ids.iter().map(|id| load(id)).collect::<Result<_, _>>()?;
+            let base_rig = fr::base_rig(&dense.positions, &base.kept, &base.triangles, &jaw, &targets, rig_rounds)?;
+            let pivots = fr::character_pivots([neck, hinge_now, left.centre, right.centre], &base_rig.regions, &positions);
+            let deltas: Vec<Vec<Point>> = morph_games.iter().map(|mg| mg.iter().zip(&neutral.game).map(|(a, b)| [0, 1, 2].map(|k| a[k] - b[k])).collect()).collect();
+            let emphasis = fr::lid_emphasis(&neutral.game, &[(left.centre, left.radius), (right.centre, right.radius)]);
+            let problem = fr::Problem { rest: &neutral.game, influences: &base_rig.influences, pivots: &pivots, emphasis: Some(&emphasis) };
+            let fits = fr::fit_shapes(&problem, &deltas);
+            rig_value.names = fr::names();
+            rig_value.parents = fr::parents();
+            rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
+            rig_value.animations = crate::rig_cmds::face_animations(&names, &fits, &pivots);
+            let parents = fr::parents();
+            let all_names = fr::names();
+            let joint_rows: Vec<Value> = (0..fr::count())
+                .map(|j| {
+                    let mut row = json!({"name": all_names[j], "parent": parents[j].map(|p| all_names[p].clone()), "position_gltf_m": rig_value.global[j],
+                                         "posed": fr::is_free(j)});
+                    if let Some(f) = j.checked_sub(rig::JOINTS.len()).and_then(|f| fr::FACE.get(f)) {
+                        row["seed_dense_vertex"] = json!(f.seed);
+                        row["seed_rule"] = json!(f.rule);
+                        row["falloff_mm"] = json!(f.radius_mm);
+                        row["region_vertices"] = json!(base_rig.regions[j - rig::JOINTS.len()].len());
+                    }
+                    row
+                })
+                .collect();
+            face_meta = json!({
+                "joints": joint_rows, "weights": base_rig.report, "fit": crate::rig_cmds::fit_report(&names, &fits),
+                "seconds": fit_started.elapsed().as_secs_f64(),
+                "pivots": format!("each facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; every joint position is rounded to 1/{} m so that the f32 joint chain and the inverse bind matrices cancel exactly", fr::REGION_MM, fr::PIVOT_GRID),
+                "poses": "per shape, every posed joint (jaw and the facial joints) gets a rotation about its rest position and a translation, solved by Gauss-Newton on the game LOD0 against F(c + e) - F(c) with the exported weights, bounded to 35 deg / 15 mm (jaw), 60 deg / 6 mm (lids, which turn about the eye centre) and 30 deg / 12 mm (other facial joints); vertices within 1.4 eye radii of an eye centre count 30 times in the fit",
+                "animations": "one glTF animation per shape, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the fitted pose) for the posed joints' rotation and translation; neck, head and the eyes are not animated"});
+            face_skin = Some(base_rig.influences);
+        }
+        rig_meta = json!({
+            "joints": rig::JOINTS.iter().zip(rig::PARENTS).zip(&rig_value.global)
+                .map(|((n, p), g)| json!({"name": n, "parent": p.map(|i| rig::JOINTS[i]), "position_gltf_m": g})).collect::<Vec<_>>(),
+            "jaw_target": opts.get("rig-jaw"), "hinge_fit_on_base": hinge, "skin": skin_report,
+            "weights": "per game vertex from the dense base: jaw = the jaw target's displacement projected on the fitted hinge rotation (clamped 0..1), neck = 1 on the neck seam falling (smoothstep) to 0 at half the chin-to-seam distance, head = the rest",
+            "eyes": "Eye_L / Eye_R spheres (radius from the eyes file) are children of eye_L / eye_R",
+            "bind": "joints are translation-only; each inverse bind matrix is the negated sum of the joint chain's local translations"});
+        if face_mode {
+            rig_meta["mode"] = json!(if face_version == 2 { "face2" } else { "face" });
+            rig_meta["weights"] = json!("face: see face.weights.method; the neck / head / jaw split the facial weights start from is the head rig's");
+            rig_meta["face"] = face_meta.clone();
+        }
+        rig_data = Some((rig_value, weights));
+    }
+    let mut body_lods = Vec::new();
+    let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
+    let mut body_meta = Value::Null;
+    if let Some((pack, pack_manifest, controls)) = &body {
+        use gf_core::body as gb;
+        let limits = if pack.mode == "makehuman" { gb::Limits::exact() } else { gb::Limits::any_body() };
+        let mut rows = Vec::new();
+        let mut failures = Vec::new();
+        for (i, level) in levels.iter().enumerate() {
+            let (game, _) = lod_state(level, &neutral.game);
+            let dense_of: Vec<u32> = level.map.iter().map(|&g| base.kept[g as usize]).collect();
+            let seam = gb::head_seam(pack, &game, &level.triangles, &dense_of)?;
+            let body_lod = i.min(pack.lod_count() - 1);
+            let st = gb::stitch_lod(pack, body_lod, &seam, controls)?;
+            let (report, failed) = gb::gates(&game, &level.triangles, &seam, &st, &limits);
+            failures.extend(failed.into_iter().map(|f| format!("{}: {f}", level.name)));
+            let (shared, normals) = gb::two_sided_normals(&game, &level.triangles, &st);
+            seam_normals.push(shared.into_iter().collect());
+            let surface = gm::split_seams(&st.triangles, &st.uvs);
+            let name = format!("Body_LOD{i}");
+            rows.push(json!({"node": name, "body_lod": body_lod, "head_node": level.name, "vertices": surface.source.len(),
+                             "triangles": st.triangles.len(), "seam_points": seam.len(), "gates": report}));
+            body_lods.push(Lod {
+                name,
+                positions: surface.source.iter().map(|&v| gm::to_gltf(st.positions[v as usize])).collect(),
+                normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
+                uvs: surface.uvs.clone(),
+                indices: surface.indices,
+                morphs: Vec::new(),
+                skin: rig_data.as_ref().map(|_| gltf::SkinData {
+                    joints: vec![[0, 1, 2, 0]; surface.source.len()],
+                    weights: vec![[1.0, 0.0, 0.0, 0.0]; surface.source.len()],
+                    joints_1: Vec::new(),
+                    weights_1: Vec::new(),
+                }),
+            });
+        }
+        if !failures.is_empty() {
+            return Err(format!("body stitch gates failed: {}", failures.join("; ")));
+        }
+        body_meta = json!({"mode": pack.mode, "pack": opts.get("body"), "source": pack_manifest["source"], "controls": controls, "lods": rows,
+                           "mesh": "one mesh node per body LOD (Body_LODn beside Head_LODn), its own material slot and the body's UV layout; the seam vertices are copies of the head's with the same position, normal and skin weights",
+                           "skin": if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+    }
+    let mut lods = Vec::new();
+    let mut lod_meta = Vec::new();
+    for (i, level) in levels.iter().enumerate() {
+        let surface = gm::split_seams(&level.triangles, &level.uvs);
+        let (game, mut normals) = lod_state(level, &neutral.game);
+        let shared = seam_normals.get(i);
+        if let Some(over) = shared {
+            for (&v, n) in over {
+                normals[v as usize] = *n;
+            }
+        }
+        let pick = |v: &[Point]| -> Vec<Point> { surface.source.iter().map(|&g| v[g as usize]).collect() };
+        let (gp, gn) = (pick(&game), pick(&normals));
+        let mut morphs = Vec::new();
+        let mut corrective_morphs = Vec::new();
+        for mg in &morph_games {
+            let (eg, mut en) = lod_state(level, mg);
+            if let Some(over) = shared {
+                for (&v, n) in over {
+                    en[v as usize] = *n;
+                }
+            }
+            let (ep, enn) = (pick(&eg), pick(&en));
+            let mut positions_delta: Vec<[f32; 3]> = gp.iter().zip(&ep).map(|(a, b)| delta(*a, *b)).collect();
+            let mut normals_delta: Vec<[f32; 3]> = gn.iter().zip(&enn).map(|(a, b)| delta(*a, *b)).collect();
+            if let Some(floor) = floor_m {
+                let length = |v: &[f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                for (p, q) in positions_delta.iter_mut().zip(normals_delta.iter_mut()) {
+                    if (length(p) as f64) < floor {
+                        *p = [0.0; 3];
+                    }
+                    if length(q) < NORMAL_FLOOR {
+                        *q = [0.0; 3];
+                    }
+                }
+            }
+            morphs.push(MorphData { positions: positions_delta, normals: normals_delta });
+            if let (Some((poses, pivots)), Some(influences)) = (&face2_correctives, &face_skin) {
+                let inf: Vec<&[(usize, f64)]> = surface.source.iter().map(|&g| influences[level.map[g as usize] as usize].as_slice()).collect();
+                let c = gf_core::face_rig2::corrective(&gp, &gn, &inf, pivots, &poses[corrective_morphs.len()], &ep, &enn);
+                let mut positions: Vec<[f32; 3]> = c.positions.iter().map(|d| gm::to_gltf(*d)).collect();
+                let mut normals: Vec<[f32; 3]> = c.normals.iter().map(|d| gm::to_gltf(*d)).collect();
+                if let Some(floor) = floor_m {
+                    let length = |v: &[f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                    for (p, q) in positions.iter_mut().zip(normals.iter_mut()) {
+                        if (length(p) as f64) < floor {
+                            *p = [0.0; 3];
+                        }
+                        if length(q) < NORMAL_FLOOR {
+                            *q = [0.0; 3];
+                        }
+                    }
+                }
+                corrective_morphs.push(MorphData { positions, normals });
+            }
+        }
+        morphs.extend(corrective_morphs);
+        lod_meta.push(json!({"node": level.name, "game_vertices": level.mesh.kept.len(), "vertices": surface.source.len(),
+                             "triangles": level.triangles.len(),
+                             "screen_size": if i == 0 { 1.0 } else { screens[i - 1] }}));
+        let face_lod_skin = face_skin.as_ref().map(|influences| {
+            let wide = influences.iter().any(|i| i.len() > 4);
+            let mut joints = Vec::with_capacity(surface.source.len());
+            let mut weights = Vec::with_capacity(surface.source.len());
+            let mut joints_1 = Vec::new();
+            let mut weights_1 = Vec::new();
+            for &g in &surface.source {
+                let (mut j, mut w) = ([0u8; 8], [0.0f32; 8]);
+                for (k, &(joint, weight)) in influences[level.map[g as usize] as usize].iter().enumerate() {
+                    j[k] = joint as u8;
+                    w[k] = weight as f32;
+                }
+                joints.push([j[0], j[1], j[2], j[3]]);
+                weights.push([w[0], w[1], w[2], w[3]]);
+                if wide {
+                    joints_1.push([j[4], j[5], j[6], j[7]]);
+                    weights_1.push([w[4], w[5], w[6], w[7]]);
+                }
+            }
+            gltf::SkinData { joints, weights, joints_1, weights_1 }
+        });
+        let skin = if face_lod_skin.is_some() { face_lod_skin } else { rig_data.as_ref().map(|(_, weights)| {
+            let w: Vec<[f32; 4]> = surface
+                .source
+                .iter()
+                .map(|&g| {
+                    let x = weights[level.map[g as usize] as usize];
+                    let q = |v: f64| ((v * WEIGHT_STEPS).round() / WEIGHT_STEPS) as f32;
+                    let neck = q(x[0]);
+                    let jaw = q(x[2]).min(1.0 - neck);
+                    [neck, 1.0 - neck - jaw, jaw, 0.0]
+                })
+                .collect();
+            gltf::SkinData { joints: vec![[0, 1, 2, 0]; w.len()], weights: w, joints_1: Vec::new(), weights_1: Vec::new() }
+        }) };
+        lods.push(Lod {
+            name: level.name.clone(),
+            positions: gp.iter().map(|p| gm::to_gltf(*p)).collect(),
+            normals: gn.iter().map(|p| gm::to_gltf(*p)).collect(),
+            uvs: surface.uvs.clone(),
+            indices: surface.indices,
+            morphs,
+            skin,
+        });
+    }
+    let morph_meta: Vec<Value> = ids
+        .iter()
+        .zip(&names)
+        .zip(&morph_games)
+        .map(|((id, name), mg)| {
+            let d = gm::displacement(&neutral.game, mg);
+            json!({"name": name, "target": id, "game_vertices_moved": d.entries, "max_mm": d.max_mm,
+                   "over_0p01_mm": d.over_0p01_mm, "over_0p1_mm": d.over_0p1_mm})
+        })
+        .collect();
+    let tool = format!("gazeforge {}", env!("CARGO_PKG_VERSION"));
+    let extras = json!({"spec": spec.revision(), "pack": spec.base.pack, "game_base": game_ref,
+                        "placement": placement.version().to_string(), "tool": tool});
+    let glb_names: Vec<String> = if face2_correctives.is_some() { names.iter().cloned().chain(names.iter().map(|n| format!("{n}.corrective"))).collect() } else { names.clone() };
+    let (bytes, report) = gltf::glb_full(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
+    std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    let digest = hash::sha256_hex(&bytes);
+    let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = file_name.strip_suffix(".glb").unwrap_or(&file_name).to_string();
+    let sidecar_path = out.with_file_name(format!("{stem}.gazeforge.json"));
+    let mut sidecar = json!({
+        "format": "gazeforge.sidecar/1",
+        "glb": file_name,
+        "glb_sha256": digest,
+        "spec": extras["spec"], "pack": extras["pack"], "game_base": extras["game_base"], "placement": extras["placement"], "tool": extras["tool"],
+        "frame": {"glb": "metres, +Y up, the face looks along +Z", "from_world": "(x, y, z) -> (x, z, -y)"},
+        "uv_layer": "head",
+        "lods": lod_meta,
+        "morphs": morph_meta,
+        "morph_definition": "F(c + e) - F(c): the placed game positions of the character with the target at weight 1, minus without",
+    });
+    if extended {
+        for (m, slip) in sidecar["morphs"].as_array_mut().into_iter().flatten().zip(&slips) {
+            m["uv_slip_lod0"] = slip.clone();
+        }
+        sidecar["uv_policy"] = json!("neutral: every LOD carries the neutral character's UVs and glTF morphs carry no UVs, so under a morph the texture rides with the vertices; uv_slip_lod0 is how far F's own re-derived UVs for that morph at weight 1 sit from the neutral ones");
+        sidecar["morph_floor_mm"] = json!(floor_m.map(|f| f * 1000.0));
+        sidecar["morph_normal_floor"] = json!(floor_m.map(|_| NORMAL_FLOOR));
+        sidecar["facing"] = json!({"mode": facing, "lods": facing_report});
+        sidecar["lod_selection"] = lod_selection.clone();
+        sidecar["rig"] = rig_meta.clone();
+    }
+    if let Some(run) = &lid_run {
+        let morphs: Vec<Value> = names.iter().zip(&morph_lids).map(|(n, r)| json!({"morph": n, "placement": r})).collect();
+        let collided: Vec<&String> = names.iter().zip(&morph_lids).filter(|(_, r)| r["collided"] == json!(true)).map(|(n, _)| n).collect();
+        sidecar["lids"] = json!({
+            "mode": "auto", "step_mm": run.step * 1000.0, "max_mm": run.max * 1000.0, "front_deg": run.front, "tolerance_mm": run.tolerance * 1000.0,
+            "smooth": run.smooth,
+            "method": "after F, the finest LOD is checked against the eyes; a state that fails is collided at dense level (collide-lids) with clearance 0, step, 2 x step, ... up to max_mm, F re-run each time, and the first clearance that passes is kept; a state that passes is left untouched; morph states start from the neutral's dense shape as exported",
+            "neutral": neutral_lids, "morph_states_collided": collided, "morphs": morphs, "touch_up": lid_touch,
+            "final": lid_gate.as_ref().map(|g| g.0.clone())});
+    }
+    if let Some(stem) = lod0_out {
+        let obj_path = stem.with_extension("obj");
+        let npy_path = stem.with_extension("dense.npy");
+        obj::write_triangles(&obj_path, &neutral.game, &levels[0].triangles, &levels[0].uvs)?;
+        dense::write_points(&npy_path, &neutral_dense)?;
+        sidecar["lod0_out"] = json!({"obj": obj_path.display().to_string(), "dense": npy_path.display().to_string()});
+    }
+    if !body_meta.is_null() {
+        sidecar["body"] = body_meta.clone();
+    }
+    let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
+    std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
+    let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
+              "glb_sha256": digest, "bytes": bytes.len(), "placement_version": placement.version().to_string(),
+              "spec_revision": extras["spec"], "evaluation": evaluation, "lods": report, "lod_uvs": lod_uv_report,
+              "morphs": sidecar["morphs"], "seconds": started.elapsed().as_secs_f64()});
+    if extended {
+        result["facing"] = sidecar["facing"].clone();
+        result["lod_selection"] = lod_selection;
+        result["rig"] = rig_meta;
+    }
+    if lid_run.is_some() {
+        result["lids"] = sidecar["lids"].clone();
+    }
+    if !body_meta.is_null() {
+        result["body"] = body_meta;
+    }
+    if lod0_out.is_some() {
+        result["lod0_out"] = sidecar["lod0_out"].clone();
+    }
+    Ok(result)
+}

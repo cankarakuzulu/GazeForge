@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/gf-geom", "crates/gf-core", "crates/gf-io", "crates/gf-api", "crates/gf-cli", "crates/gf-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+debug = 1

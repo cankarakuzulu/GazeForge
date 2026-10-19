@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GazeForge Designer</title>
+<link rel="stylesheet" href="designer.css">
+</head>
+<body>
+<header>
+  <strong>GazeForge Designer</strong>
+  <span id="status" class="status">loading</span>
+  <span id="info" class="info"></span>
+  <nav class="bar">
+    <button id="undo" disabled>undo</button><button id="redo" disabled>redo</button>
+    <span class="sep"></span>
+    <select id="layout" title="Layout (L)"><option value="single">single view</option><option value="side">side by side</option><option value="quad">quad</option></select>
+    <select id="mode" title="Render mode (M / Shift+M)"></select>
+    <select id="lod" title="Level of detail (, and .)"></select>
+    <button id="proj" title="Perspective / orthographic (O or 5)">persp</button>
+    <select id="named" title="Named view (1 front, Shift+1 back, 3 left, Shift+3 right, 7 top, 9 three-quarter)">
+      <option value="">view…</option><option value="front">front</option><option value="back">back</option><option value="left">left side</option><option value="right">right side</option>
+      <option value="top">top</option><option value="bottom">bottom</option><option value="threequarter">three-quarter</option>
+    </select>
+    <button id="frame" title="Frame the head (F)">frame</button>
+    <button id="shot" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout">PNG</button>
+    <button id="help-btn" title="Shortcuts (?)">?</button>
+    <span class="sep"></span>
+    <button id="p-new" title="New project (Ctrl+N)">new</button><button id="p-open" title="Open a project (Ctrl+O)">open</button>
+    <select id="p-recent" title="Recent projects"><option value="">recent…</option></select>
+    <button id="p-save" title="Save the project (Ctrl+S)">save</button><button id="p-saveas" title="Save the project as (Ctrl+Shift+S)">save as</button>
+    <span id="p-name" class="pname" title="saved">untitled</span>
+  </nav>
+</header>
+<main>
+  <section id="view">
+    <canvas id="gl"></canvas>
+    <div id="vps"></div>
+    <div class="overlay">
+      <div class="row">
+        <label class="chip" title="Wireframe overlay (W)"><input type="checkbox" data-opt="wire"> wire</label>
+        <label class="chip" title="Hidden edges through the surface (X)"><input type="checkbox" data-opt="xray"> x-ray</label>
+        <label class="chip" title="Vertex points (P)"><input type="checkbox" data-opt="points"> points</label>
+        <label class="chip" title="Back-face highlight (B)"><input type="checkbox" data-opt="backHi"> back faces</label>
+        <label class="chip" title="UV seams (cyan) and open boundaries (orange) (E)"><input type="checkbox" data-opt="seams"> seams</label>
+        <label class="chip" title="Clip plane 1 (C); Alt+wheel moves it"><input type="checkbox" data-opt="clip.0.on"> clip</label>
+      </div>
+      <div id="label" class="label"></div>
+    </div>
+    <div id="toast" class="toast"></div>
+  </section>
+  <aside>
+    <div class="tabs">
+      <button data-tab="shape" class="on">Shape</button><button data-tab="view">View</button><button data-tab="scene">Scene</button><button data-tab="history">History</button><button data-tab="panels">Panels</button><button data-tab="project">Project</button>
+    </div>
+    <div id="tab-shape" class="tab on">
+      <div class="tools">
+        <input id="search" type="search" placeholder="search targets">
+        <select id="category"><option value="">all categories</option></select>
+        <button id="reset">reset</button>
+      </div>
+      <details id="macros" open><summary>Macros (head only)</summary><div id="macro-list"></div></details>
+      <div id="list"></div>
+      <div class="save">
+        <input id="out" type="text" placeholder="path of the spec file to save">
+        <button id="save">save spec</button>
+        <div id="saved"></div>
+      </div>
+    </div>
+    <div id="tab-view" class="tab">
+      <h3>Render</h3>
+      <label class="line"><input type="checkbox" id="link"> same mode and level in every viewport</label>
+      <label class="line">wire width <input type="range" min="0.5" max="4" step="0.25" data-opt="wireW"><span class="val"></span></label>
+      <label class="line"><input type="checkbox" data-opt="wireFade"> fade the wire where triangles are only a few pixels tall</label>
+      <label class="line">point size <input type="range" min="1" max="10" step="1" data-opt="pointSize"><span class="val"></span></label>
+      <label class="line">anisotropic tangents <select data-opt="aniso" data-num><option value="0">horizontal rings</option><option value="1">vertical lines</option></select></label>
+      <label class="line">quality range <input type="range" min="5" max="60" step="1" data-opt="heat.quality"><span class="val"></span></label>
+      <label class="line">displacement range <input type="range" min="0.1" max="20" step="0.1" data-opt="heat.displacement"><span class="val"></span></label>
+      <label class="line">curvature range <input type="range" min="5" max="300" step="1" data-opt="heat.curvature"><span class="val"></span></label>
+      <label class="line">displacement reference <select id="ref"><option value="start">the starting character</option><option value="neutral">the neutral base</option><option value="snapshot">a snapshot</option></select><button id="ref-now" class="small">snapshot now</button></label>
+      <p class="note">Quality colours the smallest angle of each triangle (red at 0°, blue at the range). Displacement is signed along the normal (red outward). Curvature is the mean curvature of each triangle from its vertex normals (red convex, blue concave).</p>
+      <h3>Camera (active viewport)</h3>
+      <label class="line">field of view <input id="fov" type="range" min="10" max="90" step="1"><span id="fov-val" class="val"></span></label>
+      <div class="buttons"><button id="frame-sel" title="Shift+F">frame selection</button><button id="shot-layout" title="Shift+K">PNG of the layout</button></div>
+      <h3>Lighting</h3>
+      <label class="line">preset <select id="preset"></select></label>
+      <label class="line"><input type="checkbox" data-opt="follow"> lights follow the camera</label>
+      <label class="line"><input type="checkbox" data-opt="lightGizmo"> light gizmo</label>
+      <label class="line">exposure (EV) <input type="range" min="-3" max="3" step="0.05" data-opt="exposure"><span class="val"></span></label>
+      <label class="line">ambient <input type="range" min="0" max="1.5" step="0.01" data-opt="ambient"><span class="val"></span></label>
+      <label class="line">ground share <input type="range" min="0" max="1" step="0.01" data-opt="ground"><span class="val"></span></label>
+      <div id="lights"></div>
+    </div>
+    <div id="tab-scene" class="tab">
+      <h3>Visibility</h3>
+      <div id="visibility"></div>
+      <div class="buttons"><button id="show-all" title="Alt+H">show everything</button></div>
+      <h3>Regions</h3>
+      <p class="note">Each vertex belongs to the category of the target that moves it most relative to that target's own largest move (at least 35 % of it); targets that move more than a fifth of the head (scales, whole-head shapes) do not define regions. Everything else is the rest of the head.</p>
+      <div id="regions"></div>
+      <h3>Hide box</h3>
+      <label class="line"><input type="checkbox" data-opt="box.on"> hide everything inside the box</label>
+      <label class="line">x from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.0"><span class="val"></span></label>
+      <label class="line">x to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.0"><span class="val"></span></label>
+      <label class="line">y from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.1"><span class="val"></span></label>
+      <label class="line">y to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.1"><span class="val"></span></label>
+      <label class="line">z from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.2"><span class="val"></span></label>
+      <label class="line">z to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.2"><span class="val"></span></label>
+      <h3>Clipping</h3>
+      <label class="line"><input type="checkbox" data-opt="caps"> fill the section caps</label>
+      <label class="line"><input type="checkbox" data-opt="planeGizmo"> plane gizmo</label>
+      <div id="clips"></div>
+      <p class="note">Inside a cut, back faces are orange and the section cap is hatched blue-grey. A slab keeps the band between two parallel planes.</p>
+    </div>
+    <div id="tab-history" class="tab">
+      <p class="note">Every slider, macro, reset, visibility and panel edit; camera moves are not recorded. Click an entry to go back to it.</p>
+      <ol id="history"></ol>
+    </div>
+    <div id="tab-panels" class="tab"><div id="panels"></div></div>
+    <div id="tab-project" class="tab">
+      <h3>Project</h3>
+      <div id="p-info" class="note"></div>
+      <h3>Characters</h3>
+      <ol id="p-chars" class="plist"></ol>
+      <h3>Notes</h3>
+      <textarea id="p-notes" rows="6" placeholder="notes saved with the project"></textarea>
+      <div class="buttons"><button id="p-export" title="One .gfproj.zip with the project and its character blobs (not the shared base)">export portable</button></div>
+      <div id="p-status" class="note"></div>
+      <p class="note">Saving writes the project file (characters with their revision history, panel settings, the viewer state and these notes); the shared base is referenced by its sha256. Every settle and every 60 s an autosave goes to a recovery slot, offered when the project is opened after a session ended without saving. Undo history belongs to the session and is not saved.</p>
+    </div>
+  </aside>
+</main>
+<div id="help" class="help hidden">
+  <div class="card">
+    <h2>Designer shortcuts</h2>
+    <table id="help-list"></table>
+    <p class="note">Esc or a click outside closes this. Settings (modes, lights, layout) are remembered in this browser.</p>
+  </div>
+</div>
+<div id="p-dialog" class="help hidden">
+  <div class="card">
+    <h2 id="p-dlg-title"></h2>
+    <p id="p-dlg-note" class="note"></p>
+    <input id="p-dlg-name" type="text" class="wide">
+    <ul id="p-dlg-list" class="plist"></ul>
+    <div class="buttons"><button id="p-dlg-ok">OK</button><button id="p-dlg-cancel">cancel</button></div>
+  </div>
+</div>
+<div id="p-relink" class="help hidden">
+  <div class="card">
+    <h2>Relink resources</h2>
+    <p id="p-relink-note" class="note"></p>
+    <div id="p-relink-rows"></div>
+    <div class="buttons"><button id="p-relink-ok">retry</button><button id="p-relink-cancel">cancel</button></div>
+  </div>
+</div>
+<div id="p-recover" class="recover hidden"><span id="p-recover-text"></span><button id="p-restore">restore</button><button id="p-discard">discard</button></div>
+<script type="module" src="designer.js"></script>
+</body>
+</html>

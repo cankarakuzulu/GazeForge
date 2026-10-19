@@ -1,0 +1,633 @@
+use serde_json::{Value, json};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sparse {
+    Auto,
+    Always,
+    Never,
+}
+
+impl Sparse {
+    pub fn parse(text: &str) -> Result<Sparse, String> {
+        match text {
+            "auto" => Ok(Sparse::Auto),
+            "always" => Ok(Sparse::Always),
+            "never" => Ok(Sparse::Never),
+            other => Err(format!("--sparse must be auto, always or never, got {other}")),
+        }
+    }
+}
+
+pub struct MorphData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+}
+
+pub struct SkinData {
+    pub joints: Vec<[u8; 4]>,
+    pub weights: Vec<[f32; 4]>,
+    pub joints_1: Vec<[u8; 4]>,
+    pub weights_1: Vec<[f32; 4]>,
+}
+
+pub struct Lod {
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+    pub morphs: Vec<MorphData>,
+    pub skin: Option<SkinData>,
+}
+
+pub struct Attachment {
+    pub name: String,
+    pub joint: usize,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+}
+
+pub struct Channel {
+    pub joint: usize,
+    pub rotation: [[f32; 4]; 2],
+    pub translation: [[f32; 3]; 2],
+}
+
+pub struct Animation {
+    pub name: String,
+    pub channels: Vec<Channel>,
+    pub morph: Option<usize>,
+}
+
+pub struct Rig {
+    pub names: Vec<String>,
+    pub parents: Vec<Option<usize>>,
+    pub global: Vec<[f32; 3]>,
+    pub attachments: Vec<Attachment>,
+    pub animations: Vec<Animation>,
+}
+
+impl Rig {
+    pub fn local(&self) -> Vec<[f32; 3]> {
+        (0..self.names.len())
+            .map(|j| match self.parents[j] {
+                Some(p) => [0, 1, 2].map(|k| self.global[j][k] - self.global[p][k]),
+                None => self.global[j],
+            })
+            .collect()
+    }
+
+    pub fn engine_global(&self) -> Vec<[f32; 3]> {
+        let local = self.local();
+        let mut out = local.clone();
+        for j in 0..self.names.len() {
+            if let Some(p) = self.parents[j] {
+                out[j] = [0, 1, 2].map(|k| out[p][k] + local[j][k]);
+            }
+        }
+        out
+    }
+}
+
+const ARRAY_BUFFER: u32 = 34962;
+const ELEMENT_ARRAY_BUFFER: u32 = 34963;
+const UNSIGNED_BYTE: u32 = 5121;
+const FLOAT: u32 = 5126;
+const UNSIGNED_SHORT: u32 = 5123;
+const UNSIGNED_INT: u32 = 5125;
+
+#[derive(Default)]
+struct Builder {
+    bin: Vec<u8>,
+    views: Vec<Value>,
+    accessors: Vec<Value>,
+}
+
+fn bounds<const N: usize>(data: impl Iterator<Item = [f32; N]>) -> (Vec<f32>, Vec<f32>) {
+    let mut lo = vec![f32::INFINITY; N];
+    let mut hi = vec![f32::NEG_INFINITY; N];
+    for v in data {
+        for k in 0..N {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    (lo, hi)
+}
+
+impl Builder {
+    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
+        while !self.bin.len().is_multiple_of(4) {
+            self.bin.push(0);
+        }
+        let mut view = json!({"buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len()});
+        if let Some(t) = target {
+            view["target"] = json!(t);
+        }
+        self.bin.extend_from_slice(bytes);
+        self.views.push(view);
+        self.views.len() - 1
+    }
+
+    fn floats<const N: usize>(&mut self, data: &[[f32; N]], target: Option<u32>, with_bounds: bool) -> usize {
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.iter().flat_map(|x| x.to_le_bytes())).collect();
+        let view = self.view(&bytes, target);
+        let kind = if N == 2 { "VEC2" } else { "VEC3" };
+        let mut accessor = json!({"bufferView": view, "componentType": FLOAT, "count": data.len(), "type": kind});
+        if with_bounds {
+            let (lo, hi) = bounds(data.iter().copied());
+            accessor["min"] = json!(lo);
+            accessor["max"] = json!(hi);
+        }
+        self.accessors.push(accessor);
+        self.accessors.len() - 1
+    }
+
+    fn raw(&mut self, bytes: &[u8], target: Option<u32>, component: u32, count: usize, kind: &str) -> usize {
+        let view = self.view(bytes, target);
+        self.accessors.push(json!({"bufferView": view, "componentType": component, "count": count, "type": kind}));
+        self.accessors.len() - 1
+    }
+
+    fn indices(&mut self, indices: &[u32], short: bool) -> usize {
+        let bytes: Vec<u8> = if short {
+            indices.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
+        } else {
+            indices.iter().flat_map(|&i| i.to_le_bytes()).collect()
+        };
+        let view = self.view(&bytes, Some(ELEMENT_ARRAY_BUFFER));
+        let component = if short { UNSIGNED_SHORT } else { UNSIGNED_INT };
+        self.accessors.push(json!({"bufferView": view, "componentType": component, "count": indices.len(), "type": "SCALAR"}));
+        self.accessors.len() - 1
+    }
+
+    fn morph(&mut self, data: &[[f32; 3]], mode: Sparse, short: bool) -> (usize, &'static str, usize) {
+        let entries: Vec<u32> = (0..data.len() as u32).filter(|&i| data[i as usize].iter().any(|x| *x != 0.0)).collect();
+        let index_bytes = if short { 2 } else { 4 };
+        let sparse = match mode {
+            Sparse::Always => true,
+            Sparse::Never => false,
+            Sparse::Auto => entries.len() * (index_bytes + 12) < data.len() * 12,
+        };
+        if !sparse {
+            let accessor = self.floats(data, Some(ARRAY_BUFFER), true);
+            return (accessor, "dense", data.len());
+        }
+        let listed: Vec<u32> = if entries.is_empty() { vec![0] } else { entries };
+        let index_bytes: Vec<u8> = if short {
+            listed.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
+        } else {
+            listed.iter().flat_map(|&i| i.to_le_bytes()).collect()
+        };
+        let values: Vec<[f32; 3]> = listed.iter().map(|&i| data[i as usize]).collect();
+        let value_bytes: Vec<u8> = values.iter().flat_map(|v| v.iter().flat_map(|x| x.to_le_bytes())).collect();
+        let index_view = self.view(&index_bytes, None);
+        let value_view = self.view(&value_bytes, None);
+        let (mut lo, mut hi) = bounds(values.iter().copied());
+        if listed.len() < data.len() {
+            for k in 0..3 {
+                lo[k] = lo[k].min(0.0);
+                hi[k] = hi[k].max(0.0);
+            }
+        }
+        let component = if short { UNSIGNED_SHORT } else { UNSIGNED_INT };
+        self.accessors.push(json!({
+            "componentType": FLOAT, "count": data.len(), "type": "VEC3", "min": lo, "max": hi,
+            "sparse": {"count": listed.len(), "indices": {"bufferView": index_view, "componentType": component},
+                       "values": {"bufferView": value_view}}
+        }));
+        (self.accessors.len() - 1, "sparse", listed.len())
+    }
+}
+
+pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, generator: &str) -> Result<(Vec<u8>, Value), String> {
+    glb_rigged(lods, morph_names, mode, extras, generator, None)
+}
+
+pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, generator: &str, rig: Option<&Rig>) -> Result<(Vec<u8>, Value), String> {
+    glb_full(lods, &[], morph_names, mode, extras, generator, rig)
+}
+
+pub fn glb_full(
+    lods: &[Lod],
+    extra: &[Lod],
+    morph_names: &[String],
+    mode: Sparse,
+    extras: Value,
+    generator: &str,
+    rig: Option<&Rig>,
+) -> Result<(Vec<u8>, Value), String> {
+    let mut b = Builder::default();
+    let mut meshes = Vec::new();
+    let mut nodes = Vec::new();
+    let mut report = Vec::new();
+    let no_morphs: Vec<String> = Vec::new();
+    for (lod, morph_names) in lods.iter().map(|l| (l, morph_names)).chain(extra.iter().map(|l| (l, &no_morphs[..]))) {
+        let n = lod.positions.len();
+        if lod.normals.len() != n || lod.uvs.len() != n || lod.morphs.len() != morph_names.len() {
+            return Err(format!("{}: attribute or morph counts disagree", lod.name));
+        }
+        if lod.indices.iter().any(|&i| i as usize >= n) || lod.indices.len() % 3 != 0 {
+            return Err(format!("{}: an index is out of range or the index count is not a multiple of 3", lod.name));
+        }
+        if lod.positions.iter().chain(&lod.normals).any(|v| v.iter().any(|x| !x.is_finite())) {
+            return Err(format!("{}: a position or normal is not finite", lod.name));
+        }
+        let short = n <= u16::MAX as usize;
+        let position = b.floats(&lod.positions, Some(ARRAY_BUFFER), true);
+        let normal = b.floats(&lod.normals, Some(ARRAY_BUFFER), false);
+        let uv = b.floats(&lod.uvs, Some(ARRAY_BUFFER), false);
+        let indices = b.indices(&lod.indices, short);
+        let mut targets = Vec::new();
+        let mut morph_report = Vec::new();
+        for (name, m) in morph_names.iter().zip(&lod.morphs) {
+            if m.positions.len() != n || m.normals.len() != n {
+                return Err(format!("{}: morph {name} has the wrong vertex count", lod.name));
+            }
+            let (p, p_kind, p_entries) = b.morph(&m.positions, mode, short);
+            let (q, q_kind, q_entries) = b.morph(&m.normals, mode, short);
+            targets.push(json!({"POSITION": p, "NORMAL": q}));
+            morph_report.push(json!({"name": name, "position": p_kind, "position_entries": p_entries,
+                                     "normal": q_kind, "normal_entries": q_entries}));
+        }
+        let mut primitive = json!({"attributes": {"POSITION": position, "NORMAL": normal, "TEXCOORD_0": uv}, "indices": indices, "mode": 4});
+        if let Some(skin) = &lod.skin {
+            if rig.is_none() || skin.joints.len() != n || skin.weights.len() != n {
+                return Err(format!("{}: skin data without a rig or with the wrong vertex count", lod.name));
+            }
+            let joint_bytes: Vec<u8> = skin.joints.iter().flatten().copied().collect();
+            let weight_bytes: Vec<u8> = skin.weights.iter().flat_map(|w| w.iter().flat_map(|x| x.to_le_bytes())).collect();
+            primitive["attributes"]["JOINTS_0"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
+            primitive["attributes"]["WEIGHTS_0"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
+            if !skin.joints_1.is_empty() {
+                if skin.joints_1.len() != n || skin.weights_1.len() != n {
+                    return Err(format!("{}: second skin set with the wrong vertex count", lod.name));
+                }
+                let joint_bytes: Vec<u8> = skin.joints_1.iter().flatten().copied().collect();
+                let weight_bytes: Vec<u8> = skin.weights_1.iter().flat_map(|w| w.iter().flat_map(|x| x.to_le_bytes())).collect();
+                primitive["attributes"]["JOINTS_1"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
+                primitive["attributes"]["WEIGHTS_1"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
+            }
+        }
+        let mut mesh = json!({"name": lod.name});
+        if !targets.is_empty() {
+            primitive["targets"] = json!(targets);
+            mesh["weights"] = json!(vec![0.0; targets.len()]);
+            mesh["extras"] = json!({"targetNames": morph_names});
+        }
+        mesh["primitives"] = json!([primitive]);
+        meshes.push(mesh);
+        let mut node = json!({"name": lod.name, "mesh": meshes.len() - 1});
+        if lod.skin.is_some() {
+            node["skin"] = json!(0);
+        }
+        nodes.push(node);
+        report.push(json!({"node": lod.name, "vertices": n, "triangles": lod.indices.len() / 3,
+                           "index_type": if short { "u16" } else { "u32" }, "morphs": morph_report}));
+    }
+    let mut roots: Vec<usize> = (0..nodes.len()).collect();
+    let mut skins = Vec::new();
+    let mut animations: Vec<Value> = Vec::new();
+    if let Some(rig) = rig {
+        let first = nodes.len();
+        let local = rig.local();
+        let engine = rig.engine_global();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); rig.names.len()];
+        for (j, parent) in rig.parents.iter().enumerate() {
+            match parent {
+                Some(p) => children[*p].push(first + j),
+                None => roots.push(first + j),
+            }
+        }
+        let attachment_first = first + rig.names.len();
+        for (a, attachment) in rig.attachments.iter().enumerate() {
+            children.get_mut(attachment.joint).ok_or("an attachment names a joint the rig does not have")?.push(attachment_first + a);
+        }
+        for j in 0..rig.names.len() {
+            let mut node = json!({"name": rig.names[j], "translation": local[j]});
+            if !children[j].is_empty() {
+                node["children"] = json!(children[j]);
+            }
+            nodes.push(node);
+        }
+        for attachment in &rig.attachments {
+            let short = attachment.positions.len() <= u16::MAX as usize;
+            let position = b.floats(&attachment.positions, Some(ARRAY_BUFFER), true);
+            let normal = b.floats(&attachment.normals, Some(ARRAY_BUFFER), false);
+            let indices = b.indices(&attachment.indices, short);
+            meshes.push(json!({"name": attachment.name, "primitives": [{"attributes": {"POSITION": position, "NORMAL": normal}, "indices": indices, "mode": 4}]}));
+            nodes.push(json!({"name": attachment.name, "mesh": meshes.len() - 1}));
+        }
+        let matrices: Vec<u8> = engine
+            .iter()
+            .flat_map(|t| [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -t[0], -t[1], -t[2], 1.0])
+            .flat_map(|x| x.to_le_bytes())
+            .collect();
+        let ibm = b.raw(&matrices, None, FLOAT, rig.names.len(), "MAT4");
+        skins.push(json!({"name": "head_rig", "inverseBindMatrices": ibm, "joints": (first..first + rig.names.len()).collect::<Vec<_>>(),
+                          "skeleton": first + rig.parents.iter().position(|p| p.is_none()).unwrap_or(0)}));
+        if !rig.animations.is_empty() {
+            let times: Vec<u8> = [0.0f32, 1.0].iter().flat_map(|x| x.to_le_bytes()).collect();
+            let input = b.raw(&times, None, FLOAT, 2, "SCALAR");
+            b.accessors[input]["min"] = json!([0.0]);
+            b.accessors[input]["max"] = json!([1.0]);
+            let mut data: Vec<u8> = Vec::new();
+            let mut layout: Vec<(usize, &str)> = Vec::new();
+            for animation in &rig.animations {
+                for c in &animation.channels {
+                    if c.joint >= rig.names.len() {
+                        return Err(format!("animation {} names a joint the rig does not have", animation.name));
+                    }
+                    layout.push((data.len(), "VEC4"));
+                    data.extend(c.rotation.iter().flatten().flat_map(|x| x.to_le_bytes()));
+                    layout.push((data.len(), "VEC3"));
+                    data.extend(c.translation.iter().flatten().flat_map(|x| x.to_le_bytes()));
+                }
+            }
+            let view = b.view(&data, None);
+            let mut outputs = Vec::with_capacity(layout.len());
+            for &(offset, kind) in &layout {
+                b.accessors.push(json!({"bufferView": view, "byteOffset": offset, "componentType": FLOAT, "count": 2, "type": kind}));
+                outputs.push(b.accessors.len() - 1);
+            }
+            let mut next = outputs.into_iter();
+            for animation in &rig.animations {
+                let mut samplers = Vec::new();
+                let mut channels = Vec::new();
+                for c in &animation.channels {
+                    for path in ["rotation", "translation"] {
+                        let output = next.next().ok_or("animation outputs ran out")?;
+                        channels.push(json!({"sampler": samplers.len(), "target": {"node": first + c.joint, "path": path}}));
+                        samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+                    }
+                }
+                if let Some(k) = animation.morph {
+                    let m = morph_names.len();
+                    if k >= m {
+                        return Err(format!("animation {} drives a morph target the meshes do not have", animation.name));
+                    }
+                    let mut keys = vec![0.0f32; 2 * m];
+                    keys[m + k] = 1.0;
+                    let bytes: Vec<u8> = keys.iter().flat_map(|x| x.to_le_bytes()).collect();
+                    let output = b.raw(&bytes, None, FLOAT, 2 * m, "SCALAR");
+                    for (node, lod) in lods.iter().enumerate() {
+                        if !lod.morphs.is_empty() {
+                            channels.push(json!({"sampler": samplers.len(), "target": {"node": node, "path": "weights"}}));
+                            samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+                        }
+                    }
+                }
+                animations.push(json!({"name": animation.name, "samplers": samplers, "channels": channels}));
+            }
+        }
+    }
+    while b.bin.len() % 4 != 0 {
+        b.bin.push(0);
+    }
+    let mut document = json!({
+        "asset": {"version": "2.0", "generator": generator},
+        "scene": 0,
+        "scenes": [{"name": "GazeForge", "nodes": roots, "extras": {"gazeforge": extras.clone()}}],
+        "nodes": nodes,
+        "meshes": meshes,
+        "accessors": b.accessors,
+        "bufferViews": b.views,
+        "buffers": [{"byteLength": b.bin.len()}],
+        "extras": {"gazeforge": extras},
+    });
+    if !skins.is_empty() {
+        document["skins"] = json!(skins);
+    }
+    if !animations.is_empty() {
+        document["animations"] = json!(animations);
+    }
+    let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
+    while text.len() % 4 != 0 {
+        text.push(b' ');
+    }
+    let total = 12 + 8 + text.len() + 8 + b.bin.len();
+    let total32 = u32::try_from(total).map_err(|_| format!("the glb would be {total} bytes, over the 4 GiB limit"))?;
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&total32.to_le_bytes());
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+    out.extend_from_slice(&text);
+    out.extend_from_slice(&(b.bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+    out.extend_from_slice(&b.bin);
+    Ok((out, json!(report)))
+}
+
+pub struct ReadMesh {
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    pub morph_names: Vec<String>,
+    pub morphs: Vec<MorphData>,
+}
+
+fn accessor_bytes<'a>(doc: &Value, bin: &'a [u8], view: &Value, offset: u64, length: usize) -> Result<&'a [u8], String> {
+    let start = view["byteOffset"].as_u64().unwrap_or(0) as usize + offset as usize;
+    let _ = doc;
+    bin.get(start..start + length).ok_or_else(|| "an accessor runs past the binary chunk".to_string())
+}
+
+fn read_vec3(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<[f32; 3]>, String> {
+    let a = &doc["accessors"][index as usize];
+    if a["componentType"].as_u64() != Some(FLOAT as u64) || a["type"] != "VEC3" {
+        return Err(format!("accessor {index} is not a float VEC3"));
+    }
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize;
+    let floats = |bytes: &[u8]| -> Vec<[f32; 3]> {
+        bytes.chunks_exact(12).map(|c| [0, 4, 8].map(|o| f32::from_le_bytes(c[o..o + 4].try_into().unwrap()))).collect()
+    };
+    let mut out = match a.get("bufferView").and_then(Value::as_u64) {
+        Some(v) => {
+            let view = &doc["bufferViews"][v as usize];
+            if view.get("byteStride").and_then(Value::as_u64).is_some_and(|s| s != 12) {
+                return Err(format!("accessor {index} is interleaved; only tightly packed data is read"));
+            }
+            floats(accessor_bytes(doc, bin, view, a["byteOffset"].as_u64().unwrap_or(0), count * 12)?)
+        }
+        None => vec![[0.0; 3]; count],
+    };
+    if let Some(sparse) = a.get("sparse") {
+        let n = sparse["count"].as_u64().ok_or("a sparse accessor has no count")? as usize;
+        let iv = &doc["bufferViews"][sparse["indices"]["bufferView"].as_u64().ok_or("sparse indices have no view")? as usize];
+        let width = if sparse["indices"]["componentType"].as_u64() == Some(UNSIGNED_SHORT as u64) { 2 } else { 4 };
+        let ib = accessor_bytes(doc, bin, iv, sparse["indices"]["byteOffset"].as_u64().unwrap_or(0), n * width)?;
+        let vv = &doc["bufferViews"][sparse["values"]["bufferView"].as_u64().ok_or("sparse values have no view")? as usize];
+        let values = floats(accessor_bytes(doc, bin, vv, sparse["values"]["byteOffset"].as_u64().unwrap_or(0), n * 12)?);
+        for (k, value) in values.into_iter().enumerate() {
+            let i = if width == 2 { u16::from_le_bytes([ib[2 * k], ib[2 * k + 1]]) as usize } else { u32::from_le_bytes(ib[4 * k..4 * k + 4].try_into().unwrap()) as usize };
+            *out.get_mut(i).ok_or("a sparse index is out of range")? = value;
+        }
+    }
+    Ok(out)
+}
+
+fn read_indices(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<u32>, String> {
+    let a = &doc["accessors"][index as usize];
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize;
+    let view = &doc["bufferViews"][a["bufferView"].as_u64().ok_or("indices have no view")? as usize];
+    let offset = a["byteOffset"].as_u64().unwrap_or(0);
+    match a["componentType"].as_u64().map(|c| c as u32) {
+        Some(UNSIGNED_SHORT) => Ok(accessor_bytes(doc, bin, view, offset, count * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as u32).collect()),
+        Some(UNSIGNED_INT) => Ok(accessor_bytes(doc, bin, view, offset, count * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()),
+        _ => Err(format!("accessor {index}: indices must be u16 or u32")),
+    }
+}
+
+pub fn chunks(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
+    let word = |at: usize| -> Result<u32, String> {
+        Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
+    };
+    if word(0)? != 0x4654_6C67 || word(4)? != 2 {
+        return Err("not a glTF 2.0 binary".into());
+    }
+    let json_len = word(12)? as usize;
+    let doc: Value = serde_json::from_slice(bytes.get(20..20 + json_len).ok_or("the JSON chunk is truncated")?).map_err(|e| e.to_string())?;
+    let bin_len = word(20 + json_len)? as usize;
+    let bin = bytes.get(28 + json_len..28 + json_len + bin_len).ok_or("the binary chunk is truncated")?;
+    Ok((doc, bin))
+}
+
+pub fn read_plain(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<f32>, String> {
+    let a = &doc["accessors"][index as usize];
+    let width = match a["type"].as_str() {
+        Some("SCALAR") => 1,
+        Some("VEC2") => 2,
+        Some("VEC3") => 3,
+        Some("VEC4") => 4,
+        Some("MAT4") => 16,
+        _ => return Err(format!("accessor {index} has an unknown type")),
+    };
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize * width;
+    let view = &doc["bufferViews"][a["bufferView"].as_u64().ok_or("the accessor has no view")? as usize];
+    let offset = a["byteOffset"].as_u64().unwrap_or(0);
+    match a["componentType"].as_u64().map(|c| c as u32) {
+        Some(FLOAT) => Ok(accessor_bytes(doc, bin, view, offset, count * 4)?.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()),
+        Some(UNSIGNED_BYTE) => Ok(accessor_bytes(doc, bin, view, offset, count)?.iter().map(|&x| x as f32).collect()),
+        Some(UNSIGNED_SHORT) => Ok(accessor_bytes(doc, bin, view, offset, count * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as f32).collect()),
+        _ => Err(format!("accessor {index}: unsupported component type")),
+    }
+}
+
+pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
+    let word = |at: usize| -> Result<u32, String> {
+        Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
+    };
+    if word(0)? != 0x4654_6C67 || word(4)? != 2 {
+        return Err("not a glTF 2.0 binary".into());
+    }
+    let json_len = word(12)? as usize;
+    let doc: Value = serde_json::from_slice(bytes.get(20..20 + json_len).ok_or("the JSON chunk is truncated")?).map_err(|e| e.to_string())?;
+    let bin_len = word(20 + json_len)? as usize;
+    let bin = bytes.get(28 + json_len..28 + json_len + bin_len).ok_or("the binary chunk is truncated")?;
+    let mut meshes = Vec::new();
+    for mesh in doc["meshes"].as_array().ok_or("the glb has no meshes")? {
+        let primitive = &mesh["primitives"][0];
+        let attribute = |name: &str| primitive["attributes"][name].as_u64();
+        let positions = read_vec3(&doc, bin, attribute("POSITION").ok_or("a primitive has no POSITION")?)?;
+        let normals = match attribute("NORMAL") {
+            Some(i) => read_vec3(&doc, bin, i)?,
+            None => Vec::new(),
+        };
+        let indices = read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?;
+        let mut morphs = Vec::new();
+        for target in primitive["targets"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let p = read_vec3(&doc, bin, target["POSITION"].as_u64().ok_or("a morph target has no POSITION")?)?;
+            let q = match target["NORMAL"].as_u64() {
+                Some(i) => read_vec3(&doc, bin, i)?,
+                None => vec![[0.0; 3]; p.len()],
+            };
+            morphs.push(MorphData { positions: p, normals: q });
+        }
+        let morph_names = mesh["extras"]["targetNames"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        meshes.push(ReadMesh { name: mesh["name"].as_str().unwrap_or("").to_string(), positions, normals, indices, morph_names, morphs });
+    }
+    Ok((doc, meshes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lod(morph: Vec<[f32; 3]>) -> Lod {
+        Lod {
+            name: "Head_LOD0".into(),
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            indices: vec![0, 1, 2, 2, 1, 3],
+            morphs: vec![MorphData { positions: morph, normals: vec![[0.0; 3]; 4] }],
+            skin: None,
+        }
+    }
+
+    #[test]
+    fn a_rigged_glb_reads_back_and_its_bind_matrices_invert_the_joints() {
+        let mut skinned = lod(vec![[0.0, 0.0, 0.5], [0.0; 3], [0.0; 3], [0.0; 3]]);
+        skinned.skin = Some(SkinData { joints: vec![[0, 1, 0, 0]; 4], weights: vec![[0.25, 0.75, 0.0, 0.0]; 4], joints_1: Vec::new(), weights_1: Vec::new() });
+        let rig = Rig {
+            names: vec!["neck".into(), "head".into()],
+            parents: vec![None, Some(0)],
+            global: vec![[0.1, 1.3, 0.0], [0.1, 1.5, 0.01]],
+            attachments: vec![Attachment { name: "Eye".into(), joint: 1, positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                                           normals: vec![[0.0, 0.0, 1.0]; 3], indices: vec![0, 1, 2] }],
+            animations: Vec::new(),
+        };
+        let (bytes, _) = glb_rigged(&[skinned], &["m".into()], Sparse::Always, json!({}), "test", Some(&rig)).unwrap();
+        let (doc, meshes) = read_glb(&bytes).unwrap();
+        assert_eq!(meshes.len(), 2);
+        assert_eq!(meshes[0].morphs[0].positions[0], [0.0, 0.0, 0.5]);
+        assert_eq!(meshes[0].positions[3], [1.0, 1.0, 0.0]);
+        assert_eq!(doc["nodes"][0]["skin"], 0);
+        assert_eq!(doc["skins"][0]["joints"], json!([1, 2]));
+        assert_eq!(doc["nodes"][2]["children"], json!([3]));
+        assert_eq!(doc["scenes"][0]["nodes"], json!([0, 1]));
+        let engine = rig.engine_global();
+        assert_eq!([0, 1, 2].map(|k| engine[1][k] + -engine[1][k]), [0.0; 3]);
+    }
+
+    fn document(bytes: &[u8]) -> Value {
+        let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&bytes[20..20 + length]).unwrap()
+    }
+
+    #[test]
+    fn the_container_is_aligned_and_its_length_is_right() {
+        let (bytes, _) = glb(&[lod(vec![[0.0; 3]; 4])], &["m".into()], Sparse::Auto, json!({}), "test").unwrap();
+        assert_eq!(&bytes[0..4], b"glTF");
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize, bytes.len());
+        assert_eq!(bytes.len() % 4, 0);
+        let doc = document(&bytes);
+        assert_eq!(doc["meshes"][0]["extras"]["targetNames"][0], "m");
+    }
+
+    #[test]
+    fn a_morph_on_one_vertex_is_sparse_and_bounds_include_zero() {
+        let morph = vec![[0.0; 3], [0.0; 3], [0.0, 0.0, 0.5], [0.0; 3]];
+        let (bytes, report) = glb(&[lod(morph)], &["m".into()], Sparse::Auto, json!({}), "test").unwrap();
+        let doc = document(&bytes);
+        let target = doc["meshes"][0]["primitives"][0]["targets"][0]["POSITION"].as_u64().unwrap() as usize;
+        let accessor = &doc["accessors"][target];
+        assert_eq!(accessor["sparse"]["count"], 1);
+        assert_eq!(accessor["min"], json!([0.0, 0.0, 0.0]));
+        assert_eq!(accessor["max"], json!([0.0, 0.0, 0.5]));
+        assert_eq!(report[0]["morphs"][0]["position"], "sparse");
+        let (_, dense) = glb(&[lod(vec![[0.1; 3]; 4])], &["m".into()], Sparse::Auto, json!({}), "test").unwrap();
+        assert_eq!(dense[0]["morphs"][0]["position"], "dense");
+    }
+
+    #[test]
+    fn bad_indices_are_refused() {
+        let mut bad = lod(vec![[0.0; 3]; 4]);
+        bad.indices[0] = 9;
+        assert!(glb(&[bad], &["m".into()], Sparse::Auto, json!({}), "test").is_err());
+    }
+}

@@ -3,7 +3,8 @@
 A character system in Rust in the spirit of MakeHuman: one shared dense base mesh, linear targets on it, characters as
 data, and a game-resolution mesh built once from the dense base. Meant to be driven by people and by AI agents alike.
 
-**Status: early.** The Rust core and the pilot (M0) are in progress; the interfaces below will change.
+**Status: 0.1.0, the first edition.** Every milestone below has working code; the gates that are still open are listed,
+with their last measurements, in [CHANGELOG.md](CHANGELOG.md). Interfaces may change before 1.0.
 
 ## How it works
 
@@ -26,26 +27,699 @@ cargo build --release
 
 The binary is `target/release/gazeforge`.
 
+The workspace is layered, and every edge points down: `gf-geom` (pure maths: no IO, no threads, no clocks; builds for
+`wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
+catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
+`gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
+`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only.
+`python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
+against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
+`-D warnings`, the wasm32 build, and a build of `gf-core`, `gf-io` and `gf-api` in a copy of the workspace without its
+front doors.
+
 ## Usage
 
 Every command prints one JSON object on stdout and exits non-zero on failure.
 
-Build a game base from a dense base:
+Build a game base from a dense base, optionally with a per-vertex importance weight and nested LODs from the same
+collapse run:
 
 ```
 gazeforge build-base --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy]
-                     [--min-angle 4] [--max-angle 170] [--max-turn 45] [--boundary-weight 100]
-                     [--improve-below 20] [--flip-flat 15]
+                     [--weights W.npy] [--lods 8000,3000] [--min-angle 4] [--max-angle 170] ...
 ```
 
 Export a shape (the base, a target, or any positions over the dense order) at game resolution:
 
 ```
 gazeforge export-obj --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj
-                     [--placement optimal|fit|f2|subset] [--max-move 3]
+                     [--placement f5|f6|subset|optimal|fit|f2|f3|f4|NAME/VERSION] [--eyes EYES.json] [--tip-vertex N] ...
 ```
 
-Run `gazeforge` without arguments for the full option list.
+Each placement is versioned (`subset/1`, `optimal/1`, `fit/1`, `f2/1`, `f3/1`, `f4/1`, `f5/1`, `f6/1`) and never changes once
+released; a bare name means its latest version. `f5/1` is the default wherever no placement is named: a new character
+spec (and so `export-glb`, which places with the spec's placement), `export-obj` (whose default was `optimal` before),
+the designer, the image-to-character pipeline and `gates path`. A named placement runs exactly as released. With
+`--eyes`, `f3`, `f5` and `f6` keep the placed eyelids outside the eyeballs. The output names the version it ran
+(`placement_version`).
+
+`f5` is the continuous placement: a small change to the dense shape makes a proportionally small change to the game mesh.
+Each dense vertex is tied to a fixed game triangle and barycentric weights found in texture space (they do not depend on
+the shape), and the game mesh is one linear least-squares solve: distance to the dense surface along normals taken from
+the game-resolution subset, a weak pull toward the fixed correspondence, edge vectors kept close to the subset's, and a
+tangential membrane that keeps triangles open. Seam vertices move along those normals only; the eyelid lift uses smooth
+fades instead of cut-offs. There are no accept/reject steps, nearest-surface searches or data-dependent iteration counts
+in the positions (the linear solver stops at a relative residual of 1e-13).
+
+`f6` is `f5` with weaker edge and membrane terms (0.05 each) followed by a sliver nudge: wherever a triangle's height over
+one of its edges is below sin(6 deg) times that edge, its vertices are pushed apart along that height, 32 damped rounds.
+Each push grows continuously from zero at the threshold, so the output stays continuous in the input; boundary vertices
+never move, seam vertices move at a quarter of the rate and keep their texture coordinates, and the push fades out near
+the eyeballs when `--eyes` is given. The triangulation is unchanged. `f6` is opt-in (`--placement f6`); the default stays
+`f5/1`.
+
+Push a character's eyelid skin out of its eyeballs at dense resolution:
+
+```
+gazeforge collide-lids --dense DIR --positions base|shape:NAME|FILE.npy --eyes EYES.json --out FILE.npy [--clearance 0]
+```
+
+An option a command does not read is refused, and numbers and input positions must be finite. Run `gazeforge` without
+arguments for the full option list of the argv commands; `gazeforge commands` lists the registry commands (below).
+
+#### Store
+
+A content-addressed store (sha256) holds dense packs, target catalogs and game bases. Each is a manifest whose id is
+the sha256 of its canonical JSON bytes; arrays and target files are blobs under `blobs/`, verified on every read.
+Identical files are stored once.
+
+```
+gazeforge store import-pack --store DIR --dense DIR [--macro-base SLIDERS_JSON|@FILE] [--pin-top Z_METRES]
+gazeforge store import-catalog --store DIR --targets DIR --pack sha256:...
+gazeforge store import-game --store DIR --base DIR --pack sha256:...
+```
+
+`import-catalog` reads `catalog.json` and its sparse targets (`.npz` with `indices` u32 and `deltas` f32 x 3, on the
+dense order) as baked. `import-game` also imports `lod_<N>` subdirectories. `--macro-base` records the pack's own macro
+slider values and `--pin-top` the height up to which head-only macros are pinned to the neck seam; both are needed for
+characters with macros.
+
+#### Characters
+
+A character spec (`gazeforge.character/1`) is canonical JSON: the pack, catalog, optional game base and placement
+version; target weights (each in [0, 1], rounded to 1e-6); optional macros; an optional residual. Its revision id is
+the sha256 of those bytes, which is also the sha256 of the file `character create` writes.
+
+```
+gazeforge character create --store DIR --pack sha256:... --catalog sha256:... --out FILE.gfchar.json
+                           [--game sha256:...] [--placement NAME/VERSION] [--name NAME] [--weights JSON|@FILE]
+                           [--macro MACRO_JSON --sliders JSON|@FILE --macro-mode gf|mpfb --head-scale 1]
+                           [--residual-from FACE.npy [--quantum-mm 0.005]]
+gazeforge character validate --store DIR --spec FILE [--macro MACRO_JSON]
+gazeforge character evaluate --store DIR --spec FILE --out DENSE.npy [--macro MACRO_JSON] [--precision f32|f64]
+```
+
+`evaluate` computes `base + sum(w * T) + head-only macros + residual` on the dense order; its output is a positions
+file that `export-obj --positions` reads. `--residual-from` stores `FACE - (base + sum(w * T) + macros)` as an i16,
+planar, delta-coded, zlib-compressed blob (`i16-planar-delta-zlib/1`); the default quantum of 0.005 mm keeps every
+vertex within 0.0044 mm of the face.
+
+#### Macros
+
+The macro definition (`macro.json`) is never shipped with GazeForge: every macro command reads it from the user's own
+MakeHuman / MPFB install (`--macro PATH`), and a spec records its sha256 so a different file is refused.
+
+```
+gazeforge macro weights --macro MACRO_JSON --sliders JSON|@FILE [--targets TARGETS_ROOT] [--mode gf|mpfb] [--floor 0.01|none]
+gazeforge macro labels --macro MACRO_JSON --slider NAME --values VALUES.npy --out TABLE.npy [--mode gf|mpfb]
+```
+
+`--sliders` is one object or a list of objects with all eleven sliders (`gender age muscle weight proportions height
+cupsize firmness african asian caucasian`, each in [0, 1]). `gf` (the default) is continuous along every slider; `mpfb`
+reproduces MPFB's values, including its 4-decimal rounding and, unless `--floor none`, its 0.01 key floor.
+
+On a character, macros are head-only: the change against the pack's own sliders is summed over the catalog's macro
+targets, its best linear similarity (translation, uniform scale, small rotation) over the whole head is removed, and the
+rest is pinned to the neck seam by a smoothstep from the seam's top to `--pin-top`. Head size is its own control,
+`--head-scale` in [0.9, 1.1], a scale about the seam centroid under the same pin.
+
+#### glTF export
+
+```
+gazeforge export-glb --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json]
+                     [--sparse auto|always|never] [--lod-screen 0.25,0.1] [the options of the spec's placement]
+```
+
+Writes one binary glTF 2.0 file of the character at game resolution: one node and mesh per LOD (`Head_LOD0` for the
+full game base, `Head_LOD1`... for each nested coarser LOD of the spec's game base), positions in metres with +Y up and
+the face looking along +Z, normals, one UV layer, 16-bit indices when a LOD has at most 65,535 vertices. Each catalog target named in `--morphs` becomes a morph
+target on every LOD, `F(c + e) - F(c)`: the placed game positions of the character with the target at weight 1, minus
+those without it. Morph targets are written as sparse accessors when that is smaller (`auto`), always, or never.
+`extras.gazeforge` names the spec revision, pack, game base, placement version and tool. A sidecar `FILE.gazeforge.json`
+lists the morph names and targets (with how many game vertices each moves), each LOD's node, vertex count and screen
+size, the spec hash and the sha256 of the `.glb`.
+
+Game-ready options (each is opt-in; without them the output is unchanged):
+
+```
+                     [--morph-dir DIR] [--morph-floor MM] [--facing keep|repair|repair-states] [--lod-screen measured
+                     [--lod-pixels 1] [--lod-height 1080]] [--rig none|head|face --rig-jaw TARGET --eyes EYES.json [--rig-rounds 2]]
+                     [--lids off|auto --eyes EYES.json [--lids-step-mm 0.05] [--lids-max-mm 1] [--lids-front-deg 75]
+                     [--lids-tolerance-mm 0] [--lids-smooth 4]] [--lod0-out STEM]
+```
+
+- `--morph-dir DIR` resolves a morph id `ID` as `DIR/ID.npz` (sparse `indices` + `deltas` on the dense topology) before
+  the catalog, so an expression set such as the ARKit-52 face units can be exported without being in the catalog. The
+  morph name is the id's last path part.
+- `--morph-floor MM` zeroes morph position deltas shorter than `MM` (and normal deltas under 1e-3), which lets sparse
+  accessors pay where the placement moves far vertices by a negligible amount.
+- `--facing repair` flips edges of triangles that face against their own vertex normals (folds a coarse LOD triangle
+  picks up from the character's shape). A flip is taken only off UV seams, only when both new triangles face with their
+  vertex normals in the neutral state, never adds a back-facing triangle in any morph state, and never makes a sliver
+  thinner than the pair it replaces (or 5 degrees). Triangles the flips cannot fix are untangled: their vertices step
+  toward their one-ring centroids in every LOD (at most 2 mm), and every morph state moves by the same amount, so morph
+  deltas are unchanged. The LODs stay nested. The sidecar records the counts before and after per LOD.
+- `--facing repair-states` does the same, then untangles each morph state at weight 1 that still has triangles facing
+  against its own vertex normals, on its own (at most 4 mm). The neutral is not moved further, so at the moved vertices
+  that morph's delta is no longer exactly `F(c + e) - F(c)`; the sidecar lists each state, its counts and its largest move.
+- `--lids auto` keeps the eyelids outside the eyeballs of `--eyes`. After the placement, the finest LOD and every coarser
+  LOD are checked: a vertex fails when it lies within 0.5 to 1.3 eye radii of an eye centre and within `--lids-front-deg`
+  of its gaze, its normal points away from the centre, and it is closer to the centre than the larger of the eye radius
+  and the eye mesh's outermost surface along that direction (by more than `--lids-tolerance-mm`). A state that passes is
+  left untouched. A state that fails is collided at dense level (as `collide-lids`, with the failing vertices pushed even
+  where the dense normal faces the eye) with clearance 0, then one `--lids-step-mm` more each time up to `--lids-max-mm`,
+  re-placed each time, and the first clearance that passes is kept. Morph states are evaluated from the neutral's dense
+  shape as exported, so the delta is `F(collided(c + e)) - F(c)`. After a facing repair, a vertex still inside an eye is
+  moved along the eye's radius to its surface, alternating with the untangle (whose steps are kept outside the eyes) for
+  up to 4 rounds. The sidecar's `lids` section records every search and the final check per LOD and state.
+- `--lod0-out STEM` also writes the finest LOD as exported (neutral positions, its own triangulation and UVs) to
+  `STEM.obj` and the neutral dense shape it was placed from to `STEM.dense.npy`, for `gates game --triangles obj`.
+- `--lod-screen measured` chooses each LOD's screen size from the largest distance between the finest LOD's vertices
+  and that LOD's surface: switch when that error projects to `--lod-pixels` on a screen `--lod-height` pixels tall,
+  `s = 2 * pixels * radius / (error * height)`, with `s` the bounding sphere's diameter as a fraction of the screen
+  height. The sidecar carries the errors, the radius and the formula, so an engine converts `s` to a distance for its
+  own field of view: `d = radius / (s * tan(vfov / 2))`.
+- `--rig head` adds a glTF skin with joints `neck` (root), `head`, `jaw`, `eye_L`, `eye_R`, translation-only, with
+  inverse bind matrices that invert each joint chain exactly. Skin weights are computed per game vertex from the dense
+  base: the jaw weight is the jaw target's displacement (`--rig-jaw`, e.g. a jaw-open unit) projected on the rotation
+  about the hinge fitted to that same target; the neck weight is 1 on the neck seam (so a body's neck joint drives the
+  seam exactly) and falls to 0 at half the chin-to-seam distance; the head takes the rest. Joint positions follow the
+  character (the seam centroid, the fitted hinge moved with the face, the eye centres from `--eyes`), and two eyeball
+  spheres `Eye_L` / `Eye_R` are children of the eye joints.
+
+##### Face rig
+
+`--rig face` (with `--morphs`, `--morph-dir`, `--rig-jaw` and `--eyes`, optionally `--rig-rounds N`, default 2) adds 24
+facial joints to the head rig: `brow_inner/mid/outer_L/R`, `lid_upper/lower_L/R`, `cheek_L/R`, `nose`, `nostril_L/R`,
+`lip_corner_L/R`, `lip_upper_L/C/R` (children of `head`) and `lip_lower_L/C/R`, `chin` (children of `jaw`). The head cage
+has no tongue geometry, so there is no tongue joint.
+
+- **Placement by index.** Each facial joint has a seed vertex on the dense base and sits at the mean of the character's
+  dense positions over the base vertices within 2 mm of it; the lid joints sit at the eye centres and turn about them.
+  Joint positions are rounded to 1/2^20 m so that the f32 joint chain and the inverse bind matrices cancel exactly.
+- **Weights on the base.** Computed once from the base and the shapes, at the game vertices' dense indices, and carried
+  to every LOD by index: distance falloffs around each joint (upper-lip joints share the head weight, lower-lip and chin
+  joints the jaw weight, lids split at the lid line), then rounds of fit-the-poses / re-solve each vertex's weights
+  (non-negative, summing to 1 - neck) / smooth over the mesh; the 4 largest are kept and quantised so the f32 weights sum
+  to exactly 1. The same for every character.
+- **Poses per shape.** For every morph, each posed joint (jaw and the facial joints) gets a bounded rotation about its
+  rest position and a translation, solved by Gauss-Newton so that linear blend skinning reproduces F(c + e) - F(c) on the
+  game LOD0 (vertices near the eyes count more). The sidecar's `rig.face.fit` lists, per shape, the error (mean / p95 /
+  max mm) and the fraction of its squared displacement the joints explain; shapes below 0.8 or above 1 mm p95 are listed
+  as poorly expressed.
+- **Animations.** One glTF animation per morph, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the
+  pose), so seeking to t gives roughly weight t. The blend shapes stay in the file: an engine uses either.
+
+`gazeforge gates rig --glb X.glb [--eyes EYES.json]` checks a rigged glb: the rest pose lands exactly on the exported
+positions, every vertex's f32 weights sum to exactly 1, and per animation and LOD the joint pose has no more folded
+triangles (against normals recomputed on the posed mesh) than the blend shape of the same name, and with `--eyes` no
+more vertices inside an eye (the `gates lids` rule).
+
+The registry command `rig.face` returns the same rig for a designer character (settled positions, joints, weights,
+fitted poses, errors, and the shapes' blend deltas), and the designer panel `web/panels/rig.js` drives it: expression
+sliders and presets as blend shapes or through the joints, per-joint pose controls, a joint overlay, undo for every
+change. Open the designer with `&face_morphs=<dir of the shapes' .npz>` (and `&face_prefix=` if their ids differ).
+
+`--rig face2` is an opt-in second version of the face rig; `--rig face` is unchanged. It replaces the four lid joints
+with twelve (`lid_upper/lower_in/mid/out_L/R`, three along each lid, all turning about the eye centre), starts their
+weights from the eye geometry (the canthus landmarks and the lid seed vertices) instead of distance alone, gives the
+mouth corners more translation reach, keeps up to 8 influences per vertex (`JOINTS_1` / `WEIGHTS_1` beside `JOINTS_0` /
+`WEIGHTS_0`), and adds a barrier term to the pose fit that keeps vertices outside the eye surface. With
+`--rig-correctives on` every shape also gets a corrective morph target (`<shape>.corrective`) that each animation drives
+from 0 to 1 through a glTF `weights` channel, so the joint pose plus its corrective reproduces the blend shape exactly,
+at the cost of one more morph target per shape on every LOD. `gates rig` reads both influence sets and applies
+animated morph weights before skinning.
+
+Morphs carry no UVs in glTF, so every LOD keeps the neutral character's UVs; the sidecar records, per morph, how far the
+placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_lod0`).
+
+#### Bodies
+
+A head joins a body at its neck seam. `body.import` builds a body pack (positions, triangles, UVs, the neck ring with a
+seam parameter per ring vertex, and two coarser LODs whose collar keeps every ring vertex):
+
+```
+gazeforge call body.import --input '{"mode":"makehuman","obj":"base.obj","dense":"data/dense","out":"bodies/makehuman",
+  "targets":"<makehuman targets>","macro":"<macro.json>","sliders":{...}}'
+gazeforge call body.import --input '{"mode":"mesh","obj":"body.obj","dense":"data/dense","out":"bodies/other",
+  "up":"y","unit_m":1.0,"cut_z_m":1.31}'
+```
+
+- **makehuman**: the MakeHuman base mesh (its `body` group). The dense head is the subdivided MakeHuman head, so the
+  correspondence is found by topology: the dense base's subdivision patches give the head cage, and the cage embeds in
+  the body's quads in exactly one orientation-preserving way. The neck ring is the cage boundary, vertex by vertex; no
+  position matching. Optional macro sliders shape the body with the MakeHuman macro targets.
+- **mesh**: any body. Its topmost open boundary loop is the neck (or `cut_z_m` removes every face above a plane and the
+  cut becomes the loop); `align` is `translate` (default), `similarity` or `none`; ring parameters come from arc length
+  with the best start offset, then each ring vertex's closest seam point nearby.
+
+`character.stitch` (LOD0, unplaced head, for previews and the designer's Body panel) and `export-glb --body PACK` (every
+LOD, placed head) join them: the body's ring vertices are replaced by copies of the head's seam vertices, and every body
+triangle on the ring becomes a fan over the seam points between its two ring corners, so the seam has no cracks or
+T-junctions by construction. The body is then bent onto the head over a band. Controls: `blend_mm` (band width, default
+60), `neck_offset_mm`, `head_scale` (about the seam centre), `body_scale` (about the ring centre), `smooth` (Laplacian
+passes over the band) and `tangent` (0..1, how far the first body row turns to continue the head surface; default 0.5);
+on export they are `--body-blend-mm`, `--body-neck-offset-mm`, `--head-scale`, `--body-scale`, `--body-smooth`,
+`--body-tangent`. `character.stitch` takes a spec file, a spec object or the designer's character; with `return_mesh` it
+also returns the head positions it stitched to (`head_scale` applied, finest-level order).
+
+In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
+layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
+of both meshes share position, normal (the two sides' average) and skin weights (1.0 on the neck joint), so they stay
+closed in every pose. Gates, per LOD, fail the export: seam gap (< 1e-5 m for makehuman packs, < 1e-4 m for mesh packs),
+open, non-manifold or mis-oriented seam edges, the angle between the head and body triangles on each seam edge (<= 40
+deg), flipped or folded triangles in the band, and head or body vertices behind the other surface near the neck. The
+`plant` input of `character.stitch` (`gap`, `crack`, `crease`, `flip`, `penetrate`) puts a defect in on purpose; each
+makes the gates fail.
+
+#### Gates
+
+```
+gazeforge gates shell --dense DIR --before base|shape:NAME|FILE.npy --after base|shape:NAME|FILE.npy [limits]
+gazeforge gates game --dense DIR --base DIR --face base|shape:NAME|FILE.npy --obj GAME.obj [--gates triq,uv,census,seams]
+gazeforge gates path --dense DIR --base DIR --start FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
+                     [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM]
+gazeforge gates facing --glb FILE.glb [--states neutral|all]
+gazeforge gates lids --glb FILE.glb --eyes EYES.json [--states all|neutral] [--front-deg 75] [--tolerance-mm 0]
+gazeforge gates rig  --glb FILE.glb [--eyes EYES.json] [--front-deg 75] [--tolerance-mm 0]
+```
+
+`facing` reads a `.glb` and counts, per mesh, triangles whose winding faces against the mean of their three exported
+vertex normals (a back-facing triangle a renderer culls); with `--states all` it also counts every morph target at
+weight 1 and fails on those too. `lids` applies the eyelid check of `export-glb --lids auto` to every head mesh of a
+`.glb` (vertices sharing a position counted once), in the neutral and, with `--states all` (the default), every morph
+target at weight 1.
+
+`game --triangles obj` reads a game mesh whose triangulation differs from the game base's (for example the finest LOD
+after `--facing repair`); the vertices must still be the base's. The `census` uses rule a-2: a visible triangle (outside
+the eye and nostril box) more than 60 degrees from the mean of its corners' dense normals fails, unless a dense triangle
+the decimation collapsed into it (all three of its owners among the triangle's corners) is itself more than 60 degrees
+from the mean of its own vertex normals, i.e. the fold is already in the dense shape. `front_over60_raw` keeps the count
+without that exception and `front_over60_dense_folded` the triangles it excused.
+
+`shell` compares two dense shapes: quad folds that appear, inner surfaces that come to face the front, and move
+roughness (vertices that move unlike their neighbours). `game` measures an exported game mesh against its dense face:
+sliver and needle triangles outside the eye and nostril box (`triq`), flipped and zero-area UV triangles (`uv`), game
+triangles facing away from the face's own dense normals (`census`), and seam vertices that disagree between UV charts
+(`seams`). `path` places every step of a straight dense path and counts game vertices that jump while the dense surface
+under them barely moves; `--plant` adds a forward jump to one vertex at one step to prove the gate fires. `shell` and
+`game` assert the world frame first (-Y forward, +Z up); `path` measures distances only. A gate that fails prints its
+report with `"ok": false` and exits non-zero.
+
+### One registry, three front doors
+
+The commands an agent uses live in one registry (`gf-api`). Each has a name, a kind (query, mutation or job), an input
+JSON schema, an output shape, its limits, and one handler. The CLI, the HTTP API and the MCP server all call that
+handler and return the same envelope, byte for byte (`crates/gf-cli/tests/conformance.rs` checks this):
+
+```
+{"ok":true,"command":"character.measure","result":{...}}
+{"ok":false,"command":"character.create","error":{"code":"invalid_input","message":"...","retryable":false,"details":{...},"hint":"..."}}
+```
+
+| code | CLI exit | HTTP |
+|---|---|---|
+| internal | 1 | 500 |
+| invalid_input | 2 | 400 |
+| not_found | 3 | 404 |
+| gate_failed | 4 | 422 |
+| worker_failed | 5 | 502 |
+| cancelled | 6 | 499 |
+| conflict | 7 | 409 |
+
+Commands: `commands.list`, `store.list`, `catalog.list`, `character.create`, `character.validate`, `character.evaluate`,
+`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, and `debug.slow` (a deliberately slow job that exists
+to prove cancel). `commands.list` returns every schema; the argv commands above are unchanged.
+
+`character.measure` evaluates a spec and reports straight-line distances in millimetres between landmark vertices of
+the dense base, with the base's value and the difference: nose width at the alae, nose length (nasion to tip), nose
+height (nasion to subnasale), face width at the cheekbones, and eye spacing (inner and outer corners). The landmarks are
+dense vertex indices chosen once on the base by a stated rule; the rules are in the command's input schema. A target
+that slides the widest point along the surface is still measured at the base's vertex. `pairs` measures other vertex
+pairs instead.
+
+**CLI:**
+
+```
+gazeforge commands
+gazeforge call character.measure --input '{"store": "STORE", "spec": "FACE.gfchar.json"}'
+gazeforge call character.create --input @create.json
+```
+
+**HTTP** (127.0.0.1 only; requests with a non-loopback Host or Origin are refused):
+
+```
+gazeforge serve [--port 7878]          # prints {"ok":true,"command":"serve","listening":"127.0.0.1:7878",...}
+GET  /v1/commands                      # the commands.list envelope
+POST /v1/<command>                     # JSON body = the command's input; status from the table above
+GET  /v1/jobs/<id>                     # jobs.status
+```
+
+**MCP** over stdio (`gazeforge mcp`: `initialize`, `tools/list`, `tools/call`, `ping`). Each command is a tool whose name
+has its dots turned into underscores (`character_measure`); the tool result is the same envelope as text, with `isError`
+set when `ok` is false. A client configuration:
+
+```json
+{
+  "mcpServers": {
+    "gazeforge": {"type": "stdio", "command": "/path/to/gazeforge", "args": ["mcp"]}
+  }
+}
+```
+
+**Jobs.** `jobs.submit {"command": NAME, "input": {...}}` runs a command in a worker process and returns at once;
+`jobs.status {"id", "wait_s"}` reads its record (`queued`, `running`, `done`, `failed`, `cancelled`, with the result
+when done); `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
+Object that is killed as a whole and closed on exit; the record's `worker_processes_left` is the job object's own count
+after the kill. Elsewhere the worker gets its own process group, which is killed, and that count is null. Jobs live in
+`GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled
+through another that uses the same directory.
+
+### Designer
+
+A browser page served by `gazeforge serve`: sliders for the 290 head targets (cheek, chin, ears, eyebrows, eyes,
+forehead, head, mouth, neck, nose) with search, a category filter and reset (double-click resets one slider), the macro
+sliders (head only: the similarity is stripped and the neck seam pinned) when a macro definition file is given, a 3D
+viewer for topology inspection (below), undo / redo of every edit, extension panels, and saving the character as a spec
+file.
+
+```
+gazeforge serve --port 7878 --web web       # --web: the folder holding index.html (default ./web, or GAZEFORGE_WEB)
+http://127.0.0.1:7878/designer/?store=STORE[&spec=FACE.gfchar.json][&macro=MACRO_JSON][&eyes=EYES.json][&out=SAVE.gfchar.json][&fast=1]
+```
+
+While a slider is dragged the page shows a preview, labelled approximate: the last settled game mesh plus each changed
+target's exact delta at the game vertices, computed in WebAssembly (`gf-wasm`, which also recomputes the vertex normals).
+On release (150 ms debounce) the server settles the character (weights and macros -> dense -> the spec's placement ->
+game mesh), and the settled mesh replaces the preview and becomes the base of the next one. Under the default placement
+the settled mesh can differ from the preview, because the placement re-fits game vertices along the surface. Macro
+sliders preview with a one-sided slope fetched when the drag starts (`designer.macro_delta`).
+
+Everything heavy stays on the server: the dense pack, the catalog and the placement never reach the browser. The page
+downloads one preview pack per target set (game triangles plus each target's i16 delta at the game vertices and a scale,
+a content-addressed store blob, cached by hash) and the settled positions. The commands, usable from every front door:
+`designer.sliders`, `designer.pack`, `designer.settle`, `designer.macro_delta`, `designer.scene`, `designer.save`. The served process keeps
+one pack, catalog and game base in memory between settles. `GET /v1/blob/<sha256>?store=STORE` serves a store blob.
+
+With them it keeps, built on the first settle, everything the placement computes that does not depend on the character:
+boundary and seam flags, rings, edges, the UV charts and each game vertex's UV search patch, the f5 footprint. Later
+settles compute only what depends on the dense positions, and their results are byte-identical to a one-shot placement.
+`designer.settle` places with the spec's placement, f5 by default. `&fast=1` asks for an opt-in draft when that
+placement is f3/f4: 1 of its 4 fit rounds (input
+`fast`, reply flagged `approximate`, labelled as a draft in the page). A draft is never saved or exported; after 3 s
+without a change the page settles again with the full placement.
+
+Building the page's kernel: `cargo build --release -p gf-wasm --target wasm32-unknown-unknown`, then copy
+`target/wasm32-unknown-unknown/release/gf_wasm.wasm` to `web/gf_wasm.wasm` (`CARGO_PROFILE_RELEASE_DEBUG=0` keeps it
+small). The page uses WebGL2 and no third-party scripts. On some Windows machines Chrome's default graphics backend gives
+no WebGL context; `--use-angle=gl` does.
+
+#### Viewer controls
+
+The viewer draws the head by vertex pulling (positions, normals and indices live in textures), so every mode shares one
+upload per frame. `designer.scene` returns the game base's coarser levels of detail as triangles over the finest level's
+vertices, the base triangle UVs, and the eyeballs of an optional eyes file as spheres.
+
+- **Camera:** orbit, pan and zoom with damping; double-click a surface point to orbit around it; perspective or
+  orthographic with matched framing; named views; field of view (the framing at the pivot is kept).
+- **Layouts:** single, side by side, quad (front, side and top orthographic plus perspective). Each viewport has its own
+  camera; the active one is outlined and receives the camera controls. Render mode and level of detail are per viewport
+  (linked by default).
+- **Render modes:** clay, flat, Gouraud, Blinn-Phong, anisotropic (Kajiya-Kay along horizontal or vertical tangent rings),
+  matcap, normals, hidden line, triangle quality (smallest angle), displacement from a reference in mm (the starting
+  character, the neutral base or a snapshot; signed along the normal), mean curvature from the vertex normals, UV checker.
+  Overlays on any mode: wireframe (constant pixel width, optionally faded where triangles are only a few pixels tall),
+  hidden edges through the surface, vertex points, back-face
+  highlight, UV seams and open boundaries. Levels of detail switch per viewport.
+- **Lighting:** presets (studio three-point, flat, rim, top, single key), up to four lights with azimuth, elevation,
+  intensity and colour temperature, a hemisphere ambient, exposure, lights fixed to the camera or to the world, a gizmo.
+- **Clipping:** up to three planes (x, y, z or free), each optionally a slab of two parallel planes; the section cap is
+  filled (stencil) and the back faces inside a cut are drawn in their own colour.
+- **Hide:** show, hide or isolate the head, the eyes, extra meshes and overlays; hide regions (each vertex belongs to the
+  category of the local target that moves it most relative to that target's largest move) or everything inside a box.
+- **History:** sliders, macros, reset, visibility and panel actions undo and redo; camera moves are not recorded.
+- **Screenshot:** a PNG of the active viewport or of the whole layout. View settings are remembered in the browser.
+
+| key | action | key | action |
+|---|---|---|---|
+| Ctrl+Z, Ctrl+Y | undo, redo | F, Shift+F | frame the head, frame the selection |
+| double-click | orbit pivot on the surface | drag, right / middle / Shift drag, wheel | orbit, pan, zoom |
+| O or 5 | perspective / orthographic | 1, Shift+1 | front, back |
+| 3, Shift+3 | left side, right side | 7, Shift+7, 9 | top, bottom, three-quarter |
+| [ and ] | field of view | L, N | next layout, next viewport |
+| M, Shift+M | next, previous render mode | `,` and `.` | coarser, finer level of detail |
+| W, X, P | wireframe, hidden edges, points | B, E | back faces, seams and boundaries |
+| C, Alt+wheel | clip plane 1, move it | G | light gizmo |
+| H, Alt+H, I | hide the head, show everything, isolate the head | K, Shift+K | PNG of the view, of the layout |
+| Ctrl+N, Ctrl+O | new project, open a project | Ctrl+S, Ctrl+Shift+S | save, save as |
+| ? | shortcut help | Esc | close the help |
+
+#### Panels
+
+A panel is an ES module `web/panels/<id>.js` listed in `web/panels/index.json` (an array of ids; its order is the UI
+order). The page imports every listed module at start; the module calls `window.GF.registerPanel({ id, title, order,
+mount(rootEl, api) })`. The `api` given to `mount`:
+
+```
+call(command, input) -> Promise<result>     a registry command over HTTP (POST /v1/<command>)
+character()                                 the current character as the page holds it (store, pack, catalog, game, weights, ...)
+onCharacterChange(cb)                       cb(character, { kind: "settle" | "slider", positions?, measurements? })
+setPose(id, positions | null)               temporary head positions (Float32Array, finest-level order); last non-null wins
+setExtraMesh(id, { positions, indices, normals?, color? } | null)
+setOverlay(id, { lines?, points?, color } | null)
+pushUndo({ label, undo(), redo() })         a panel action joins the page's undo / redo history
+requestRender()
+```
+
+Panels never reach the renderer directly. `web/panels/measurements.js` (the settled measurements, a bounding-box overlay
+with undo, the level-of-detail sizes through `call`) is the example.
+
+`mount` may return `{ getState(), setState(state) }` (or the definition may carry them; both optional): the page saves
+`getState()` (plain JSON) with the project and calls `setState(state)` after mounting when a project is opened. A state
+puts any file or folder path under `resources` (`{"body": "..."}`): the project keeps those as resources by identity and
+hands `setState` the paths found on load; any other text that looks like a local path blocks a portable export. The Body
+(`stitch.js`) and Face rig (`rig.js`) panels implement both. The Body panel runs `character.stitch` with its gates
+enforced: a stitch that fails them is drawn in red with the failed gates listed, never as a usable body; a head scale
+other than 1 shows the scaled head through `setPose`; while the character changes, the body is marked stale (or
+re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
+moves and refits after the settle.
+
+### Projects
+
+A project file `<name>.gfproj.json` keeps an ongoing piece of work: its characters (each a spec with a revision history;
+a new revision is recorded when a save changes the spec), the panel states (body choice and stitch settings, expression
+and joint settings), the viewer state (cameras per viewport, layout, render modes, overlays, lights, clip planes, the hide
+box, regions and visibility), designer options and notes. The shared base (pack, catalog, game base) is referenced by
+sha256 only, with a fingerprint of its blob sizes.
+
+Everything outside the project file is a **resource**, kept as a role, an identity and a hint: `store` (identity: the
+base fingerprint), `macro` and `eyes` (files: sha256 of the bytes), `face_morphs` (a folder: sha256 over every file's
+relative name, size and content, whatever its size) and panel resources such as `panels.stitch.body` (a panel's
+`getState()` puts its paths under `resources`). Files are hashed as they stream, on every save and load; nothing is
+cached, so an edit is seen whatever it keeps of the size or the modification time. A folder's identity follows the
+symbolic links and junctions inside it, as the loaders do, and covers what they lead to under the link's name (a folder
+reached through a junction has the same identity as a copy of it); a link that leads back into the folder (a cycle)
+cannot be identified and refuses the save, and a dangling link is recorded by name. The hint is relative to the projects folder when the resource lies inside
+it, else absolute; it lives in the local project file only.
+
+```
+gazeforge call project.new    --input '{"name": "hero", "store": "STORE", "spec": "FACE.gfchar.json"}'
+gazeforge call project.save   --input '{"name": "hero", "characters": [{"spec": {...}}], "notes": "..."}'
+gazeforge call project.load   --input '{"name": "hero", "evaluate": true}'
+gazeforge call project.list   --input '{}'
+gazeforge call project.export --input '{"name": "hero", "out": "hero.gfproj.zip"}'
+gazeforge call project.load   --input '{"zip": "hero.gfproj.zip", "store": "STORE", "eyes": "EYES.json", "body": "BODY_DIR"}'
+gazeforge call project.discard --input '{"name": "hero"}'
+```
+
+- **Projects folder:** `root` in the input, else `serve --projects DIR`, else `GAZEFORGE_PROJECTS`, else
+  `GazeForge/projects` under the user's data folder (the roaming application data folder on Windows, `~/Library/Application Support` on macOS,
+  `$XDG_DATA_HOME` or `~/.local/share` elsewhere). Names are 1 to 64 letters, digits, spaces, `_`, `-`, `.`, so a project
+  stays inside its folder.
+- **Saving** writes a temporary file and renames it over the project, so a reader never sees a partial file and the
+  last of several concurrent saves wins whole. `recovery: true` writes the autosave slot (`.recovery/<name>.gfproj.json`)
+  instead; a normal save removes it. A save refuses a resource path that does not exist; the autosave keeps it as typed
+  instead, reports it under `unresolved`, and loading that slot shows it again unresolved. With `evaluate: true` every
+  character is evaluated before anything is written.
+- **Loading** finds each resource, in order, from an explicit option (`store`, `macro`, `eyes`, `face_morphs`, `body`,
+  or `resources: {"role": "path"}` for any role), then by its file name in the `search` folders, in
+  `GAZEFORGE_RESOURCES` and in the projects folder, then from its hint; the first candidate whose identity matches wins.
+  An explicit option is the only candidate for its role. Every role that stays unresolved is listed in one refusal
+  (`not_found`, or `conflict` when a candidate exists with another identity); `skip: ["role"]` opens without it (never
+  the store). Then the project is checked: base manifests by hash, the base blob sizes against the saved fingerprint
+  (`verify: "full"` hashes every base blob), character blobs by hash, every character's revision, and the macro
+  definition when a character uses macros. `evaluate: true` reports each character's evaluated dense sha256. Every blob
+  that evaluation (or the designer's blob route) reads is checked against its hash on each read; the quick check only
+  fingerprints sizes, so an unread same-size corruption is found by `verify: "full"` or by the first read.
+- **Portable file:** `project.export` writes one `.gfproj.zip` with the project file, an index and the
+  character-specific blobs (residuals), not the shared base. Its structured fields never carry paths: each resource is
+  its role, identity and file name only, never a folder. Free text (notes, names, panel and viewer values, keys) gets a
+  best-effort scan: the export is refused when any string or key, anywhere inside it, looks like a local path (drive,
+  drive-relative, network, `//host/share`, `file:` URL, any other `scheme://host` URL except `http://` and `https://`,
+  `~/`, an absolute path such as `/mnt/...`, `/Volumes/...` or `\data\...`, also right after punctuation such as `→` or
+  `«`, an environment variable such as `%NAME%` or `$NAME/`), a user or home folder, the projects, temp or working
+  folder, or holds the user name or the host name as a whole word (any case; `_` and digits separate words, so
+  `backup_name_2026` counts). Each string is scanned as written and again normalised: percent-decoding repeated, Unicode
+  NFKC, look-alike slashes, backslashes and colons made ASCII, every kind of space made a plain space, invisible
+  characters removed. The scan reads one string at a time: a path split across two fields (the drive in one,
+  the rest in another) is not seen. The refusal names each JSON pointer and the fragment (from the normalised text
+  when only that matched). The notes are free text: `allow_paths_in_notes: true` exports them as they are; no other
+  field has an opt-out.
+  On another machine, `project.load` with `zip` takes the resources as options or finds them by file name in the
+  `search` folders (never the projects folder, and the hints are not used), imports the project into a projects folder
+  with hints for where they were found, and the blobs into the store; the receiving store must hold the same base.
+  Each resource in the file must be a known role with a kind, a sha256 identity and a bare file name (no separators,
+  `..`, drive, `:` or reserved device name); anything else refuses the file before a path is looked up. The loader
+  always identifies folders by content, whatever the file says. Re-loading a zip into an existing project of the same
+  name compares the whole project and refuses a different one unless `overwrite: true`. A load validates, resolves and
+  (with `evaluate`) evaluates everything first and writes last: a refused load writes nothing.
+- **Import limits:** an entry name that is absolute, holds `..`, a drive letter, `:` or a backslash, appears twice, or is
+  a symbolic link or a folder refuses the whole file. Each entry is decompressed into a temporary folder that is removed
+  afterwards, and its bytes are counted as they stream, never trusting the sizes in the headers: one entry may not pass
+  `max_entry_bytes` (default 256 MiB) and all entries together `max_total_bytes` (default 2 GiB); the project entry is
+  capped at `max_project_bytes` (default 16 MiB) before it is parsed, and parsing bounds nesting (64 levels) and the
+  number of values. The project entry is read and parsed first; before any other entry is decompressed, the file is
+  refused when it holds more entries than the project can reference (the project, its index and one blob per residual
+  its characters name) or any entry the project does not name, so such entries cost no temporary space. A refused file
+  writes nothing into the projects folder or the store. An import whose process was killed leaves its temporary folder behind; the next import
+  removes such folders (named `gf-import-<process>-<n>` and older than an hour) and nothing else.
+
+In the designer: New, Open, Recent, Save and Save As in the toolbar (Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S; some browsers
+keep Ctrl+N for themselves, the button always works), the project name with an unsaved marker, a warning before the page
+is closed with unsaved changes, and a Project tab (characters, notes, portable export). `?project=NAME` opens a project
+(`&root=` for another folder). When a resource has moved, opening the project lists each unresolved role with a path
+field (and "open without it" for the optional ones) and retries with them; the project stays unsaved until it is saved
+with the new locations. Every settle and every 60 s the page autosaves into the recovery slot while there are unsaved
+changes (a path that does not exist is kept as typed and shown in the Project tab); opening the project after a session
+ended without saving offers to restore or discard it. The undo history belongs to the session and is not saved.
+
+### Image to character
+
+A front photo and a profile photo of one face, plus any number of extra views, become a character spec and a glb, as
+registry commands (so the CLI, HTTP and MCP all have them); the long ones are jobs.
+
+**Direct fit (the default, `"fit": "photos"`).** The targets are fitted to the photos themselves; no 3D mesh is generated.
+
+| stage | command | what it does and measures |
+|---|---|---|
+| 0 | `photo.ingest` | the reference-photo gate and the facing check on the front and the profile (below) |
+| 1 | `photo.views` | per photo: 478 landmarks, the subject's outline (plain background) with outward normals, the profile keys of a side view; an extra view (`extras`: three-quarters, the other side, slightly up or down) gets the gate's quality checks (one face, size, sharpness, clipping, eyes open, mouth closed, plain background), never its pose limits |
+| 4 | `fit.photos` | bounded least squares ([0, 1]) over the head targets to every photo at once (in `character.from_photos` a result that fails the shell gates is refused, `gate_failed`, and nothing is exported): landmark reprojection (`landmarks`: every landmark of the base table except the face oval, or the 30 stable ones) and outline distance (each fitted outline point of the model, its rim through the photo's camera, to the nearest photo outline point along that point's normal) through one perspective camera per photo; the cameras start from landmarks (front, extras) or the profile keys and the declared side (profile) and are re-solved every round, the gated front and profile held near straight (`pose_prior_deg`, default 3); stay-at-base on the outline regions not fitted (`prior_weight` 0.1), left/right symmetry, a ridge and an L1 term (`sparsity` 0.0007); per photo the landmark rms in px and per mille of the face height and the outline rms / p95 in mm; the shell gates on the result; `leave_out` names a photo to fit without and then predict |
+| 8a | `export-glb` | the spec (weights; the residual is the fitted dense shape and is near zero) and the glb |
+| 8b | `review.views` | one row per photo: the photo, a clay render at its solved camera, and both at 50 % with both outlines |
+
+`other_profile` adds a profile of the other side. The front and the profile gate strictly; an extra view or the other
+profile that fails its checks (no face, quality, no profile keys, no outline) is dropped, named in the report's `dropped`
+and `warnings`, and the job goes on with the rest.
+
+`fit_options` passes `fit.photos` options through `character.from_photos`. The outline of the hair-covered skull and of the
+neck (clothing) is not fitted by default (`outline_regions`); the focal length is assumed (70 mm full-frame equivalent)
+unless `focal_px` is given; scale and placement are not observable from photos. No texture is projected on this path yet.
+
+**Dense shell (optional, `"dense_shell": true`).** The front and profile also go to an image-to-mesh server (`server` +
+`graph`, or `glb` to reuse a mesh, as on the mesh path); the mesh's outer shell (`mesh.multiview`; an untextured mesh is
+rendered as shaded clay for its landmarks) becomes an extra term of `fit.photos` (`shell`: the directory holding
+`shell_points.npy`, `shell_normals.npy`, `shell_landmarks.json`). The shell is placed by its landmarks, re-registered
+(similarity, trimmed ICP plus landmarks) every round, and pulls every vertex of `shell_regions` (default all but eyes and
+neck) that a photo sees (`shell_coverage`: `seen`, or `all` for a complete surface) and that has the shell within
+`shell_radius_mm` (default 8), its normal within 60 degrees of the vertex's, along the shell's normal, however far it
+is from the shell (`shell_trim` false: the old 3x-median trim dropped exactly the vertices that differ most), with a dead band (`shell_tolerance_mm`: a vertex closer than that is not pulled, one further away is
+pulled to the band's edge; default the shell's own `tolerance_mm` in `shell_landmarks.json`, which `mesh.multiview` sets
+to 2 for a generated surface, else 0) and `shell_weight` (default 3); the stay-at-base prior leaves `shell_regions` to
+the shell. Any surface in the base's frame up to a similarity can be a shell (a scan, a photogrammetry cloud with
+normals). The generator is whatever the graph
+runs; a generator whose licence restricts territories or users can only be used as a bring-your-own graph, never as a
+default. Limits: a generated surface is a few millimetres off the true one, so the term helps a face far from the base
+and hurts one close to it; the shell's landmarks come from MediaPipe on a clay render of the mesh and can fail on a
+noisy surface (the run then stops with `worker_failed`); results that fail the shell gates are refused as before.
+
+**Mesh path (`"fit": "mesh"`).** A generated multi-view mesh is the fit target:
+
+| stage | command | what it does and measures |
+|---|---|---|
+| 0 | `photo.ingest` | copies the photos into the run directory; facing check: the front looks at the camera (nose offset within 0.08 of the eye span), the profile shows the declared side (the nose bump of the silhouette). A failure is `gate_failed` and stops the run. The proportion measure (upper lip over lower face, front vs profile) is reported in `consistency` and refuses only when `max_ratio_gap` is given: renders of one face differ by 0.16-0.28 on it, as much as two different faces do. |
+| 1 | `photo.landmarks` | 478 MediaPipe landmarks on the front photo (re-run agreement in px), the profile silhouette, its profile line and key points (nasion, nose tip, subnasale, lips, chin); an overlay image for each photo, to be looked at before any number is trusted |
+| 2 | `mesh.multiview` | sends both photos to an external image-to-mesh server, then keeps the outer shell and lifts the landmarks onto it from a front render. `shell_mode`: `outer_triangles` (default: triangles front-most from 26 directions at a fine depth tolerance, normals oriented toward the directions that see them) or `visible_vertices` (vertices visible from those directions, normals as the file gives them) |
+| 3 | `fit.register` | similarity transform of the shell onto the dense base from 30 stable landmarks, refined by trimmed ICP on the face; landmark residual in mm. `base_landmarks`: the base's landmark table (`{"vertices": {landmark index: dense vertex}}`), else the landmarks are detected on a render of the base |
+| 4 | `fit.targets` | bounded least squares ([0, 1]) over the head targets, with terms for distance to the shell (face and neck), front-photo landmark reprojection through a perspective camera (`camera`: `perspective`, the default, or `orthographic`; `focal_px` fixes the focal length, else it is solved), the profile silhouette (`profile_weight`, default 0; `profile_upright`, `profile_align`), a stay-at-base prior where the photos see nothing (hair-covered skull, back), left/right symmetry and a ridge; the shell is rigidly re-aligned each round; per-region residual in mm |
+| 5 | `fit.residual` | a residual toward the shell (trust radius, graph smoothing, holds at the eyes, the lip seam, existing folds and back-facing surfaces), backed off until the shell gates pass; otherwise refused, and nothing is written |
+| 7 | `texture.project` | projects the photos onto the game UVs through the fitted cameras, blended by facing and visibility; camera rms in px |
+| 8 | `review.sheet` | the photos beside textured and clay renders of the result at the fitted cameras |
+| 0-8 | `character.from_photos` | runs everything (with `export-glb` for the spec and glb) and logs per-stage times in `<run>/stages.json` |
+
+```
+gazeforge call jobs.submit --input '{"command": "character.from_photos", "input": {"run": "RUN", "front": "FRONT.png",
+  "profile": "PROFILE.png", "profile_side": "right", "store": "STORE", "pack": "PACK", "catalog": "CATALOG", "game": "GAME",
+  "name": "NAME", "eyes": "EYES.json", "sheet": "SHEET.png"}}'
+```
+
+External tools, found through options or environment variables:
+- `python` / `GAZEFORGE_PYTHON`: a Python with numpy, opencv-python and mediapipe; `workers` / `GAZEFORGE_WORKERS`: the
+  `workers/` folder of this repository; `landmarker` / `GAZEFORGE_FACE_LANDMARKER`: MediaPipe's `face_landmarker.task`.
+- `server` / `GAZEFORGE_MESH_SERVER`: an image-to-mesh server with a ComfyUI-compatible HTTP API, and `graph` /
+  `GAZEFORGE_MESH_GRAPH`: its API-format graph template taking a front and a profile image (placeholders are listed in
+  `workers/mesh_worker.py`). `glb` reuses an existing mesh instead. Check the licences of the models the server runs.
+
+Limits: from 30 front landmarks the focal length is barely observable (the reprojection error changes by a fraction of a
+pixel across a tenfold range of focal lengths), so pass `focal_px` when it is known; the profile silhouette term is off by
+default because its alignment drifts with the fit; the photos carry no absolute size, so scale comes from the base's landmark spans; the
+mesh's hair is not separated from the skull, which is why the skull is held to the base; the texture is not delit unless
+albedo images are passed to `texture.project` (`front_albedo`, `profile_albedo`); eyes, teeth and hair are not built.
+
+#### Reference photos
+
+The fit assumes two photos taken like a passport pair: a straight front view and a true side view, with the head neither
+turned (yaw), nodded (pitch) nor tilted toward a shoulder (roll). A photo that breaks this is rejected before any work
+starts, because a turned or tilted head is read as a different face shape. What makes a photo acceptable:
+
+- one person, face filling a good part of the frame, in focus, evenly lit (no blown highlights or crushed shadows);
+- a neutral expression: eyes open, mouth closed;
+- a plain background that the head stands out from;
+- the front photo looks straight into the lens; the profile shows the declared side at 90 degrees, the camera at head height.
+
+`photo.check` (a query, so the CLI, HTTP and MCP all have it) measures this and returns a report per photo: every check
+with its measured value, its limit and, on failure, a plain reason. `photo.ingest` and `character.from_photos` run the same
+checks first and stop with `gate_failed`, naming every failed check; `thresholds` overrides a limit by name and `allow`
+records a named failure as allowed instead of stopping.
+
+The report's `calibration` block holds the measured error of every estimator and the limit chosen from it; where an axis
+cannot reach the 3 degree target (front pitch, profile yaw, profile roll), it says so there. The mouth check measures the gap
+between the inner lips against the face height. Two estimators are built but switched off in `workers/photo_gate_model.json`
+because they measured worse on the calibration renders: `fit_head` (fit this person's head to the front landmarks and the
+profile's keys, then measure the front pose against it) and `profile_out_of_plane` (read the profile's turn and tilt from
+that head's silhouette over a grid of yaw and roll).
+
+```
+gazeforge call photo.check --input '{"front": "FRONT.png", "profile": "PROFILE.png", "profile_side": "right"}'
+```
+
+| check | how it is measured | default limit |
+|---|---|---|
+| front yaw | MediaPipe's facial transformation matrix, referred to the base mesh rendered straight on | 3 deg |
+| front roll | PnP of 30 stable landmarks against the base mesh's own landmark positions (a 70 mm full-frame-equivalent lens is assumed) | 3 deg |
+| front pitch | the mean of the transformation matrix's pitch and that PnP's pitch | 5.5 deg |
+| profile pitch | trimmed ICP similarity fit of the silhouette's front edge (forehead to chin) to the base's straight profile; a poor fit counts as unmeasured and fails | 3 deg |
+| profile yaw | the landmarker finds no face in a true side view; a face it does find means the view is turned toward the camera, and its reading is mapped to degrees | 15 deg |
+| one face | face count from the landmarker (front); no face outside the subject's head (profile) | exactly one |
+| face size | forehead to chin (front), nasion to chin (profile), in pixels | 300 px, 170 px |
+| sharpness | Laplacian variance on the face region scaled to 256 px height | 81.9 front, 31.3 profile |
+| exposure | share of face pixels at or above 250 (highlights) and at or below 5 (shadows) | 2 % each |
+| expression (front) | MediaPipe blendshapes: the larger eye-blink score; the jaw-open score | 0.162; 0.4 |
+| background | 95th percentile colour distance (Lab) of the background from its median; face-to-background contrast | 20; 26.6 front, 22.7 profile |
+| profile side | the nose bump of the silhouette is on the declared side (the facing check) | must match |
+
+The limits come from renders of the base and four training faces at known rotations (0, 2, 4, 8 and 15 degrees on each
+axis and in combinations, front and right profile, eyes in place); `workers/photo_gate_model.json` holds the calibration.
+A pose limit is never tighter than its estimator's 95th-percentile error there plus 1 degree, with 3 degrees as the target.
+What the method cannot do, measured on those renders:
+
+- front pitch: face shape alone moves single-photo pitch estimates by up to about 5 degrees (95th-percentile error 4.2), so
+  its limit is 5.5 degrees and a nod of 8 degrees can pass on some faces;
+- profile yaw: a view turned away from the camera, or turned toward it by less than about 10 to 15 degrees, is not
+  detected; the profile's silhouette barely changes with yaw;
+- profile roll (a tilt toward the shoulder, seen from the side) is not observable and is not gated; the front photo's roll is;
+- expression is measured on the front photo only; the jaw-open score also rises on a long chin with the mouth closed;
+- the facing check (unchanged) can reject a straight profile of a narrow face.
 
 ### Data layout
 
@@ -57,7 +731,7 @@ The dense base and the targets are not in this repository. `tools/blender/export
 `tools/blender/export_targets.py` produce them in Blender from MakeHuman's assets; a documented, self-contained data
 recipe is on the roadmap.
 
-### Macros
+### Macros (Python reference)
 
 `tools/macros/macro_weights.py` turns MakeHuman macro slider values (gender, age, muscle, weight, proportions, height,
 ...) into weights over MakeHuman's macro targets:
@@ -72,19 +746,21 @@ python macro_weights.py MACRO_JSON TARGETS_ROOT SLIDERS_JSON [--mode mpfb|gf]
 
 Each milestone ends on a measured gate, not a declaration.
 
-| | What | Gate |
-|---|---|---|
-| M0 | Pilot: the Rust core reads the dense base and targets and builds the shared ~20k-vertex game base; a sculpt maps onto it by index | per-region error against the dense sculpt within budget; no sliver triangles outside the eye and nostril areas; no UV flips; a painted look-development render passes review |
-| M1 | Core: the character spec (JSON: target weights + residual), apply and transfer, shape-quality gates (folds, inner surfaces, move roughness), glTF export with blend shapes | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect |
-| M2 | Interfaces: CLI, local HTTP API and an MCP server, all over one core | an AI agent completes "make a character with a wide nose" through each of the three |
-| M3 | Browser designer: sliders and a live 3D view, the core compiled to WASM, heavy jobs on the server | slider response under 16 ms on the 20k base |
-| M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute |
-| M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game |
+| | What | Gate | State in 0.1.0 |
+|---|---|---|---|
+| M0 | Pilot: the Rust core reads the dense base and targets and builds the shared ~20k-vertex game base; a sculpt maps onto it by index | per-region error against the dense sculpt within budget; no sliver triangles outside the eye and nostril areas; no UV flips; a painted look-development render passes review | open: slivers, canthus folds and the clay difference on held-out faces; review pending |
+| M1 | Core: the character spec (JSON: target weights, head-only macros, residual), evaluation and placement onto the game base, shape and game-mesh gates (folds, inner surfaces, move roughness, triangle quality, UV flips, orientation, seams, path continuity), glTF export with blend shapes and the nested LOD chain | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect | met; the shell gate's fold rule is under review |
+| M2 | Interfaces: CLI, local HTTP API and an MCP server, all over one core | an AI agent completes "make a character with a wide nose" through each of the three | met through all three front doors |
+| M3 | Browser designer: sliders and a live 3D view, a WASM preview kernel over the pure maths crate, heavy jobs on the server | slider response under 16 ms on the 20k base | met (frame p95 under 10 ms); server settle under 300 ms with `f5` on an idle machine |
+| M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
+| M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
+| 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | planned |
 
 ## Development
 
 The repository follows gitflow: `main` holds releases, each tagged `vX.Y.Z`; work happens on `develop`, through
 `feature/*` and `bugfix/*` branches; releases go through `release/*` and urgent fixes to a release through `hotfix/*`.
+Releases and the gates each one leaves open: [CHANGELOG.md](CHANGELOG.md).
 
 ## Licensing and provenance
 
