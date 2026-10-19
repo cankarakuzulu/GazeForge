@@ -85,6 +85,11 @@ pub struct Sampled {
 }
 
 const SAMPLED_STATES: usize = 4;
+const SLOPE_STATES: usize = 8;
+
+pub fn macro_key(macros: &BTreeMap<String, f64>) -> String {
+    format!("{macros:?}")
+}
 
 fn segment(values: &[f64], x: f64) -> (usize, f64) {
     let last = values.len() - 1;
@@ -122,7 +127,9 @@ pub struct Preview {
     pub anchor: Vec<f32>,
     pub anchor_w: Vec<f64>,
     pub anchor_macros: BTreeMap<String, f64>,
-    pub slopes: HashMap<String, Slope>,
+    slopes: HashMap<(String, String), (u64, Slope)>,
+    slope_seq: u64,
+    pub slope_key: String,
     pub samples: HashMap<String, Vec<Sampled>>,
     pub state_keys: HashMap<String, String>,
     pool: Option<rayon::ThreadPool>,
@@ -135,6 +142,7 @@ pub struct Computed {
     pub missing_slopes: Vec<String>,
     pub sampled: Vec<String>,
     pub slope_fallback: Vec<String>,
+    pub stale_slope: Vec<String>,
 }
 
 impl Preview {
@@ -152,6 +160,8 @@ impl Preview {
             delta: d.delta,
             anchor_macros: BTreeMap::new(),
             slopes: HashMap::new(),
+            slope_seq: 0,
+            slope_key: macro_key(&BTreeMap::new()),
             samples: HashMap::new(),
             state_keys: HashMap::new(),
             pool,
@@ -167,8 +177,32 @@ impl Preview {
         self.anchor.copy_from_slice(positions);
         self.anchor_w = self.ids.iter().map(|id| weights.get(id).copied().unwrap_or(0.0)).collect();
         self.anchor_macros = macros.clone();
-        self.slopes.clear();
+        self.slope_key = macro_key(macros);
         self.state_keys.clear();
+    }
+
+    pub fn has_slope(&self, name: &str, key: &str) -> bool {
+        self.slopes.contains_key(&(name.to_string(), key.to_string()))
+    }
+
+    pub fn slope_for(&self, name: &str) -> Option<(&Slope, bool)> {
+        if let Some((_, s)) = self.slopes.get(&(name.to_string(), self.slope_key.clone())) {
+            return Some((s, true));
+        }
+        self.slopes.iter().filter(|((n, _), _)| n == name).max_by_key(|(_, (seq, _))| *seq).map(|(_, (_, s))| (s, false))
+    }
+
+    pub fn insert_slope(&mut self, name: &str, key: &str, s: Slope) {
+        if s.up.len() != self.anchor.len() || s.down.len() != self.anchor.len() {
+            return;
+        }
+        self.slope_seq += 1;
+        self.slopes.insert((name.to_string(), key.to_string()), (self.slope_seq, s));
+        while self.slopes.len() > SLOPE_STATES {
+            let current = &self.slope_key;
+            let Some(old) = self.slopes.iter().filter(|((_, k), _)| k != current).min_by_key(|(_, (seq, _))| *seq).map(|(id, _)| id.clone()) else { break };
+            self.slopes.remove(&old);
+        }
     }
 
     pub fn sampled_for(&self, name: &str) -> Option<&Sampled> {
@@ -196,7 +230,7 @@ impl Preview {
                 (dw != 0.0).then_some((t, dw))
             })
             .collect();
-        let (mut missing, mut sampled, mut fallback) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut missing, mut sampled, mut fallback, mut stale) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut layers: Vec<(f32, &[f32])> = Vec::new();
         for (name, &v) in macros {
             let v0 = self.anchor_macros.get(name).copied().unwrap_or(v);
@@ -209,10 +243,13 @@ impl Preview {
                 sampled.push(name.clone());
                 continue;
             }
-            match self.slopes.get(name) {
-                Some(s) => {
+            match self.slope_for(name) {
+                Some((s, exact)) => {
                     layers.push((dm, if dm > 0.0 { &s.up } else { &s.down }));
                     fallback.push(name.clone());
+                    if !exact {
+                        stale.push(name.clone());
+                    }
                 }
                 None => missing.push(name.clone()),
             }
@@ -245,7 +282,7 @@ impl Preview {
             Some(p) => p.install(|| out.par_chunks_mut(CHUNK * 3).enumerate().for_each(work)),
             None => out.chunks_mut(CHUNK * 3).enumerate().for_each(work),
         }
-        Computed { targets: active.len(), macros: sampled.len() + fallback.len(), missing_slopes: missing, sampled, slope_fallback: fallback }
+        Computed { targets: active.len(), macros: sampled.len() + fallback.len(), missing_slopes: missing, sampled, slope_fallback: fallback, stale_slope: stale }
     }
 
     pub fn normals(&self, normals: &mut Normals, pos: &[f32], idx: &[u32], out: &mut [f32]) {
@@ -291,7 +328,8 @@ mod tests {
         assert_eq!(out[0], 0.5);
         let mut slope = vec![0.0f32; 9000];
         slope[0] = 2.0;
-        p.slopes.insert("age".into(), Slope { up: slope.clone(), down: slope });
+        let key = p.slope_key.clone();
+        p.insert_slope("age", &key, Slope { up: slope.clone(), down: slope });
         let c = p.compute(&p.anchor_w.iter().zip(&p.ids).map(|(w, id)| (id.clone(), *w)).collect(), &BTreeMap::from([("age".to_string(), 0.75)]), &mut out);
         assert_eq!((c.targets, c.macros), (0, 1));
         assert_eq!(out[0], 1.0);
@@ -309,7 +347,8 @@ mod tests {
         let mut p = Preview::new(d, 1).unwrap();
         let macros = |age: f64| BTreeMap::from([("age".to_string(), age), ("gender".to_string(), 0.3)]);
         p.set_anchor(&[0.0, 0.0, kinked(0.45) as f32], &BTreeMap::new(), &macros(0.45));
-        p.slopes.insert("age".into(), Slope { up: vec![0.0, 0.0, 0.01], down: vec![0.0, 0.0, 0.01] });
+        let key = p.slope_key.clone();
+        p.insert_slope("age", &key, Slope { up: vec![0.0, 0.0, 0.01], down: vec![0.0, 0.0, 0.01] });
         let mut out = vec![0.0f32; 3];
         let c = p.compute(&BTreeMap::new(), &macros(0.85), &mut out);
         assert_eq!((c.slope_fallback.len(), c.sampled.len()), (1, 0));
@@ -329,10 +368,40 @@ mod tests {
         p.set_anchor(&[0.0, 0.0, kinked(0.7) as f32], &BTreeMap::new(), &macros(0.7));
         assert!(p.sampled_for("age").is_none());
         p.state_keys.insert("age".into(), "gender 0.3".into());
-        assert!(p.sampled_for("age").is_some() && p.slopes.is_empty());
+        let key = p.slope_key.clone();
+        assert!(p.sampled_for("age").is_some() && !p.has_slope("age", &key));
         p.compute(&BTreeMap::new(), &macros(0.3), &mut out);
         assert!((out[2] as f64 - kinked(0.3)).abs() < 1e-7);
         p.state_keys.insert("age".into(), "gender 0.9".into());
         assert!(p.sampled_for("age").is_none());
+    }
+
+    #[test]
+    fn a_slope_applies_only_at_its_macro_state_and_survives_a_target_only_anchor_move() {
+        let d = TargetDeltas { vertices: 1, ids: vec![], offsets: vec![0], index: vec![], delta: vec![] };
+        let mut p = Preview::new(d, 1).unwrap();
+        let macros = |age: f64| BTreeMap::from([("age".to_string(), age), ("gender".to_string(), 0.3)]);
+        p.set_anchor(&[0.0; 3], &BTreeMap::new(), &macros(0.5));
+        let mut out = vec![0.0f32; 3];
+        assert_eq!(p.compute(&BTreeMap::new(), &macros(0.6), &mut out).missing_slopes, vec!["age".to_string()]);
+        p.insert_slope("age", &macro_key(&macros(0.7)), Slope { up: vec![0.0, 0.0, 1.0], down: vec![0.0, 0.0, 1.0] });
+        assert!(p.slope_for("age").is_some_and(|(_, exact)| !exact));
+        let c = p.compute(&BTreeMap::new(), &macros(0.6), &mut out);
+        assert_eq!((c.missing_slopes.len(), c.stale_slope.clone()), (0, vec!["age".to_string()]));
+        assert!((out[2] - 0.1).abs() < 1e-6);
+        p.set_anchor(&[0.0; 3], &BTreeMap::from([("t".to_string(), 0.4)]), &macros(0.7));
+        assert!(p.slope_for("age").is_some_and(|(_, exact)| exact));
+        p.set_anchor(&[0.0; 3], &BTreeMap::from([("t".to_string(), 0.9)]), &macros(0.7));
+        let c = p.compute(&BTreeMap::new(), &macros(0.8), &mut out);
+        assert_eq!((c.slope_fallback.clone(), c.stale_slope.len()), (vec!["age".to_string()], 0));
+        assert!((out[2] - 0.1).abs() < 1e-6);
+        p.set_anchor(&[0.0; 3], &BTreeMap::new(), &BTreeMap::from([("age".to_string(), 0.7), ("gender".to_string(), 0.4)]));
+        assert!(p.slope_for("age").is_some_and(|(_, exact)| !exact));
+        for k in 0..12 {
+            p.insert_slope("gender", &format!("k{k}"), Slope { up: vec![0.0; 3], down: vec![0.0; 3] });
+        }
+        assert!(p.has_slope("gender", "k11") && !p.has_slope("gender", "k0"));
+        p.insert_slope("age", "short", Slope { up: vec![0.0], down: vec![0.0] });
+        assert!(!p.has_slope("age", "short"));
     }
 }

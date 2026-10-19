@@ -9,6 +9,7 @@ use crate::godot;
 use crate::render::{Gpu, Renderer, Source, TestPattern};
 use crate::shape::{Edit, ShapeEvent};
 use crate::viewer::{self, Layout, mode_index};
+use crate::worker::stamp;
 use crate::world::World;
 
 pub struct Offscreen {
@@ -93,6 +94,7 @@ impl Offscreen {
         };
         let (mut latency, mut complete, mut compute, mut missing, mut fallback, mut sampled) = (Vec::new(), Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
         let first = self.world.hud.preview_latency.total;
+        let (anchor_at, mut shown, mut stale) = (self.world.anchor_at, None, 0usize);
         for i in 1..=frames {
             let v = from + (to - from) * i as f64 / frames as f64;
             self.world.shape_event(ShapeEvent::Preview(vec![edit(v)]));
@@ -108,10 +110,16 @@ impl Offscreen {
             let has = |k: &str| self.world.last_preview[k].as_array().is_some_and(|a| !a.is_empty());
             fallback += has("slope_fallback") as usize;
             sampled += has("sampled") as usize;
+            stale += has("stale_slope") as usize;
+            if mac.is_some() && shown.is_none() && (has("slope_fallback") || has("sampled")) {
+                shown = Some(Instant::now());
+            }
         }
         let mut out = json!({"key": key, "from": from, "to": to, "frames": frames, "slope_wait_ms": slope_wait_ms, "samples_wait_ms": samples_wait_ms, "frames_without_macro_preview": missing,
                              "frames_slope_fallback": fallback, "frames_sampled": sampled, "busy_text": self.world.busy_text(),
-                             "input_to_preview_ms": stats(latency), "frame_complete_ms": stats(complete), "preview_compute_ms": stats(compute), "last_preview": self.world.last_preview});
+                             "input_to_preview_ms": stats(latency), "frame_complete_ms": stats(complete), "preview_compute_ms": stats(compute), "last_preview": self.world.last_preview,
+                             "frames_stale_slope": stale, "begin_t": stamp(t0), "drag_end_t": stamp(Instant::now()), "anchor_t": anchor_at.map(stamp), "first_macro_preview_t": shown.map(stamp),
+                             "begin_to_first_macro_preview_ms": shown.map(|s| (s - t0).as_secs_f64() * 1000.0)});
         if step.get("release").and_then(Value::as_bool).unwrap_or(true) {
             let previewed = self.world.session.as_ref().map(|s| s.head.positions.clone()).unwrap_or_default();
             let t = Instant::now();
@@ -565,7 +573,7 @@ impl Offscreen {
                 std::fs::write(&inp, serde_json::to_string(&input).unwrap_or_default()).map_err(|e| format!("{}: {e}", inp.display()))?;
                 json!({"positions": pos.display().to_string(), "input": inp.display().to_string(), "settled_revision": s.settled.as_ref().map(|x| x.revision.clone()), "idle": w.idle()})
             }
-            "hud" => json!({"hud": w.hud.json(), "settle": w.settle_stats(), "last_settle": w.last_settle, "last_preview": w.last_preview, "samples": w.samples_info}),
+            "hud" => json!({"hud": w.hud.json(), "settle": w.settle_stats(), "last_settle": w.last_settle, "last_preview": w.last_preview, "samples": w.samples_info, "trace": w.trace}),
             "source" => {
                 let kind = text("kind").unwrap_or("native");
                 for s in slots_of(step, w) {

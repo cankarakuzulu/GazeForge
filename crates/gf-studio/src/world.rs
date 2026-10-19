@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::hud::Hud;
-use crate::preview::{Normals, Preview, Sampled, Slope};
+use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
 use crate::session::{EdgePairs, Session};
 use crate::shape::{ShapeEvent, ShapeModel, Values};
 use crate::viewer::{self, Bounds, DISPLACEMENT, MODES, ViewerState};
-use crate::worker::{Done, Job, Jobs, SettleRequest};
+use crate::worker::{Done, Job, Jobs, SettleRequest, stamp};
 
 pub struct World {
     pub state: ViewerState,
@@ -32,8 +32,9 @@ pub struct World {
     preview_dirty: bool,
     edit_at: Option<Instant>,
     latency_mark: Option<Instant>,
-    slope_wanted: BTreeSet<String>,
-    samples_wanted: BTreeSet<String>,
+    slope_wanted: BTreeSet<(String, String)>,
+    samples_wanted: Option<(u64, String, String)>,
+    samples_seq: u64,
     anchor_values: Option<Values>,
     pub samples_info: BTreeMap<String, Value>,
     reference_wanted: bool,
@@ -43,6 +44,9 @@ pub struct World {
     pub preview_threads: usize,
     pub last_preview: Value,
     pub prefetch: Vec<String>,
+    pub anchor_at: Option<Instant>,
+    pub anchor_release: Option<Instant>,
+    pub trace: Vec<Value>,
 }
 
 impl Default for World {
@@ -70,7 +74,8 @@ impl Default for World {
             edit_at: None,
             latency_mark: None,
             slope_wanted: BTreeSet::new(),
-            samples_wanted: BTreeSet::new(),
+            samples_wanted: None,
+            samples_seq: 0,
             anchor_values: None,
             samples_info: BTreeMap::new(),
             reference_wanted: false,
@@ -80,6 +85,9 @@ impl Default for World {
             preview_threads: std::env::var("GAZEFORGE_PREVIEW_THREADS").ok().and_then(|t| t.parse::<usize>().ok()).unwrap_or(1).clamp(1, cores),
             last_preview: Value::Null,
             prefetch: vec!["age".into(), "gender".into()],
+            anchor_at: None,
+            anchor_release: None,
+            trace: Vec::new(),
         }
     }
 }
@@ -91,6 +99,19 @@ fn ms(d: Duration) -> f64 {
 impl World {
     pub fn set_wake(&self, f: Box<dyn Fn() + Send>) {
         self.jobs.set_wake(f);
+    }
+
+    fn mark(&mut self, v: Value) {
+        self.trace.push(v);
+        if self.trace.len() > 400 {
+            self.trace.remove(0);
+        }
+    }
+
+    fn mark_ready(&mut self, kind: &str, name: &str, now: Instant) {
+        let since = |t: Option<Instant>| t.map(|t| ms(now - t));
+        let v = json!({"kind": kind, "name": name, "t": stamp(now), "since_anchor_ms": since(self.anchor_at), "since_release_ms": since(self.anchor_release)});
+        self.mark(v);
     }
 
     fn note(&mut self, text: String) {
@@ -188,9 +209,13 @@ impl World {
                         self.epoch += 1;
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
-                        self.samples_wanted.clear();
+                        if let Some((id, _, _)) = self.samples_wanted.take() {
+                            self.jobs.drop_samples(id);
+                        }
                         self.anchor_values = self.shape.as_ref().map(|sh| sh.start.clone());
                         self.refresh_state_keys();
+                        self.anchor_at = Some(now);
+                        self.anchor_release = None;
                         self.reference_wanted = false;
                         self.hud.settle_latency.clear();
                         self.note(format!("loaded in {load_ms:.0} ms"));
@@ -231,6 +256,9 @@ impl World {
                 p.set_anchor(&out.positions, &sent.weights, &sent.macros);
                 self.anchor_values = Some(sent.clone());
                 self.refresh_state_keys();
+                self.anchor_at = Some(now);
+                self.anchor_release = if current { self.settle_release } else { None };
+                self.mark(json!({"kind": "anchor", "t": stamp(now), "current": current}));
                 let apply_ms = ms(now.elapsed());
                 self.uvs_dirty |= out.uvs.is_some();
                 self.preview_dirty = true;
@@ -250,31 +278,35 @@ impl World {
                     self.settles_stale += 1;
                 }
             }
-            Done::Slope { epoch, name, at, result, ms: slope_ms } => {
-                self.slope_wanted.remove(&name);
+            Done::Slope { epoch, name, key, result, ms: slope_ms } => {
                 if epoch != self.epoch {
                     return;
                 }
+                self.slope_wanted.remove(&(name.clone(), key.clone()));
                 match result {
                     Ok(m) => {
                         self.hud.slope.push(slope_ms);
-                        if let Some(p) = self.preview.as_mut()
-                            && p.anchor_macros.get(&name) == Some(&at)
-                        {
-                            p.slopes.insert(name, Slope { up: m.up, down: m.down.iter().map(|x| -x).collect() });
+                        if let Some(p) = self.preview.as_mut() {
+                            p.insert_slope(&name, &key, Slope { up: m.up, down: m.down.iter().map(|x| -x).collect() });
                             self.preview_dirty = true;
+                            if p.slope_key == key {
+                                self.mark_ready("slope_ready", &name, now);
+                            }
                         }
                     }
                     Err(e) => self.note(format!("macro preview for {name} failed: {e}")),
                 }
             }
-            Done::Samples { epoch, name, key, result, ms: samples_ms } => {
-                self.samples_wanted.remove(&name);
+            Done::Samples { epoch, id, name, key, result, ms: samples_ms } => {
+                if self.samples_wanted.as_ref().is_some_and(|w| w.0 == id) {
+                    self.samples_wanted = None;
+                }
                 if epoch != self.epoch {
                     return;
                 }
                 match result {
-                    Ok(m) => {
+                    Ok(None) => self.prefetch_samples(),
+                    Ok(Some(m)) => {
                         self.hud.samples.push(samples_ms);
                         if let Some(p) = self.preview.as_mut() {
                             let n = m.values.len();
@@ -282,6 +314,7 @@ impl World {
                             self.samples_info.insert(name.clone(), json!({"values": n, "ms": samples_ms}));
                             self.preview_dirty = true;
                         }
+                        self.mark_ready("samples_ready", &name, now);
                         self.prefetch_samples();
                     }
                     Err(e) => self.note(format!("macro samples for {name} failed: {e}")),
@@ -301,6 +334,9 @@ impl World {
                     Err(e) => self.note(format!("reference failed: {e}")),
                 }
             }
+            Done::Trace(t) => {
+                self.mark(json!({"kind": t.kind, "name": t.name, "sent": t.sent, "start": t.start, "run": t.run, "end": t.end}));
+            }
             Done::Saved { result } => {
                 match &result {
                     Ok(v) => self.note(format!("saved {}", v["out"].as_str().unwrap_or(""))),
@@ -312,30 +348,37 @@ impl World {
     }
 
     fn want_slope(&mut self, name: &str) {
-        self.slope_job(name, false);
+        let Some(macros) = self.preview.as_ref().map(|p| p.anchor_macros.clone()) else { return };
+        self.slope_job(name, &macros, true);
     }
 
-    fn slope_job(&mut self, name: &str, prefetch: bool) {
+    fn slope_job(&mut self, name: &str, macros: &BTreeMap<String, f64>, urgent: bool) {
         let (Some(s), Some(p), Some(shape)) = (&self.session, &self.preview, &self.shape) else { return };
-        if !shape.macros_available || p.slopes.contains_key(name) || self.slope_wanted.contains(name) || p.sampled_for(name).is_some() {
+        let key = macro_key(macros);
+        let id = (name.to_string(), key.clone());
+        if !shape.macros_available || !macros.contains_key(name) || p.has_slope(name, &key) || self.slope_wanted.contains(&id) || (key == p.slope_key && p.sampled_for(name).is_some()) {
             return;
         }
-        let Some(&at) = p.anchor_macros.get(name) else { return };
         let base = shape.character(&s.start, &shape.live);
         let mut input = s.settle_input(&base, false);
-        input["macros"] = json!({"sliders": p.anchor_macros, "mode": shape.macro_mode, "head_scale": shape.head_scale});
+        input["macros"] = json!({"sliders": macros, "mode": shape.macro_mode, "head_scale": shape.head_scale});
         input["slider"] = json!(name);
         if let Some(m) = &s.macro_file {
             input["macro"] = json!(m);
         }
         input.as_object_mut().map(|o| o.remove("uvs"));
-        self.slope_wanted.insert(name.to_string());
-        self.jobs.send(self.epoch, Job::Slope { name: name.to_string(), at, input, prefetch });
+        self.slope_wanted.insert(id);
+        self.jobs.send(self.epoch, Job::Slope { name: name.to_string(), key, input, urgent });
     }
 
     fn prefetch_slopes(&mut self) {
+        let Some(macros) = self.preview.as_ref().map(|p| p.anchor_macros.clone()) else { return };
+        self.prefetch_slopes_at(&macros);
+    }
+
+    fn prefetch_slopes_at(&mut self, macros: &BTreeMap<String, f64>) {
         for name in self.prefetch.clone() {
-            self.slope_job(&name, true);
+            self.slope_job(&name, macros, false);
         }
     }
 
@@ -361,17 +404,23 @@ impl World {
         let keys: Vec<(String, String)> = names.into_iter().filter_map(|n| self.sample_input(&n).map(|(_, k)| (n, k))).collect();
         if let Some(p) = self.preview.as_mut() {
             p.state_keys = keys.into_iter().collect();
+            if let Some((id, name, key)) = &self.samples_wanted
+                && p.state_keys.get(name) != Some(key)
+            {
+                self.jobs.drop_samples(*id);
+            }
         }
     }
 
     fn samples_job(&mut self, name: &str) {
         let Some(p) = &self.preview else { return };
-        if p.sampled_for(name).is_some() || !self.samples_wanted.is_empty() {
+        if p.sampled_for(name).is_some() || self.samples_wanted.is_some() {
             return;
         }
         let Some((input, key)) = self.sample_input(name) else { return };
-        self.samples_wanted.insert(name.to_string());
-        self.jobs.send(self.epoch, Job::Samples { name: name.to_string(), key, input });
+        self.samples_seq += 1;
+        self.samples_wanted = Some((self.samples_seq, name.to_string(), key.clone()));
+        self.jobs.send(self.epoch, Job::Samples { id: self.samples_seq, name: name.to_string(), key, input });
     }
 
     fn prefetch_samples(&mut self) {
@@ -428,10 +477,12 @@ impl World {
         let input = s.settle_input(&c, true);
         s.character = c;
         let now = Instant::now();
+        let macros = shape.live.macros.clone();
         self.jobs.settle(SettleRequest { epoch: self.epoch, generation: shape.generation, sent: shape.live.clone(), input, at: now, edges: self.lod0.clone() });
         self.settle_wanted = Some(shape.generation);
         self.settle_release = Some(now);
         self.settle_error = None;
+        self.prefetch_slopes_at(&macros);
     }
 
     pub fn settle_input(&self) -> Option<Value> {
@@ -456,10 +507,10 @@ impl World {
         h.revision += 1;
         let total = ms(t.elapsed());
         self.hud.preview_compute.push(total);
-        self.last_preview = json!({"targets": c.targets, "macros": c.macros, "missing_slopes": c.missing_slopes, "sampled": c.sampled, "slope_fallback": c.slope_fallback,
+        self.last_preview = json!({"targets": c.targets, "macros": c.macros, "missing_slopes": c.missing_slopes, "sampled": c.sampled, "slope_fallback": c.slope_fallback, "stale_slope": c.stale_slope,
                                    "positions_ms": ms(t_n - t), "normals_ms": ms(t_n.elapsed()), "total_ms": total});
-        for m in c.missing_slopes {
-            self.want_slope(&m);
+        for m in c.missing_slopes.iter().chain(&c.stale_slope) {
+            self.want_slope(m);
         }
         for m in c.slope_fallback {
             self.samples_job(&m);
