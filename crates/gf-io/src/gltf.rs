@@ -26,6 +26,8 @@ pub struct MorphData {
 pub struct SkinData {
     pub joints: Vec<[u8; 4]>,
     pub weights: Vec<[f32; 4]>,
+    pub joints_1: Vec<[u8; 4]>,
+    pub weights_1: Vec<[f32; 4]>,
 }
 
 pub struct Lod {
@@ -55,6 +57,7 @@ pub struct Channel {
 pub struct Animation {
     pub name: String,
     pub channels: Vec<Channel>,
+    pub morph: Option<usize>,
 }
 
 pub struct Rig {
@@ -257,6 +260,15 @@ pub fn glb_full(
             let weight_bytes: Vec<u8> = skin.weights.iter().flat_map(|w| w.iter().flat_map(|x| x.to_le_bytes())).collect();
             primitive["attributes"]["JOINTS_0"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
             primitive["attributes"]["WEIGHTS_0"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
+            if !skin.joints_1.is_empty() {
+                if skin.joints_1.len() != n || skin.weights_1.len() != n {
+                    return Err(format!("{}: second skin set with the wrong vertex count", lod.name));
+                }
+                let joint_bytes: Vec<u8> = skin.joints_1.iter().flatten().copied().collect();
+                let weight_bytes: Vec<u8> = skin.weights_1.iter().flat_map(|w| w.iter().flat_map(|x| x.to_le_bytes())).collect();
+                primitive["attributes"]["JOINTS_1"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
+                primitive["attributes"]["WEIGHTS_1"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
+            }
         }
         let mut mesh = json!({"name": lod.name});
         if !targets.is_empty() {
@@ -348,6 +360,22 @@ pub fn glb_full(
                         let output = next.next().ok_or("animation outputs ran out")?;
                         channels.push(json!({"sampler": samplers.len(), "target": {"node": first + c.joint, "path": path}}));
                         samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+                    }
+                }
+                if let Some(k) = animation.morph {
+                    let m = morph_names.len();
+                    if k >= m {
+                        return Err(format!("animation {} drives a morph target the meshes do not have", animation.name));
+                    }
+                    let mut keys = vec![0.0f32; 2 * m];
+                    keys[m + k] = 1.0;
+                    let bytes: Vec<u8> = keys.iter().flat_map(|x| x.to_le_bytes()).collect();
+                    let output = b.raw(&bytes, None, FLOAT, 2 * m, "SCALAR");
+                    for (node, lod) in lods.iter().enumerate() {
+                        if !lod.morphs.is_empty() {
+                            channels.push(json!({"sampler": samplers.len(), "target": {"node": node, "path": "weights"}}));
+                            samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+                        }
                     }
                 }
                 animations.push(json!({"name": animation.name, "samplers": samplers, "channels": channels}));
@@ -544,7 +572,7 @@ mod tests {
     #[test]
     fn a_rigged_glb_reads_back_and_its_bind_matrices_invert_the_joints() {
         let mut skinned = lod(vec![[0.0, 0.0, 0.5], [0.0; 3], [0.0; 3], [0.0; 3]]);
-        skinned.skin = Some(SkinData { joints: vec![[0, 1, 0, 0]; 4], weights: vec![[0.25, 0.75, 0.0, 0.0]; 4] });
+        skinned.skin = Some(SkinData { joints: vec![[0, 1, 0, 0]; 4], weights: vec![[0.25, 0.75, 0.0, 0.0]; 4], joints_1: Vec::new(), weights_1: Vec::new() });
         let rig = Rig {
             names: vec!["neck".into(), "head".into()],
             parents: vec![None, Some(0)],
