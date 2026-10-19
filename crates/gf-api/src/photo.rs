@@ -133,7 +133,7 @@ pub fn ingest_input() -> Value {
             "front": {"type": "string", "minLength": 1, "description": "front photo"},
             "profile": {"type": "string", "minLength": 1, "description": "profile photo"},
             "profile_side": {"type": "string", "enum": ["right", "left"], "description": "which side of the face the profile shows (default right)"},
-            "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "front vs profile proportion tolerance (default 0.12)"}
+            "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "refuse when the front and profile proportion measures differ by more than this (default: reported, never refused; renders of one face differ by 0.16-0.28, as much as two different faces)"}
         })),
         &["front", "profile", "run"],
     )
@@ -145,8 +145,10 @@ pub fn generic_output() -> Value {
 
 pub fn ingest(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let run = run_dir(input)?;
-    let args = json!({"front": text(input, "front"), "profile": text(input, "profile"),
-                      "profile_side": opt(input, "profile_side").unwrap_or("right"), "max_ratio_gap": num(input, "max_ratio_gap", 0.12)});
+    let mut args = json!({"front": text(input, "front"), "profile": text(input, "profile"), "profile_side": opt(input, "profile_side").unwrap_or("right")});
+    if let Some(v) = input.get("max_ratio_gap") {
+        args["max_ratio_gap"] = v.clone();
+    }
     let result = worker(input, "photo_worker.py", "ingest", args, &run)?;
     if result.pointer("/facing/pass") != Some(&Value::Bool(true)) {
         let failures = result.pointer("/facing/failures").cloned().unwrap_or(json!([]));
@@ -1089,9 +1091,10 @@ pub fn from_photos_input() -> Value {
                 "profile_upright": {"type": "boolean"},
                 "profile_align": {"type": "string", "enum": ["every_round", "first_round"]},
                 "shell_mode": shell_mode_prop(),
-                "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion tolerance (default 0.12)"},
+                "max_ratio_gap": {"type": "number", "minimum": 0, "maximum": 1, "description": "photo.ingest's front vs profile proportion limit (default: reported, never refused)"},
                 "fit": {"type": "string", "enum": ["photos", "mesh"], "description": "fit the targets directly to the photos (default: landmarks and outlines of every photo through solved cameras) or to a generated mesh (stages 2-5)"},
-                "extras": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}}, "required": ["path"], "additionalProperties": false}, "description": "any number of extra views (three-quarters, the other side, slightly up or down): each is checked for quality and its pose is solved"},
+                "other_profile": {"type": "string", "minLength": 1, "description": "direct fit only: a profile photo of the other side (left when profile_side is right); optional like the extras"},
+                "extras": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}}, "required": ["path"], "additionalProperties": false}, "description": "any number of extra views (three-quarters, slightly up or down): each is checked for quality and its pose is solved; one that fails its checks is dropped with a warning in the report (the front and the profile still gate strictly)"},
                 "fit_options": {"type": "object", "description": "fit.photos options (weights, rounds, focal_px, outline_regions, landmarks, prior_scope)"},
                 "dense_shell": {"type": "boolean", "description": "direct fit only: also make a dense mesh from the front and profile (server + graph, or glb) and fit its outer shell as an extra surface term (fit.photos shell)"}
             })),

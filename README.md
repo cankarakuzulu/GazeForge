@@ -365,6 +365,10 @@ registry commands (so the CLI, HTTP and MCP all have them); the long ones are jo
 | 8a | `export-glb` | the spec (weights; the residual is the fitted dense shape and is near zero) and the glb |
 | 8b | `review.views` | one row per photo: the photo, a clay render at its solved camera, and both at 50 % with both outlines |
 
+`other_profile` adds a profile of the other side. The front and the profile gate strictly; an extra view or the other
+profile that fails its checks (no face, quality, no profile keys, no outline) is dropped, named in the report's `dropped`
+and `warnings`, and the job goes on with the rest.
+
 `fit_options` passes `fit.photos` options through `character.from_photos`. The outline of the hair-covered skull and of the
 neck (clothing) is not fitted by default (`outline_regions`); the focal length is assumed (70 mm full-frame equivalent)
 unless `focal_px` is given; scale and placement are not observable from photos. No texture is projected on this path yet.
@@ -373,9 +377,14 @@ unless `focal_px` is given; scale and placement are not observable from photos. 
 `graph`, or `glb` to reuse a mesh, as on the mesh path); the mesh's outer shell (`mesh.multiview`; an untextured mesh is
 rendered as shaded clay for its landmarks) becomes an extra term of `fit.photos` (`shell`: the directory holding
 `shell_points.npy`, `shell_normals.npy`, `shell_landmarks.json`). The shell is placed by its landmarks, re-registered
-(similarity, trimmed ICP plus landmarks) every round, and pulls the visible vertices of `shell_regions` (default all but
-eyes and neck) along its normal, with a dead band (`shell_tolerance_mm`, default 2: a vertex closer than that is not
-pulled; one further away is pulled to the band's edge) and `shell_weight` (default 3). The generator is whatever the graph
+(similarity, trimmed ICP plus landmarks) every round, and pulls every vertex of `shell_regions` (default all but eyes and
+neck) that a photo sees (`shell_coverage`: `seen`, or `all` for a complete surface) and that has the shell within
+`shell_radius_mm` (default 8), its normal within 60 degrees of the vertex's, along the shell's normal, however far it
+is from the shell (`shell_trim` false: the old 3x-median trim dropped exactly the vertices that differ most), with a dead band (`shell_tolerance_mm`: a vertex closer than that is not pulled, one further away is
+pulled to the band's edge; default the shell's own `tolerance_mm` in `shell_landmarks.json`, which `mesh.multiview` sets
+to 2 for a generated surface, else 0) and `shell_weight` (default 3); the stay-at-base prior leaves `shell_regions` to
+the shell. Any surface in the base's frame up to a similarity can be a shell (a scan, a photogrammetry cloud with
+normals). The generator is whatever the graph
 runs; a generator whose licence restricts territories or users can only be used as a bring-your-own graph, never as a
 default. Limits: a generated surface is a few millimetres off the true one, so the term helps a face far from the base
 and hurts one close to it; the shell's landmarks come from MediaPipe on a clay render of the mesh and can fail on a
@@ -385,7 +394,7 @@ noisy surface (the run then stops with `worker_failed`); results that fail the s
 
 | stage | command | what it does and measures |
 |---|---|---|
-| 0 | `photo.ingest` | copies the photos into the run directory; facing check: the front looks at the camera (nose offset within 0.08 of the eye span), the profile shows the declared side (the nose bump of the silhouette), and both photos agree on proportions (upper lip over lower face within 12 %). A failure is `gate_failed` and stops the run. |
+| 0 | `photo.ingest` | copies the photos into the run directory; facing check: the front looks at the camera (nose offset within 0.08 of the eye span), the profile shows the declared side (the nose bump of the silhouette). A failure is `gate_failed` and stops the run. The proportion measure (upper lip over lower face, front vs profile) is reported in `consistency` and refuses only when `max_ratio_gap` is given: renders of one face differ by 0.16-0.28 on it, as much as two different faces do. |
 | 1 | `photo.landmarks` | 478 MediaPipe landmarks on the front photo (re-run agreement in px), the profile silhouette, its profile line and key points (nasion, nose tip, subnasale, lips, chin); an overlay image for each photo, to be looked at before any number is trusted |
 | 2 | `mesh.multiview` | sends both photos to an external image-to-mesh server, then keeps the outer shell and lifts the landmarks onto it from a front render. `shell_mode`: `outer_triangles` (default: triangles front-most from 26 directions at a fine depth tolerance, normals oriented toward the directions that see them) or `visible_vertices` (vertices visible from those directions, normals as the file gives them) |
 | 3 | `fit.register` | similarity transform of the shell onto the dense base from 30 stable landmarks, refined by trimmed ICP on the face; landmark residual in mm. `base_landmarks`: the base's landmark table (`{"vertices": {landmark index: dense vertex}}`), else the landmarks are detected on a render of the base |

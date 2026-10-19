@@ -103,9 +103,19 @@ def views(args):
     roles = [p.get("role") for p in photos]
     if "front" not in roles or "profile" not in roles:
         pw.fail("at least one front and one profile photo are required", "invalid_input")
-    out, failures = [], []
-    for p in photos:
-        img = pw.read_image(p["path"])
+    out, failures, warnings = [], [], []
+    required = {roles.index("front"), roles.index("profile")}
+    for i, p in enumerate(photos):
+        if i in required:
+            img = pw.read_image(p["path"])
+        else:
+            img = cv2.imread(p["path"], cv2.IMREAD_COLOR)
+            if img is None:
+                message = f"{p['name']}: cannot read the image"
+                out.append({"name": p["name"], "path": p["path"], "role": p.get("role"), "pass": False, "dropped": True,
+                            "warnings": [message]})
+                warnings.append(f"{message} (dropped)")
+                continue
         h, w = img.shape[:2]
         role = p["role"]
         faces = pg.faces_in(det, img)
@@ -113,14 +123,15 @@ def views(args):
         sil = pw.silhouette(img)
         rec = {"name": p["name"], "path": p["path"], "role": role, "size": [w, h], "faces": len(faces),
                "landmarks": face["points"][:, :2].tolist() if face is not None and role != "profile" else None}
+        problems = []
         if role == "profile":
             rec["side"] = p.get("side", "right")
             rec["keys"] = profile_keys(img, rec["side"])
             if not rec["keys"] or not all(k in rec["keys"] for k in ("nose_tip", "nasion")):
-                failures.append(f"{p['name']}: the profile keys (nose tip, nasion) were not found")
+                problems.append(f"{p['name']}: the profile keys (nose tip, nasion) were not found")
         if sil is None:
             rec["outline"] = None
-            failures.append(f"{p['name']}: no outline found")
+            problems.append(f"{p['name']}: no outline found")
         else:
             ol = outline(sil)
             path = os.path.join(run, "views", f"{p['name']}_outline.npy")
@@ -133,12 +144,19 @@ def views(args):
             else:
                 rec["checks"] = quality(img, face, t, sil)
             rec["pass"] = all(c["pass"] for c in rec["checks"])
-            failures += [f"{p['name']}: {c['name']}: {c['reason']}" for c in rec["checks"] if not c["pass"]]
+            problems += [f"{p['name']}: {c['name']}: {c['reason']}" for c in rec["checks"] if not c["pass"]]
         elif role == "front" and face is None:
-            failures.append(f"{p['name']}: no face found in the front photo")
+            problems.append(f"{p['name']}: no face found in the front photo")
+        if i in required:
+            failures += problems
+        elif problems:
+            rec["pass"] = False
+            rec["dropped"] = True
+            rec["warnings"] = problems
+            warnings += [f"{m} (dropped)" for m in problems]
         out.append(rec)
     det.close()
-    result = {"views": out, "failures": failures, "pass": not failures}
+    result = {"views": out, "failures": failures, "warnings": warnings, "dropped": [r["name"] for r in out if r.get("dropped")], "pass": not failures}
     pw.write_json(os.path.join(run, "views.json"), result)
     if failures:
         pw.fail("; ".join(failures), "gate_failed", views=out)

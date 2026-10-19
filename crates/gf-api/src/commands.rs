@@ -161,7 +161,7 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "photo.ingest",
         kind: Kind::Query,
-        summary: "Stage 0 of image to character: read a front and a profile photo into a run directory and check facing (the front looks at the camera, the profile shows the declared side, both photos agree on proportions).",
+        summary: "Stage 0 of image to character: read a front and a profile photo into a run directory and check facing (the front looks at the camera, the profile shows the declared side); the front-vs-profile proportion agreement is reported, and refuses only under max_ratio_gap.",
         limits: "A failed check is an error (gate_failed) and the run stops; nothing is averaged. A mirrored front photo of a symmetric face cannot be detected. The reference-photo gate (photo.check) runs first.",
         input: photo_gate::ingest_input,
         output: photo::generic_output,
