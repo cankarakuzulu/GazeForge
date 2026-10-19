@@ -1,3 +1,4 @@
+pub mod body;
 pub mod character;
 pub mod dense;
 pub mod game_base;

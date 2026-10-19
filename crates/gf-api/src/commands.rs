@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, designer, jobs, photo, photo_fit, photo_gate, registry};
+use crate::{CommandDef, Ctx, Kind, body, designer, jobs, photo, photo_fit, photo_gate, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -283,6 +283,24 @@ pub static REGISTRY: &[CommandDef] = &[
         input: photo_gate::from_photos_input,
         output: photo::generic_output,
         run: photo_gate::from_photos,
+    },
+    CommandDef {
+        name: "body.import",
+        kind: Kind::Mutation,
+        summary: "Build a body pack from a body mesh: the MakeHuman base mesh joined to the head by topology (makehuman), or any body mesh joined at its neck loop or a cut plane (mesh); with LODs and UVs.",
+        limits: "makehuman mode needs the MakeHuman base topology and the dense base it was subdivided from; mesh mode aligns by the neck ring's centre and size only (no rotation) and keeps the largest connected part.",
+        input: body::import_input,
+        output: body::import_output,
+        run: body::import,
+    },
+    CommandDef {
+        name: "character.stitch",
+        kind: Kind::Query,
+        summary: "Join a character's head to a body pack at the neck: the seam vertices are shared, the body is bent onto the head over a blend band, and the seam gates run (watertight, cracks, normal continuity, folds, interpenetration).",
+        limits: "LOD0 and the unplaced head (dense positions at the kept vertices); export-glb --body stitches every LOD of the placed head.",
+        input: body::stitch_input,
+        output: body::stitch_output,
+        run: body::stitch,
     },
 ];
 

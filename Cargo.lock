@@ -221,6 +221,7 @@ dependencies = [
 name = "gf-io"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "gf-core",
  "gf-geom",
  "ndarray",

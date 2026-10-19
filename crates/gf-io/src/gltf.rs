@@ -191,11 +191,24 @@ pub fn glb(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, ge
 }
 
 pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Value, generator: &str, rig: Option<&Rig>) -> Result<(Vec<u8>, Value), String> {
+    glb_full(lods, &[], morph_names, mode, extras, generator, rig)
+}
+
+pub fn glb_full(
+    lods: &[Lod],
+    extra: &[Lod],
+    morph_names: &[String],
+    mode: Sparse,
+    extras: Value,
+    generator: &str,
+    rig: Option<&Rig>,
+) -> Result<(Vec<u8>, Value), String> {
     let mut b = Builder::default();
     let mut meshes = Vec::new();
     let mut nodes = Vec::new();
     let mut report = Vec::new();
-    for lod in lods {
+    let no_morphs: Vec<String> = Vec::new();
+    for (lod, morph_names) in lods.iter().map(|l| (l, morph_names)).chain(extra.iter().map(|l| (l, &no_morphs[..]))) {
         let n = lod.positions.len();
         if lod.normals.len() != n || lod.uvs.len() != n || lod.morphs.len() != morph_names.len() {
             return Err(format!("{}: attribute or morph counts disagree", lod.name));
