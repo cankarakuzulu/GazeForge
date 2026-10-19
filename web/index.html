@@ -25,6 +25,11 @@
     <button id="frame" title="Frame the head (F)">frame</button>
     <button id="shot" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout">PNG</button>
     <button id="help-btn" title="Shortcuts (?)">?</button>
+    <span class="sep"></span>
+    <button id="p-new" title="New project (Ctrl+N)">new</button><button id="p-open" title="Open a project (Ctrl+O)">open</button>
+    <select id="p-recent" title="Recent projects"><option value="">recent…</option></select>
+    <button id="p-save" title="Save the project (Ctrl+S)">save</button><button id="p-saveas" title="Save the project as (Ctrl+Shift+S)">save as</button>
+    <span id="p-name" class="pname" title="saved">untitled</span>
   </nav>
 </header>
 <main>
@@ -46,7 +51,7 @@
   </section>
   <aside>
     <div class="tabs">
-      <button data-tab="shape" class="on">Shape</button><button data-tab="view">View</button><button data-tab="scene">Scene</button><button data-tab="history">History</button><button data-tab="panels">Panels</button>
+      <button data-tab="shape" class="on">Shape</button><button data-tab="view">View</button><button data-tab="scene">Scene</button><button data-tab="history">History</button><button data-tab="panels">Panels</button><button data-tab="project">Project</button>
     </div>
     <div id="tab-shape" class="tab on">
       <div class="tools">
@@ -112,6 +117,17 @@
       <ol id="history"></ol>
     </div>
     <div id="tab-panels" class="tab"><div id="panels"></div></div>
+    <div id="tab-project" class="tab">
+      <h3>Project</h3>
+      <div id="p-info" class="note"></div>
+      <h3>Characters</h3>
+      <ol id="p-chars" class="plist"></ol>
+      <h3>Notes</h3>
+      <textarea id="p-notes" rows="6" placeholder="notes saved with the project"></textarea>
+      <div class="buttons"><button id="p-export" title="One .gfproj.zip with the project and its character blobs (not the shared base)">export portable</button></div>
+      <div id="p-status" class="note"></div>
+      <p class="note">Saving writes the project file (characters with their revision history, panel settings, the viewer state and these notes); the shared base is referenced by its sha256. Every settle and every 60 s an autosave goes to a recovery slot, offered when the project is opened after a session ended without saving. Undo history belongs to the session and is not saved.</p>
+    </div>
   </aside>
 </main>
 <div id="help" class="help hidden">
@@ -121,6 +137,24 @@
     <p class="note">Esc or a click outside closes this. Settings (modes, lights, layout) are remembered in this browser.</p>
   </div>
 </div>
+<div id="p-dialog" class="help hidden">
+  <div class="card">
+    <h2 id="p-dlg-title"></h2>
+    <p id="p-dlg-note" class="note"></p>
+    <input id="p-dlg-name" type="text" class="wide">
+    <ul id="p-dlg-list" class="plist"></ul>
+    <div class="buttons"><button id="p-dlg-ok">OK</button><button id="p-dlg-cancel">cancel</button></div>
+  </div>
+</div>
+<div id="p-relink" class="help hidden">
+  <div class="card">
+    <h2>Relink resources</h2>
+    <p id="p-relink-note" class="note"></p>
+    <div id="p-relink-rows"></div>
+    <div class="buttons"><button id="p-relink-ok">retry</button><button id="p-relink-cancel">cancel</button></div>
+  </div>
+</div>
+<div id="p-recover" class="recover hidden"><span id="p-recover-text"></span><button id="p-restore">restore</button><button id="p-discard">discard</button></div>
 <script type="module" src="designer.js"></script>
 </body>
 </html>

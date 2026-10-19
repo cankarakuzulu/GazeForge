@@ -7,6 +7,19 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[derive(Default)]
+pub struct Sha256Stream(Sha256);
+
+impl Sha256Stream {
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn hex(self) -> String {
+        self.0.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
 pub fn reference(hex: &str) -> String {
     format!("{PREFIX}{hex}")
 }

@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn check_needs_a_photo() {
-        let ctx = Ctx { jobs_dir: PathBuf::from("."), exe: PathBuf::from("."), job_id: None };
+        let ctx = Ctx { jobs_dir: PathBuf::from("."), exe: PathBuf::from("."), job_id: None, projects: PathBuf::from(".") };
         let err = check(&ctx, &json!({})).unwrap_err();
         assert_eq!(err.code, Code::InvalidInput);
     }

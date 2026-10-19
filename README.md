@@ -269,7 +269,8 @@ T-junctions by construction. The body is then bent onto the head over a band. Co
 60), `neck_offset_mm`, `head_scale` (about the seam centre), `body_scale` (about the ring centre), `smooth` (Laplacian
 passes over the band) and `tangent` (0..1, how far the first body row turns to continue the head surface; default 0.5);
 on export they are `--body-blend-mm`, `--body-neck-offset-mm`, `--head-scale`, `--body-scale`, `--body-smooth`,
-`--body-tangent`.
+`--body-tangent`. `character.stitch` takes a spec file, a spec object or the designer's character; with `return_mesh` it
+also returns the head positions it stitched to (`head_scale` applied, finest-level order).
 
 In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
 layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
@@ -459,6 +460,7 @@ vertices, the base triangle UVs, and the eyeballs of an optional eyes file as sp
 | W, X, P | wireframe, hidden edges, points | B, E | back faces, seams and boundaries |
 | C, Alt+wheel | clip plane 1, move it | G | light gizmo |
 | H, Alt+H, I | hide the head, show everything, isolate the head | K, Shift+K | PNG of the view, of the layout |
+| Ctrl+N, Ctrl+O | new project, open a project | Ctrl+S, Ctrl+Shift+S | save, save as |
 | ? | shortcut help | Esc | close the help |
 
 #### Panels
@@ -480,6 +482,105 @@ requestRender()
 
 Panels never reach the renderer directly. `web/panels/measurements.js` (the settled measurements, a bounding-box overlay
 with undo, the level-of-detail sizes through `call`) is the example.
+
+`mount` may return `{ getState(), setState(state) }` (or the definition may carry them; both optional): the page saves
+`getState()` (plain JSON) with the project and calls `setState(state)` after mounting when a project is opened. A state
+puts any file or folder path under `resources` (`{"body": "..."}`): the project keeps those as resources by identity and
+hands `setState` the paths found on load; any other text that looks like a local path blocks a portable export. The Body
+(`stitch.js`) and Face rig (`rig.js`) panels implement both. The Body panel runs `character.stitch` with its gates
+enforced: a stitch that fails them is drawn in red with the failed gates listed, never as a usable body; a head scale
+other than 1 shows the scaled head through `setPose`; while the character changes, the body is marked stale (or
+re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
+moves and refits after the settle.
+
+### Projects
+
+A project file `<name>.gfproj.json` keeps an ongoing piece of work: its characters (each a spec with a revision history;
+a new revision is recorded when a save changes the spec), the panel states (body choice and stitch settings, expression
+and joint settings), the viewer state (cameras per viewport, layout, render modes, overlays, lights, clip planes, the hide
+box, regions and visibility), designer options and notes. The shared base (pack, catalog, game base) is referenced by
+sha256 only, with a fingerprint of its blob sizes.
+
+Everything outside the project file is a **resource**, kept as a role, an identity and a hint: `store` (identity: the
+base fingerprint), `macro` and `eyes` (files: sha256 of the bytes), `face_morphs` (a folder: sha256 over every file's
+relative name, size and content, whatever its size) and panel resources such as `panels.stitch.body` (a panel's
+`getState()` puts its paths under `resources`). Files are hashed as they stream, on every save and load; nothing is
+cached, so an edit is seen whatever it keeps of the size or the modification time. A folder's identity follows the
+symbolic links and junctions inside it, as the loaders do, and covers what they lead to under the link's name (a folder
+reached through a junction has the same identity as a copy of it); a link that leads back into the folder (a cycle)
+cannot be identified and refuses the save, and a dangling link is recorded by name. The hint is relative to the projects folder when the resource lies inside
+it, else absolute; it lives in the local project file only.
+
+```
+gazeforge call project.new    --input '{"name": "hero", "store": "STORE", "spec": "FACE.gfchar.json"}'
+gazeforge call project.save   --input '{"name": "hero", "characters": [{"spec": {...}}], "notes": "..."}'
+gazeforge call project.load   --input '{"name": "hero", "evaluate": true}'
+gazeforge call project.list   --input '{}'
+gazeforge call project.export --input '{"name": "hero", "out": "hero.gfproj.zip"}'
+gazeforge call project.load   --input '{"zip": "hero.gfproj.zip", "store": "STORE", "eyes": "EYES.json", "body": "BODY_DIR"}'
+gazeforge call project.discard --input '{"name": "hero"}'
+```
+
+- **Projects folder:** `root` in the input, else `serve --projects DIR`, else `GAZEFORGE_PROJECTS`, else
+  `GazeForge/projects` under the user's data folder (the roaming application data folder on Windows, `~/Library/Application Support` on macOS,
+  `$XDG_DATA_HOME` or `~/.local/share` elsewhere). Names are 1 to 64 letters, digits, spaces, `_`, `-`, `.`, so a project
+  stays inside its folder.
+- **Saving** writes a temporary file and renames it over the project, so a reader never sees a partial file and the
+  last of several concurrent saves wins whole. `recovery: true` writes the autosave slot (`.recovery/<name>.gfproj.json`)
+  instead; a normal save removes it. A save refuses a resource path that does not exist; the autosave keeps it as typed
+  instead, reports it under `unresolved`, and loading that slot shows it again unresolved. With `evaluate: true` every
+  character is evaluated before anything is written.
+- **Loading** finds each resource, in order, from an explicit option (`store`, `macro`, `eyes`, `face_morphs`, `body`,
+  or `resources: {"role": "path"}` for any role), then by its file name in the `search` folders, in
+  `GAZEFORGE_RESOURCES` and in the projects folder, then from its hint; the first candidate whose identity matches wins.
+  An explicit option is the only candidate for its role. Every role that stays unresolved is listed in one refusal
+  (`not_found`, or `conflict` when a candidate exists with another identity); `skip: ["role"]` opens without it (never
+  the store). Then the project is checked: base manifests by hash, the base blob sizes against the saved fingerprint
+  (`verify: "full"` hashes every base blob), character blobs by hash, every character's revision, and the macro
+  definition when a character uses macros. `evaluate: true` reports each character's evaluated dense sha256. Every blob
+  that evaluation (or the designer's blob route) reads is checked against its hash on each read; the quick check only
+  fingerprints sizes, so an unread same-size corruption is found by `verify: "full"` or by the first read.
+- **Portable file:** `project.export` writes one `.gfproj.zip` with the project file, an index and the
+  character-specific blobs (residuals), not the shared base. Its structured fields never carry paths: each resource is
+  its role, identity and file name only, never a folder. Free text (notes, names, panel and viewer values, keys) gets a
+  best-effort scan: the export is refused when any string or key, anywhere inside it, looks like a local path (drive,
+  drive-relative, network, `//host/share`, `file:` URL, any other `scheme://host` URL except `http://` and `https://`,
+  `~/`, an absolute path such as `/mnt/...`, `/Volumes/...` or `\data\...`, also right after punctuation such as `→` or
+  `«`, an environment variable such as `%NAME%` or `$NAME/`), a user or home folder, the projects, temp or working
+  folder, or holds the user name or the host name as a whole word (any case; `_` and digits separate words, so
+  `backup_name_2026` counts). Each string is scanned as written and again normalised: percent-decoding repeated, Unicode
+  NFKC, look-alike slashes, backslashes and colons made ASCII, every kind of space made a plain space, invisible
+  characters removed. The scan reads one string at a time: a path split across two fields (the drive in one,
+  the rest in another) is not seen. The refusal names each JSON pointer and the fragment (from the normalised text
+  when only that matched). The notes are free text: `allow_paths_in_notes: true` exports them as they are; no other
+  field has an opt-out.
+  On another machine, `project.load` with `zip` takes the resources as options or finds them by file name in the
+  `search` folders (never the projects folder, and the hints are not used), imports the project into a projects folder
+  with hints for where they were found, and the blobs into the store; the receiving store must hold the same base.
+  Each resource in the file must be a known role with a kind, a sha256 identity and a bare file name (no separators,
+  `..`, drive, `:` or reserved device name); anything else refuses the file before a path is looked up. The loader
+  always identifies folders by content, whatever the file says. Re-loading a zip into an existing project of the same
+  name compares the whole project and refuses a different one unless `overwrite: true`. A load validates, resolves and
+  (with `evaluate`) evaluates everything first and writes last: a refused load writes nothing.
+- **Import limits:** an entry name that is absolute, holds `..`, a drive letter, `:` or a backslash, appears twice, or is
+  a symbolic link or a folder refuses the whole file. Each entry is decompressed into a temporary folder that is removed
+  afterwards, and its bytes are counted as they stream, never trusting the sizes in the headers: one entry may not pass
+  `max_entry_bytes` (default 256 MiB) and all entries together `max_total_bytes` (default 2 GiB); the project entry is
+  capped at `max_project_bytes` (default 16 MiB) before it is parsed, and parsing bounds nesting (64 levels) and the
+  number of values. The project entry is read and parsed first; before any other entry is decompressed, the file is
+  refused when it holds more entries than the project can reference (the project, its index and one blob per residual
+  its characters name) or any entry the project does not name, so such entries cost no temporary space. A refused file
+  writes nothing into the projects folder or the store. An import whose process was killed leaves its temporary folder behind; the next import
+  removes such folders (named `gf-import-<process>-<n>` and older than an hour) and nothing else.
+
+In the designer: New, Open, Recent, Save and Save As in the toolbar (Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S; some browsers
+keep Ctrl+N for themselves, the button always works), the project name with an unsaved marker, a warning before the page
+is closed with unsaved changes, and a Project tab (characters, notes, portable export). `?project=NAME` opens a project
+(`&root=` for another folder). When a resource has moved, opening the project lists each unresolved role with a path
+field (and "open without it" for the optional ones) and retries with them; the project stays unsaved until it is saved
+with the new locations. Every settle and every 60 s the page autosaves into the recovery slot while there are unsaved
+changes (a path that does not exist is kept as typed and shown in the Project tab); opening the project after a session
+ended without saving offers to restore or discard it. The undo history belongs to the session and is not saved.
 
 ### Image to character
 

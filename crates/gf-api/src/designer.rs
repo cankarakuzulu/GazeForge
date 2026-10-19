@@ -330,6 +330,7 @@ fn character_props() -> Value {
 pub fn sliders_input() -> Value {
     obj(
         json!({"store": {"type": "string", "minLength": 1}, "spec": {"type": "string", "minLength": 1, "description": "optional spec file to start from"},
+               "character": {"type": "object", "description": "optional spec object to start from (instead of spec)"},
                "macro": {"type": "string", "minLength": 1, "description": "optional macro definition file; without it the macro group is unavailable"}}),
         &["store"],
     )
@@ -436,9 +437,10 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         return Err(ApiError::not_found(format!("{root} is not a store")).details(json!({"store": root})));
     }
     let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
-    let spec = match input.get("spec").and_then(Value::as_str) {
-        Some(p) => Some(ch::read_spec(Path::new(p)).map_err(ApiError::invalid)?),
-        None => None,
+    let spec = match (input.get("character").filter(|c| c.is_object()), input.get("spec").and_then(Value::as_str)) {
+        (Some(c), _) => Some(serde_json::from_value::<Spec>(c.clone()).map_err(|e| ApiError::invalid(format!("character: {e}")))?),
+        (None, Some(p)) => Some(ch::read_spec(Path::new(p)).map_err(ApiError::invalid)?),
+        (None, None) => None,
     };
     let list = |kind: &str| -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(store.root.join(kind))
@@ -634,6 +636,17 @@ pub fn macro_delta(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(json!({"slider": slider, "value": value, "step": step, "up_f32_b64": up, "down_f32_b64": down, "vertices": mid.len(),
               "definition": "metres per unit slider at each game vertex: (L(v + step) - L(v)) / step and (L(v) - L(v - step)) / step, clamped to [0, 1]",
               "seconds": started.elapsed().as_secs_f64()}))
+}
+
+pub fn spec_from_input(input: &Value) -> Result<Spec, ApiError> {
+    let (loaded, _) = load(input)?;
+    let source = macro_source(input)?;
+    let spec = spec_of(input, &loaded, source.as_ref())?;
+    let (problems, _) = ch::problems(&loaded.store, &spec, source.as_ref());
+    if !problems.is_empty() {
+        return Err(ApiError::invalid(format!("the spec does not validate: {}", problems.join("; "))).details(json!({"problems": problems})));
+    }
+    Ok(spec)
 }
 
 pub fn save(_: &Ctx, input: &Value) -> Result<Value, ApiError> {

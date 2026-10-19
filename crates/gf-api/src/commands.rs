@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, body, designer, jobs, photo, photo_fit, photo_gate, registry};
+use crate::{CommandDef, Ctx, Kind, body, designer, jobs, photo, photo_fit, photo_gate, project, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -310,6 +310,60 @@ pub static REGISTRY: &[CommandDef] = &[
         input: body::stitch_input,
         output: body::stitch_output,
         run: body::stitch,
+    },
+    CommandDef {
+        name: "project.new",
+        kind: Kind::Mutation,
+        summary: "Start a project file <root>/<name>.gfproj.json with one character (a spec file, a spec object, or the store's base with no weights).",
+        limits: "Refuses an existing name unless overwrite; one project holds one base (pack, catalog, game base), referenced by sha256.",
+        input: project::new_input,
+        output: project::save_output,
+        run: project::new,
+    },
+    CommandDef {
+        name: "project.save",
+        kind: Kind::Mutation,
+        summary: "Save a project: its characters (specs, each with a revision history), panel states, viewer state, options and notes; recovery: true writes the autosave slot instead.",
+        limits: "Written to a temporary file and renamed, so a reader never sees a partial file and the last of concurrent saves wins whole; the base is referenced by sha256, never copied.",
+        input: project::save_input,
+        output: project::save_output,
+        run: project::save,
+    },
+    CommandDef {
+        name: "project.load",
+        kind: Kind::Query,
+        summary: "Read a project (or its autosave slot, or import a portable .gfproj.zip): find every resource (store, macro, eyes, face_morphs, panel resources) by option, search folder, projects folder or hint and check its identity, then check the base manifests by hash, base blob sizes against the saved fingerprint, character blobs by hash, character revisions.",
+        limits: "Refuses with every unresolved resource listed, and a project whose base is missing or changed; verify: full hashes every base blob (slow on a large store). With zip: hints are not used; entry names that are absolute, hold .., a drive letter or a backslash, repeat, or are links refuse the file; decompressed bytes are counted while streaming against max_entry_bytes and max_total_bytes; the character blobs go into the store and the project file into root.",
+        input: project::load_input,
+        output: project::load_output,
+        run: project::load,
+    },
+    CommandDef {
+        name: "project.list",
+        kind: Kind::Query,
+        summary: "The projects in a projects folder, newest first, and the autosave slots with whether each is newer than its saved project.",
+        limits: "Reads the project files only; no store is checked here.",
+        input: project::list_input,
+        output: project::list_output,
+        run: project::list,
+    },
+    CommandDef {
+        name: "project.discard",
+        kind: Kind::Mutation,
+        summary: "Delete a project's autosave slot (after its recovery was declined).",
+        limits: "The saved project file is never touched.",
+        input: project::discard_input,
+        output: project::discard_output,
+        run: project::discard,
+    },
+    CommandDef {
+        name: "project.export",
+        kind: Kind::Query,
+        summary: "Write a portable .gfproj.zip: the project file without local paths (each resource as role, identity and file name), an index and the character-specific blobs (residuals), not the shared pack, catalog or game base.",
+        limits: "Refused when any text in the project still looks like a local path, a user or home folder, the projects or temp folder or the host name; project.load with zip refuses it on a store without the same base.",
+        input: project::export_input,
+        output: project::export_output,
+        run: project::export,
     },
 ];
 

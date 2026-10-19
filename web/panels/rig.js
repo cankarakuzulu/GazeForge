@@ -72,13 +72,13 @@ function mount(root, api) {
       const row = el("div", { class: "row" });
       const lab = el("label", { style: "display:inline-block;min-width:11em" }, n);
       const r = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0" });
-      let from = 0;
-      r.addEventListener("pointerdown", () => { from = S.weights[n]; });
-      r.addEventListener("input", () => { S.weights[n] = Number(r.value); update(); });
+      let from = null;
+      r.addEventListener("input", () => { if (from === null) from = S.weights[n]; S.weights[n] = Number(r.value); update(); });
       r.addEventListener("change", () => {
-        const to = Number(r.value), was = from;
+        const to = Number(r.value), was = from ?? S.weights[n];
+        from = null;
+        S.weights[n] = to;
         if (to !== was) api.pushUndo({ label: `${n} ${was.toFixed(2)} -> ${to.toFixed(2)}`, undo: () => setWeights({ [n]: was }), redo: () => setWeights({ [n]: to }) });
-        from = to;
       });
       inputs[n] = { range: r, label: lab };
       row.append(lab, r);
@@ -94,11 +94,12 @@ function mount(root, api) {
   for (const [k, unit, lim] of MANUAL) {
     const row = el("div", { class: "row" });
     const r = el("input", { type: "range", min: String(-lim), max: String(lim), step: unit === "deg" ? "0.5" : "0.1", value: "0" });
-    let from = 0;
-    r.addEventListener("pointerdown", () => { from = manualValue(S.joint, k); });
-    r.addEventListener("input", () => { setManual(S.joint, k, Number(r.value)); update(); });
+    let from = null;
+    r.addEventListener("input", () => { if (from === null) from = manualValue(S.joint, k); setManual(S.joint, k, Number(r.value)); update(); });
     r.addEventListener("change", () => {
-      const j = S.joint, to = Number(r.value), was = from;
+      const j = S.joint, to = Number(r.value), was = from ?? manualValue(j, k);
+      from = null;
+      setManual(j, k, to);
       if (to !== was) api.pushUndo({ label: `${jointName(j)} ${k} ${was} -> ${to} ${unit}`, undo: () => { setManual(j, k, was); syncInputs(); update(); }, redo: () => { setManual(j, k, to); syncInputs(); update(); } });
     });
     manualInputs[k] = r;
@@ -156,6 +157,7 @@ function mount(root, api) {
   async function load() {
     if (S.busy) { S.stale = true; return; }
     S.busy = true;
+    S.wanted = true;
     S.stale = false;
     status.textContent = "face rig: fitting ...";
     const input = { ...api.character(), morphs: SHAPES.map((n) => (params.get("face_prefix") ?? "faceunits/") + n) };
@@ -172,7 +174,9 @@ function mount(root, api) {
       };
       jointSel.innerHTML = "";
       r.joints.forEach((j, k) => { if (j.posed) jointSel.appendChild(el("option", { value: String(k) }, j.name)); });
-      S.joint = Number(jointSel.value);
+      if (![...jointSel.options].some((o) => Number(o.value) === S.joint)) S.joint = Number(jointSel.value);
+      jointSel.value = String(S.joint);
+      syncInputs();
       r.fit.forEach((f, k) => {
         const i = inputs[SHAPES[k]];
         if (!i) return;
@@ -257,12 +261,33 @@ function mount(root, api) {
     api.requestRender();
   }
 
-  api.onCharacterChange(() => {
+  api.onCharacterChange((c, info) => {
     if (!S.rig) return;
+    if (info && info.kind === "slider") {
+      api.setPose("rig", null);
+      api.setOverlay("rig-joints", null);
+      status.textContent = "face rig: the character changed; refitting after it settles";
+      return;
+    }
     clearTimeout(S.timer);
-    S.timer = setTimeout(() => load(), 1200);
+    S.timer = setTimeout(() => load(), 300);
   });
   syncInputs();
+  return {
+    getState: () => ({ loaded: !!S.rig || S.wanted === true, mode: S.mode, overlay: S.overlay, joint: S.joint,
+                       weights: Object.fromEntries(Object.entries(S.weights).filter(([, w]) => w)), manual: JSON.parse(JSON.stringify(S.manual)) }),
+    setState: (s) => {
+      if (!s || typeof s !== "object") return;
+      S.weights = Object.fromEntries(SHAPES.map((n) => [n, Number(s.weights?.[n]) || 0]));
+      S.mode = s.mode === "joints" ? "joints" : "blend";
+      S.overlay = s.overlay !== false;
+      S.joint = Number.isInteger(s.joint) ? s.joint : S.joint;
+      S.manual = s.manual && typeof s.manual === "object" ? JSON.parse(JSON.stringify(s.manual)) : {};
+      S.wanted = !!s.loaded;
+      syncInputs();
+      if (s.loaded) load(); else update();
+    },
+  };
 }
 
 window.GF.registerPanel({ id: "rig", title: "Face rig", order: 40, mount });
