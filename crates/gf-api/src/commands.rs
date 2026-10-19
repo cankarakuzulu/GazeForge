@@ -114,6 +114,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: designer::macro_delta,
     },
     CommandDef {
+        name: "designer.scene",
+        kind: Kind::Query,
+        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyeballs of an optional eyes file as spheres.",
+        limits: "A level with a vertex outside the finest level drops that triangle and counts it; eyes are the file's spheres, not a placed eye mesh.",
+        input: designer::scene_input,
+        output: designer::scene_output,
+        run: designer::scene,
+    },
+    CommandDef {
         name: "designer.save",
         kind: Kind::Mutation,
         summary: "Write the designer's character (weights, macros, residual) as a spec file after validating it against the store.",

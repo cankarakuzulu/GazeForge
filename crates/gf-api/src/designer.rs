@@ -375,6 +375,53 @@ pub fn macro_delta_output() -> Value {
     shape(json!({"up_f32_b64": {"type": "string"}, "down_f32_b64": {"type": "string"}, "value": {"type": "number"}, "step": {"type": "number"}}))
 }
 
+pub fn scene_input() -> Value {
+    obj(
+        with(base_props(), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file; its eyeballs come back as spheres"}})),
+        &["store", "pack", "catalog", "game"],
+    )
+}
+
+pub fn scene_output() -> Value {
+    shape(json!({"vertices": {"type": "integer"}, "triangles": {"type": "integer"}, "lods": {"type": "array"}, "eyes": {"type": "array"}}))
+}
+
+pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let (loaded, cached) = load(input)?;
+    let game = text(input, "game");
+    let manifest: GameManifest = loaded.store.get_manifest("game", game).map_err(ApiError::not_found)?;
+    let mut lod0_of = vec![u32::MAX; loaded.dense.positions.len()];
+    for (g, &d) in loaded.game.kept.iter().enumerate() {
+        lod0_of[d as usize] = g as u32;
+    }
+    let mut lods = Vec::new();
+    for lod in &manifest.lods {
+        let (m, mesh) = loaded.store.load_game(&lod.game).map_err(ApiError::not_found)?;
+        let mut dropped = 0usize;
+        let mut indices: Vec<u32> = Vec::with_capacity(mesh.triangles.len() * 3);
+        let mut uvs = Vec::with_capacity(mesh.triangles.len() * 6);
+        for (t, uv) in mesh.triangles.iter().zip(&mesh.triangle_uvs) {
+            let mapped = t.map(|v| mesh.kept.get(v as usize).map_or(u32::MAX, |&d| lod0_of.get(d as usize).copied().unwrap_or(u32::MAX)));
+            if mapped.contains(&u32::MAX) {
+                dropped += 1;
+            } else {
+                indices.extend(mapped);
+                uvs.extend(uv.iter().flatten().map(|&x| x as f64));
+            }
+        }
+        let bytes: Vec<u8> = indices.iter().flat_map(|v| v.to_le_bytes()).collect();
+        lods.push(json!({"target": lod.target, "game": lod.game, "vertices": m.vertices, "triangles": m.triangles, "dropped_triangles": dropped,
+                         "triangles_u32_b64": base64(&bytes), "triangle_uvs_f32_b64": f32_base64(uvs.into_iter())}));
+    }
+    let eyes: Vec<Value> = match input.get("eyes").and_then(Value::as_str) {
+        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?.iter().map(|e| json!({"centre": e.centre, "radius": e.radius})).collect(),
+        None => Vec::new(),
+    };
+    let base_uvs = f32_base64(loaded.game.triangle_uvs.iter().flatten().flatten().map(|&x| x as f64));
+    Ok(json!({"vertices": loaded.game.kept.len(), "triangles": loaded.game.triangles.len(), "triangle_uvs_f32_b64": base_uvs, "lods": lods, "eyes": eyes, "cached": cached,
+              "definition": "each coarser level's triangles as indices into the finest game base's vertex order (the levels are nested subsets of it); a triangle with a vertex outside the finest level is dropped and counted"}))
+}
+
 pub fn save_input() -> Value {
     obj(with(with(base_props(), character_props()), json!({"out": {"type": "string", "minLength": 1, "description": "path of the spec file to write"}})), &["store", "pack", "catalog", "game", "out"])
 }

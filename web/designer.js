@@ -1,3 +1,5 @@
+import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
+
 const params = new URLSearchParams(location.search);
 const store = params.get("store");
 const opt = (k) => params.get(k) || undefined;
@@ -10,27 +12,82 @@ async function api(name, input) {
   return env.result;
 }
 
-const decodeF32 = (b64) => {
+const bytesOf = (b64) => {
   const s = atob(b64);
   const u = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
-  return new Float32Array(u.buffer);
+  return u.buffer;
 };
+const decodeF32 = (b64) => new Float32Array(bytesOf(b64));
+const decodeU32 = (b64) => new Uint32Array(bytesOf(b64));
 
 const D = {
   targets: [], index: new Map(), w: null, w0: null, start: {}, macros: null, macroW: {}, macroW0: {}, macroDelta: {},
   base: {}, kernel: 0, wasm: null, n: 0, tri: 0, settled: null, preview: null, settleCount: 0, settling: false,
   stats: { frames: [], used: [], intervals: [], settles: [], errors: [], flips: [] }, measure: params.get("measure") === "1",
-  camera: { yaw: 0, pitch: 0.08, dist: 0.42, centre: [0, 0, 0] }, shade: 0, dirty: false, pendingSettle: 0, lastSent: null,
-  hooks: { beforeFrame: null },
+  dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
+  history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
+  link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
 };
 window.gfDesigner = D;
+let V = null;
+let gl = null;
+
+const SHORTCUTS = [
+  ["Ctrl+Z", "undo"], ["Ctrl+Y / Ctrl+Shift+Z", "redo"], ["F", "frame the head (active view)"], ["Shift+F", "frame the selection (last slider's region, else the last picked point)"],
+  ["double-click", "set the orbit pivot on the surface point"], ["left drag", "orbit"], ["right / middle / Shift+left drag", "pan"], ["wheel", "zoom (Alt+wheel moves clip plane 1)"],
+  ["O or 5", "perspective / orthographic (matched framing)"], ["1 / Shift+1", "front / back view"], ["3 / Shift+3", "left / right side view"], ["7 / Shift+7", "top / bottom view"], ["9", "three-quarter view"],
+  ["[ / ]", "narrower / wider field of view (framing kept)"], ["L", "layout: single, side by side, quad"], ["N", "next viewport"], ["M / Shift+M", "next / previous render mode"], [", / .", "coarser / finer level of detail"],
+  ["W", "wireframe overlay"], ["X", "hidden edges through the surface (x-ray wire)"], ["P", "vertex points"], ["B", "back-face highlight"], ["E", "seams and boundary edges"],
+  ["C", "clip plane 1 on / off"], ["G", "light gizmo"], ["H / Alt+H", "hide the head / show everything"], ["I", "isolate the head"], ["K / Shift+K", "PNG of the active view / the whole layout"],
+  ["?", "this help"], ["Esc", "close the help"],
+];
+D.shortcuts = SHORTCUTS;
 
 function setStatus(kind, text) {
   const el = $("status");
   el.className = `status ${kind}`;
   el.textContent = text;
   $("label").textContent = kind === "preview" ? "approximate preview: release the slider to settle" : "";
+}
+
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.classList.add("on");
+  clearTimeout(D.toastTimer);
+  D.toastTimer = setTimeout(() => el.classList.remove("on"), 2200);
+}
+
+const SKEY = "gazeforge.designer.v1";
+function loadSettings() { try { return JSON.parse(localStorage.getItem(SKEY) || "{}") || {}; } catch { return {}; } }
+function saveSettings() {
+  clearTimeout(D.saveTimer);
+  D.saveTimer = setTimeout(() => {
+    try {
+      const { hiddenRegions, box, ...opts } = V.opts;
+      localStorage.setItem(SKEY, JSON.stringify({ opts, layout: V.layout, vp: V.vp, link: D.link, refSource: D.refSource, tab: D.tab, preset: D.preset,
+        cams: V.cams.map((c) => ({ fov: c.goal.fov, ortho: c.ortho })) }));
+    } catch {}
+  }, 300);
+}
+function applySettings(s) {
+  if (!s || typeof s !== "object") return;
+  const o = s.opts || {};
+  for (const k of Object.keys(V.opts)) {
+    if (k === "hiddenRegions" || k === "box" || o[k] === undefined) continue;
+    if (k === "lights" && Array.isArray(o.lights)) o.lights.slice(0, MAX_LIGHTS).forEach((l, i) => Object.assign(V.opts.lights[i], l));
+    else if (k === "clip" && Array.isArray(o.clip)) o.clip.slice(0, 3).forEach((c, i) => Object.assign(V.opts.clip[i], c));
+    else if (k === "heat" && typeof o.heat === "object") Object.assign(V.opts.heat, o.heat);
+    else if (typeof o[k] === typeof V.opts[k]) V.opts[k] = o[k];
+  }
+  if (LAYOUTS[s.layout]) V.layout = s.layout;
+  if (Array.isArray(s.vp)) s.vp.slice(0, 4).forEach((x, i) => { if (MODES[x?.mode]) V.vp[i].mode = x.mode; if (Number.isInteger(x?.lod)) V.vp[i].lod = x.lod; });
+  if (Array.isArray(s.cams)) s.cams.slice(0, 4).forEach((c, i) => { if (c && Number.isFinite(c.fov)) V.cams[i].set({ fov: c.fov, ortho: !!c.ortho }, true); });
+  if (typeof s.link === "boolean") D.link = s.link;
+  if (["start", "neutral", "snapshot"].includes(s.refSource)) D.refSource = s.refSource;
+  if (typeof s.tab === "string") D.tab = s.tab;
+  if (typeof s.preset === "string") D.preset = s.preset;
 }
 
 function views() {
@@ -66,9 +123,47 @@ async function loadKernel(pack, blob) {
   D.n = pack.vertices;
   D.tri = pack.triangles;
   D.indices = new Uint32Array(blob, L.triangles.offset, L.triangles.count).slice();
+  D.rows3 = { offs: new Uint32Array(blob, L.offsets.offset, L.offsets.count), index: new Uint32Array(blob, L.index.offset, L.index.count),
+              delta: new Int16Array(blob, L.delta.offset, L.delta.count), scale: new Float32Array(blob, L.scale.offset, L.scale.count) };
 }
 
-let gl = null;
+function targetVertices(t, fraction = 0.25) {
+  const R = D.rows3, out = [];
+  let top = 0;
+  const mags = [];
+  for (let e = R.offs[t]; e < R.offs[t + 1]; e++) {
+    const m = Math.hypot(R.delta[e * 3], R.delta[e * 3 + 1], R.delta[e * 3 + 2]) * R.scale[t];
+    mags.push(m);
+    if (m > top) top = m;
+  }
+  for (let e = R.offs[t], j = 0; e < R.offs[t + 1]; e++, j++) if (mags[j] >= top * fraction && top > 0) out.push(R.index[e]);
+  return out;
+}
+
+function buildRegions() {
+  const R = D.rows3, cats = [...new Set(D.targets.map((t) => t.category))].filter((c) => c !== "head");
+  const names = ["rest of head", ...cats], best = new Float32Array(D.n), reg = new Uint8Array(D.n);
+  let skipped = 0;
+  D.targets.forEach((t, ti) => {
+    const id = names.indexOf(t.category);
+    if (id <= 0) return;
+    const lo = R.offs[ti], hi = R.offs[ti + 1], mag = new Float32Array(hi - lo);
+    let top = 0;
+    for (let e = lo; e < hi; e++) { mag[e - lo] = Math.hypot(R.delta[e * 3], R.delta[e * 3 + 1], R.delta[e * 3 + 2]); top = Math.max(top, mag[e - lo]); }
+    if (top <= 0) return;
+    let wide = 0;
+    for (let j = 0; j < mag.length; j++) if (mag[j] >= 0.5 * top) wide++;
+    if (wide > 0.2 * D.n) { skipped++; return; }
+    for (let e = lo; e < hi; e++) {
+      const g = R.index[e], f = mag[e - lo] / top;
+      if (f >= 0.35 && f > best[g]) { best[g] = f; reg[g] = id; }
+    }
+  });
+  const counts = names.map(() => 0);
+  for (let g = 0; g < D.n; g++) counts[reg[g]]++;
+  D.regions = { names, counts, skipped_wide_targets: skipped };
+  V.setRegions(reg, names);
+}
 
 async function context() {
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -79,106 +174,23 @@ async function context() {
       canvas = fresh;
       await new Promise((r) => setTimeout(r, 400));
     }
-    const g = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true });
+    const g = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true, stencil: true });
     if (g && !g.isContextLost()) {
-      canvas.addEventListener("webglcontextlost", (e) => e.preventDefault());
-      canvas.addEventListener("webglcontextrestored", () => { setupGL(); request(true); });
+      canvas.addEventListener("webglcontextlost", (e) => {
+        e.preventDefault();
+        D.contextLost = (D.contextLost || 0) + 1;
+        setStatus("busy", "graphics context lost; waiting for the browser to restore it");
+      });
+      canvas.addEventListener("webglcontextrestored", () => {
+        D.contextRestored = (D.contextRestored || 0) + 1;
+        if (V) { V.restore(); request(true); }
+        setStatus("settled", "graphics context restored");
+      });
       D.contextAttempts = attempt + 1;
       return g;
     }
   }
   return null;
-}
-const VS = `#version 300 es
-in vec3 p; in vec3 n; uniform mat4 mvp; out vec3 vn; out vec3 vp;
-void main() { vn = n; vp = p; gl_Position = mvp * vec4(p, 1.0); }`;
-const FS = `#version 300 es
-precision highp float; in vec3 vn; in vec3 vp; uniform int mode; uniform vec3 eye; out vec4 o;
-void main() {
-  vec3 n = normalize(vn);
-  if (mode == 1) { o = vec4(n * 0.5 + 0.5, 1.0); return; }
-  vec3 v = normalize(eye - vp);
-  vec3 key = normalize(vec3(-0.4, -0.8, 0.6)), fill = normalize(vec3(0.7, -0.5, 0.1));
-  float d = max(dot(n, key), 0.0) * 0.75 + max(dot(n, fill), 0.0) * 0.25 + 0.12;
-  float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.25;
-  vec3 c = vec3(0.80, 0.74, 0.68) * d + rim;
-  if (dot(n, v) < 0.0) c = mix(c, vec3(0.8, 0.1, 0.1), 0.5);
-  o = vec4(c, 1.0);
-}`;
-
-function program() {
-  const sh = (type, src) => {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader: ${gl.getShaderInfoLog(s)}; context lost: ${gl.isContextLost()}`);
-    return s;
-  };
-  const p = gl.createProgram();
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
-  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(p)}; context lost: ${gl.isContextLost()}`);
-  return p;
-}
-
-function setupGL() {
-  if (!gl) throw new Error("WebGL2 is not available in this browser (on some Windows boxes Chrome needs --use-angle=gl)");
-  D.prog = program();
-  D.vao = gl.createVertexArray();
-  gl.bindVertexArray(D.vao);
-  const buf = (loc, data) => {
-    const b = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, b);
-    gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-    return b;
-  };
-  D.pbuf = buf(gl.getAttribLocation(D.prog, "p"), new Float32Array(D.n * 3));
-  D.nbuf = buf(gl.getAttribLocation(D.prog, "n"), new Float32Array(D.n * 3));
-  const ib = gl.createBuffer();
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, D.indices, gl.STATIC_DRAW);
-  gl.enable(gl.DEPTH_TEST);
-  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-  D.renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-}
-
-function mat(yaw, pitch, dist, centre, aspect) {
-  const eye = [centre[0] + dist * Math.sin(yaw) * Math.cos(pitch), centre[1] - dist * Math.cos(yaw) * Math.cos(pitch), centre[2] + dist * Math.sin(pitch)];
-  const f = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
-  const norm = (a) => { const l = Math.hypot(...a); return a.map((x) => x / l); };
-  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  const fz = norm(f), s = norm(cross(fz, [0, 0, 1])), u = cross(s, fz);
-  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  const view = [s[0], u[0], -fz[0], 0, s[1], u[1], -fz[1], 0, s[2], u[2], -fz[2], 0, -dot(s, eye), -dot(u, eye), dot(fz, eye), 1];
-  const fov = 0.5, near = 0.01, far = 5, t = 1 / Math.tan(fov / 2);
-  const proj = [t / aspect, 0, 0, 0, 0, t, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, (2 * far * near) / (near - far), 0];
-  const m = new Float32Array(16);
-  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
-    let x = 0;
-    for (let k = 0; k < 4; k++) x += proj[k * 4 + r] * view[c * 4 + k];
-    m[c * 4 + r] = x;
-  }
-  return { m, eye };
-}
-
-function draw() {
-  const c = gl.canvas, dpr = window.devicePixelRatio || 1;
-  const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
-  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-  gl.viewport(0, 0, w, h);
-  const bg = matchMedia("(prefers-color-scheme: dark)").matches ? [0.11, 0.11, 0.12] : [0.93, 0.93, 0.92];
-  gl.clearColor(...bg, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  gl.useProgram(D.prog);
-  const cam = D.camera, { m, eye } = mat(cam.yaw, cam.pitch, cam.dist, cam.centre, w / h);
-  gl.uniformMatrix4fv(gl.getUniformLocation(D.prog, "mvp"), false, m);
-  gl.uniform3fv(gl.getUniformLocation(D.prog, "eye"), eye);
-  gl.uniform1i(gl.getUniformLocation(D.prog, "mode"), D.shade);
-  gl.bindVertexArray(D.vao);
-  gl.drawElements(gl.TRIANGLES, D.tri * 3, gl.UNSIGNED_INT, 0);
 }
 
 function computePreview() {
@@ -196,20 +208,24 @@ function computePreview() {
   return D.wasm.gf_preview(D.kernel, extra);
 }
 
+function activePose() { let last = null; for (const p of D.poses.values()) last = p; return last; }
+
 function frame(ts) {
   D.raf = 0;
   const t0 = performance.now();
   if (D.hooks.beforeFrame) D.hooks.beforeFrame();
   if (D.dirty) {
-    D.lastUsed = computePreview();
-    const v = views();
-    gl.bindBuffer(gl.ARRAY_BUFFER, D.pbuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, v.positions);
-    gl.bindBuffer(gl.ARRAY_BUFFER, D.nbuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, v.normals);
+    const pose = activePose();
+    if (pose) V.updateHead(pose.positions, pose.normals);
+    else {
+      D.lastUsed = computePreview();
+      const v = views();
+      V.updateHead(v.positions, v.normals);
+    }
     D.dirty = false;
   }
-  draw();
+  const dt = D.lastTs ? Math.max(0, (ts - D.lastTs) / 1000) : 0.016;
+  const moving = V.render(dt);
   if (D.measure) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
   const t1 = performance.now();
   if (D.dragging) {
@@ -220,11 +236,12 @@ function frame(ts) {
   }
   D.lastTs = ts;
   D.frameCount = (D.frameCount || 0) + 1;
+  if (moving) request(false);
 }
 
 function request(dirty = true) {
   if (dirty) D.dirty = true;
-  if (!D.raf) D.raf = requestAnimationFrame(frame);
+  if (!D.raf && V) D.raf = requestAnimationFrame(frame);
 }
 
 function changed() {
@@ -248,6 +265,22 @@ function settleInput() {
   return input;
 }
 
+function needUV() { return V.opts.seams || V.vp.some((s) => s.mode === MODE_INDEX.uv); }
+
+function notify(kind, extra = {}) {
+  if (!D.listeners.length) return;
+  if (kind === "slider") {
+    if (D.sliderNotice) return;
+    D.sliderNotice = setTimeout(() => { D.sliderNotice = 0; fire("slider", {}); }, 0);
+    return;
+  }
+  setTimeout(() => fire(kind, extra), 0);
+}
+function fire(kind, extra) {
+  const state = JSON.parse(JSON.stringify(settleInput()));
+  for (const cb of D.listeners) { try { cb(state, { kind, ...extra }); } catch (e) { console.error(e); } }
+}
+
 async function settle(full) {
   if (D.settling) { D.pendingSettle = 1; return; }
   clearTimeout(D.fullTimer);
@@ -256,9 +289,11 @@ async function settle(full) {
   const wSent = D.w.slice(), mSent = { ...D.macroW };
   const t0 = performance.now();
   let r;
+  const wantUV = needUV();
   try {
     const input = settleInput();
     if (params.get("fast") === "1" && !full) input.fast = true;
+    if (wantUV) input.uvs = true;
     r = await api("designer.settle", input);
   } catch (e) {
     D.settling = false;
@@ -267,7 +302,6 @@ async function settle(full) {
   }
   const pos = decodeF32(r.positions_f32_b64);
   const rtt = performance.now() - t0;
-  const v = views();
   const same = wSent.every((x, i) => x === D.w[i]) && Object.keys(mSent).every((k) => mSent[k] === D.macroW[k]);
   if (D.settleCount > 0 && same) {
     computePreview();
@@ -281,17 +315,20 @@ async function settle(full) {
   }
   D.stats.settles.push({ rtt_ms: rtt, server: r.timing_ms, same, draft: !!r.approximate });
   views().anchor.set(pos);
+  if (!D.startPositions) D.startPositions = pos.slice();
+  if (r.triangle_uvs_f32_b64 && V.meshes.get("head")) { V.setLodUVs(V.meshes.get("head").lods[0], decodeF32(r.triangle_uvs_f32_b64)); D.placedUVs = true; }
   D.w0 = wSent;
   D.macroW0 = mSent;
   D.macroDelta = {};
   D.settled = r;
+  D.settledPositions = pos;
   D.settleCount++;
   D.settling = false;
-  showMeasure(r.measurements);
   const kind = r.approximate ? `${r.placement} draft (approximate, ${r.draft.rounds} of ${r.draft.full_rounds} fit rounds; save and export use the full placement)` : r.placement;
   setStatus(changed() ? "preview" : "settled", changed() ? "preview (approximate)" : `settled ${kind} ${rtt.toFixed(0)} ms`);
-  $("info").textContent = `${D.n} vertices, ${D.tri} triangles, ${D.targets.length} targets loaded, ${D.renderer || ""}`;
+  $("info").textContent = `${D.n} vertices, ${D.tri} triangles, ${D.targets.length} targets loaded, ${V.renderer || ""}`;
   request(true);
+  notify("settle", { positions: pos, measurements: r.measurements, revision: r.revision, placement: r.placement });
   if (D.pendingSettle) { D.pendingSettle = 0; settle(); }
   else if (r.approximate && !changed()) D.fullTimer = setTimeout(() => { if (!changed() && !D.settling) settle(true); }, 3000);
 }
@@ -302,9 +339,47 @@ function scheduleSettle() {
   D.timer = setTimeout(settle, 150);
 }
 
-function showMeasure(m) {
-  const rows = Object.entries(m || {}).map(([k, x]) => `<tr><td>${k}</td><td>${x.mm.toFixed(2)}</td><td>${x.delta_mm >= 0 ? "+" : ""}${x.delta_mm.toFixed(2)}</td></tr>`);
-  $("measure").innerHTML = rows.join("");
+function renderHistory() {
+  const H = D.history, list = $("history");
+  $("undo").disabled = !H.done.length;
+  $("redo").disabled = !H.undone.length;
+  $("undo").title = H.done.length ? `Undo ${H.done[H.done.length - 1].label} (Ctrl+Z)` : "Nothing to undo (Ctrl+Z)";
+  $("redo").title = H.undone.length ? `Redo ${H.undone[H.undone.length - 1].label} (Ctrl+Y)` : "Nothing to redo (Ctrl+Y)";
+  if (!list) return;
+  const rows = [`<li class="${H.done.length ? "" : "now"}" data-at="0">start</li>`];
+  H.done.forEach((e, i) => rows.push(`<li class="${i === H.done.length - 1 ? "now" : ""}" data-at="${i + 1}">${escapeHtml(e.label)}</li>`));
+  [...H.undone].reverse().forEach((e, i) => rows.push(`<li class="undone" data-at="${H.done.length + i + 1}">${escapeHtml(e.label)}</li>`));
+  list.innerHTML = rows.join("");
+}
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function pushUndo(entry) {
+  if (!entry || typeof entry.undo !== "function" || typeof entry.redo !== "function") throw new Error("pushUndo needs { label, undo(), redo() }");
+  const H = D.history;
+  H.done.push({ label: String(entry.label || "edit"), undo: entry.undo, redo: entry.redo });
+  if (H.done.length > H.limit) H.done.shift();
+  H.undone.length = 0;
+  renderHistory();
+}
+function undo() {
+  const e = D.history.done.pop();
+  if (!e) return;
+  try { e.undo(); } catch (err) { toast(`undo failed: ${err.message}`); }
+  D.history.undone.push(e);
+  renderHistory();
+  toast(`undo: ${e.label}`);
+}
+function redo() {
+  const e = D.history.undone.pop();
+  if (!e) return;
+  try { e.redo(); } catch (err) { toast(`redo failed: ${err.message}`); }
+  D.history.done.push(e);
+  renderHistory();
+  toast(`redo: ${e.label}`);
+}
+function historyTo(at) {
+  while (D.history.done.length > at) undo();
+  while (D.history.done.length < at && D.history.undone.length) redo();
 }
 
 function sliderRow(label, value, onInput, onChange, onDown) {
@@ -320,10 +395,32 @@ function sliderRow(label, value, onInput, onChange, onDown) {
   return { row, input, out };
 }
 
+function showWeight(i) {
+  const s = D.rows[i], t = D.targets[i];
+  s.input.value = D.w[i];
+  s.out.textContent = D.w[i].toFixed(3);
+  s.row.classList.toggle("changed", D.w[i] !== (D.start.weights[t.id] || 0));
+}
+
+function setWeights(pairs, macros) {
+  for (const [i, x] of pairs) { D.w[i] = x; D.committed[i] = x; showWeight(i); }
+  if (macros) for (const [name, x] of Object.entries(macros)) {
+    D.macroW[name] = x;
+    D.macroCommitted[name] = x;
+    const m = (D.macroRows || []).find((r) => r.name === name);
+    if (m) { m.input.value = x; m.out.textContent = Number(x).toFixed(3); }
+  }
+  setStatus("preview", "preview (approximate)");
+  request(true);
+  notify("slider");
+  scheduleSettle();
+}
+
 function buildSliders() {
   const list = $("list"), cats = $("category");
   let current = "";
   D.rows = [];
+  D.committed = D.w.slice();
   D.targets.forEach((t, i) => {
     if (t.category !== current) {
       current = t.category;
@@ -336,15 +433,25 @@ function buildSliders() {
       o.value = o.textContent = current;
       cats.appendChild(o);
     }
-    const s = sliderRow(t.id.split("/").pop(), D.w[i], (x) => {
+    const name = t.id.split("/").pop();
+    const s = sliderRow(name, D.w[i], (x) => {
       D.w[i] = x;
+      D.lastTarget = i;
       s.row.classList.toggle("changed", x !== (D.start.weights[t.id] || 0));
       setStatus("preview", "preview (approximate)");
       request(true);
-    }, scheduleSettle);
+      notify("slider");
+    }, () => {
+      const from = D.committed[i], to = D.w[i];
+      if (from !== to) {
+        D.committed[i] = to;
+        pushUndo({ label: `${name} ${from.toFixed(3)} → ${to.toFixed(3)}`, undo: () => setWeights([[i, from]]), redo: () => setWeights([[i, to]]) });
+      }
+      scheduleSettle();
+    });
     s.row.dataset.id = t.id;
     s.row.dataset.category = t.category;
-    s.input.addEventListener("dblclick", () => { s.input.value = D.start.weights[t.id] || 0; s.input.dispatchEvent(new Event("input")); scheduleSettle(); });
+    s.input.addEventListener("dblclick", () => { s.input.value = D.start.weights[t.id] || 0; s.input.dispatchEvent(new Event("input")); s.input.dispatchEvent(new Event("change")); });
     list.appendChild(s.row);
     D.rows.push(s);
   });
@@ -356,12 +463,11 @@ function buildSliders() {
   $("search").addEventListener("input", filter);
   cats.addEventListener("change", filter);
   $("reset").addEventListener("click", () => {
-    D.targets.forEach((t, i) => { D.w[i] = D.start.weights[t.id] || 0; D.rows[i].input.value = D.w[i]; D.rows[i].out.textContent = D.w[i].toFixed(3); D.rows[i].row.classList.remove("changed"); });
-    Object.assign(D.macroW, D.macroStart);
-    (D.macroRows || []).forEach((m) => { m.input.value = D.macroW[m.name]; m.out.textContent = Number(D.macroW[m.name]).toFixed(3); });
-    setStatus("preview", "preview (approximate)");
-    request(true);
-    scheduleSettle();
+    const before = D.w.slice(), mBefore = { ...D.macroW };
+    const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart };
+    const apply = (w, m) => setWeights(w.map((x, i) => [i, x]), m);
+    apply(after, mAfter);
+    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore), redo: () => apply(after, mAfter) });
   });
 }
 
@@ -371,12 +477,20 @@ function buildMacros() {
   D.macroStart = {};
   for (const s of D.macros.sliders) { D.macroBase[s.name] = s.base; D.macroStart[s.name] = s.value; D.macroW[s.name] = s.value; }
   D.macroW0 = { ...D.macroW };
+  D.macroCommitted = { ...D.macroW };
   if (!D.macros.available) {
     box.innerHTML = `<div class="note">unavailable: ${D.macros.reason}</div>`;
     return;
   }
   D.macroRows = D.macros.sliders.map((m) => {
-    const s = sliderRow(m.name, m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", "preview (approximate)"); request(true); }, scheduleSettle, async () => {
+    const s = sliderRow(m.name, m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", "preview (approximate)"); request(true); notify("slider"); }, () => {
+      const from = D.macroCommitted[m.name], to = D.macroW[m.name];
+      if (from !== to) {
+        D.macroCommitted[m.name] = to;
+        pushUndo({ label: `macro ${m.name} ${Number(from).toFixed(3)} → ${Number(to).toFixed(3)}`, undo: () => setWeights([], { [m.name]: from }), redo: () => setWeights([], { [m.name]: to }) });
+      }
+      scheduleSettle();
+    }, async () => {
       if (D.macroDelta[m.name]) return;
       const input = { ...settleInput(), macro: opt("macro"), slider: m.name, macros: { sliders: { ...D.macroW0 }, mode: D.start.macros?.mode || "gf", head_scale: D.start.macros?.head_scale ?? 1 } };
       delete input.eyes;
@@ -395,22 +509,506 @@ function buildMacros() {
   });
 }
 
-function orbit() {
+function slotsUsed() { return V.rects().map((r) => r.slot); }
+function setMode(i) {
+  const k = ((i % MODES.length) + MODES.length) % MODES.length;
+  if (D.link) for (const s of slotsUsed()) V.vp[s].mode = k; else V.activeVp().mode = k;
+  if (k === MODE_INDEX.displacement) ensureReference();
+  if (needUV() && !D.placedUVs && D.ready) settle();
+  refreshToolbar();
+  request(false);
+  saveSettings();
+}
+function setLod(i) {
+  const head = V.meshes.get("head"), n = head ? head.lods.length : 1, k = Math.max(0, Math.min(n - 1, i));
+  if (D.link) for (const s of slotsUsed()) V.vp[s].lod = k; else V.activeVp().lod = k;
+  refreshToolbar();
+  request(false);
+  saveSettings();
+}
+function setLayout(name) {
+  if (!LAYOUTS[name]) return;
+  const mode = V.activeVp().mode, lod = V.activeVp().lod;
+  V.layout = name;
+  V.active = Math.min(V.active, LAYOUTS[name].length - 1);
+  if (D.link) for (const s of slotsUsed()) { V.vp[s].mode = mode; V.vp[s].lod = lod; }
+  refreshToolbar();
+  request(false);
+  saveSettings();
+}
+const NAMED = { front: [0, 0], back: [Math.PI, 0], left: [Math.PI / 2, 0], right: [-Math.PI / 2, 0], top: [0, Math.PI / 2], bottom: [0, -Math.PI / 2], threequarter: [0.61, 0.14] };
+function namedView(name) {
+  const v = NAMED[name];
+  if (!v) return;
+  const cam = V.activeCam();
+  cam.view(v[0], v[1]);
+  cam.name = name === "threequarter" ? "three-quarter" : name;
+  refreshToolbar();
+  request(false);
+}
+function toggleOrtho() {
+  const cam = V.activeCam();
+  cam.ortho = !cam.ortho;
+  refreshToolbar();
+  request(false);
+  saveSettings();
+}
+function setFov(f) {
+  const cam = V.activeCam(), old = cam.goal.fov, nf = Math.max(10, Math.min(90, f));
+  cam.set({ fov: nf, dist: (cam.goal.dist * Math.tan((old * Math.PI) / 360)) / Math.tan((nf * Math.PI) / 360) });
+  refreshToolbar();
+  request(false);
+  saveSettings();
+}
+function frameHead() {
+  const head = V.meshes.get("head");
+  if (!head?.cpuPos) return;
+  V.frameBox(V.computeBounds(head.cpuPos), [V.activeCam()]);
+  V.pivotFlash = 0.6;
+  request(false);
+}
+function frameSelection() {
+  const head = V.meshes.get("head");
+  if (!head?.cpuPos) return;
+  let pts = [];
+  if (D.lastTarget >= 0) pts = targetVertices(D.lastTarget);
+  if (pts.length) {
+    const sel = new Float32Array(pts.length * 3);
+    pts.forEach((g, j) => sel.set(head.cpuPos.subarray(g * 3, g * 3 + 3), j * 3));
+    const b = V.computeBounds(sel);
+    b.radius = Math.max(b.radius, 0.01);
+    V.frameBox(b, [V.activeCam()]);
+    toast(`framed ${D.targets[D.lastTarget].id} (${pts.length} vertices)`);
+  } else if (D.lastPick) {
+    V.frameBox({ centre: D.lastPick, radius: 0.03 }, [V.activeCam()]);
+    toast("framed the picked point");
+  } else { toast("nothing selected: move a slider or double-click the surface first"); return; }
+  V.pivotFlash = 0.6;
+  request(false);
+}
+
+async function ensureReference() {
+  const head = V.meshes.get("head");
+  if (!head) return;
+  try {
+    let ref = null;
+    if (D.refSource === "start") ref = D.startPositions;
+    else if (D.refSource === "snapshot") ref = head.cpuPos ? head.cpuPos.slice() : null;
+    else {
+      if (!D.neutral) {
+        toast("settling the neutral base for the reference");
+        const input = { store, ...D.base, placement: D.start.placement, name: "neutral", weights: {} };
+        if (opt("eyes")) input.eyes = opt("eyes");
+        D.neutral = decodeF32((await api("designer.settle", input)).positions_f32_b64);
+      }
+      ref = D.neutral;
+    }
+    V.setReference(ref);
+    request(false);
+  } catch (e) { toast(`reference failed: ${e.message}`); }
+}
+
+function screenshot(which) {
+  V.render(0);
+  const url = V.screenshot(which);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `gazeforge_${which}_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  return url;
+}
+
+function visItems() {
+  const items = [];
+  for (const m of V.meshes.values()) items.push({ kind: "mesh", id: m.id, label: m.label || m.id, on: m.visible });
+  for (const o of V.overlays.values()) items.push({ kind: "overlay", id: o.id, label: `${o.id} (overlay)`, on: o.visible });
+  return items;
+}
+function visState() { return visItems().map((x) => [x.kind, x.id, x.on]); }
+function applyVis(state) {
+  for (const [kind, id, on] of state) { const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id); if (t) t.visible = on; }
+  renderVisibility();
+  request(false);
+}
+function visEdit(label, mutate) {
+  const before = visState();
+  mutate();
+  const after = visState();
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  applyVis(after);
+  pushUndo({ label, undo: () => applyVis(before), redo: () => applyVis(after) });
+}
+function setVisible(kind, id, on) {
+  visEdit(`${on ? "show" : "hide"} ${id}`, () => { const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id); if (t) t.visible = on; });
+}
+function isolate(kind, id) {
+  visEdit(`isolate ${id}`, () => { for (const m of V.meshes.values()) m.visible = kind === "mesh" && m.id === id; for (const o of V.overlays.values()) o.visible = kind === "overlay" && o.id === id; });
+}
+function showAll() {
+  visEdit("show everything", () => { for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
+  if (V.opts.hiddenRegions) setRegionMask(0, "show all regions");
+}
+function renderVisibility() {
+  const box = $("visibility");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const it of visItems()) {
+    const row = document.createElement("div");
+    row.className = "vis";
+    row.innerHTML = `<label><input type="checkbox" ${it.on ? "checked" : ""}> ${escapeHtml(it.label)}</label><button class="small">isolate</button>`;
+    row.querySelector("input").addEventListener("change", (e) => setVisible(it.kind, it.id, e.target.checked));
+    row.querySelector("button").addEventListener("click", () => isolate(it.kind, it.id));
+    box.appendChild(row);
+  }
+}
+function setRegionMask(mask, label) {
+  const before = V.opts.hiddenRegions;
+  if (before === mask) return;
+  const apply = (m) => { V.opts.hiddenRegions = m; renderRegions(); request(false); };
+  apply(mask);
+  pushUndo({ label, undo: () => apply(before), redo: () => apply(mask) });
+}
+function renderRegions() {
+  const box = $("regions");
+  if (!box || !D.regions) return;
+  box.innerHTML = "";
+  D.regions.names.forEach((name, i) => {
+    const row = document.createElement("label");
+    row.className = "region";
+    const hidden = (V.opts.hiddenRegions >>> i) & 1;
+    row.innerHTML = `<input type="checkbox" ${hidden ? "" : "checked"}> ${escapeHtml(name)} <span class="muted">${D.regions.counts[i]}</span>`;
+    row.querySelector("input").addEventListener("change", (e) => setRegionMask(e.target.checked ? V.opts.hiddenRegions & ~(1 << i) : V.opts.hiddenRegions | (1 << i), `${e.target.checked ? "show" : "hide"} region ${name}`));
+    box.appendChild(row);
+  });
+}
+function bindOpt(el) {
+  const path = el.dataset.opt.split(".");
+  const holder = () => path.slice(0, -1).reduce((o, k) => o[k], V.opts);
+  const key = path[path.length - 1];
+  const numeric = el.type === "range" || el.type === "number" || "num" in el.dataset;
+  const read = () => (el.type === "checkbox" ? el.checked : numeric ? Number(el.value) : el.value);
+  const out = el.parentElement.querySelector(".val");
+  const write = () => {
+    const v = holder()[key];
+    if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+    if (out) out.textContent = el.dataset.fmt === "mm" ? `${(Number(v) * 1000).toFixed(1)} mm` : Number.isFinite(Number(v)) && el.type === "range" ? Number(v).toFixed(Number(el.step) < 0.1 ? 2 : 0) : "";
+  };
+  const isBox = path[0] === "box";
+  let boxBefore = null;
+  el.addEventListener("pointerdown", () => { if (isBox) boxBefore = JSON.stringify(V.opts.box); });
+  el.addEventListener("input", () => {
+    if (isBox && boxBefore === null) boxBefore = JSON.stringify(V.opts.box);
+    holder()[key] = read();
+    write();
+    if (path[0] === "lights" || path[0] === "ambient" || path[0] === "ground") { D.preset = "custom"; $("preset").value = "custom"; }
+    if (path[0] === "seams" && needUV() && !D.placedUVs && D.ready) settle();
+    request(false);
+    if (!isBox) saveSettings();
+  });
+  if (isBox) el.addEventListener("change", () => {
+    const before = boxBefore || JSON.stringify(V.opts.box), after = JSON.stringify(V.opts.box);
+    boxBefore = null;
+    if (before === after) return;
+    const apply = (s) => { Object.assign(V.opts.box, JSON.parse(s)); refreshOpts(); request(false); };
+    pushUndo({ label: path[1] === "on" ? `${V.opts.box.on ? "hide" : "show"} box region` : "move the hide box", undo: () => apply(before), redo: () => apply(after) });
+  });
+  D.optWriters.push(write);
+  write();
+}
+function refreshOpts() { for (const w of D.optWriters) w(); }
+
+function applyPreset(name) {
+  const p = LIGHT_PRESETS[name];
+  if (!p) return;
+  D.preset = name;
+  V.opts.ambient = p.ambient;
+  V.opts.ground = p.ground;
+  V.opts.lights.forEach((l, i) => Object.assign(l, p.lights[i] ? { on: true, ...p.lights[i] } : { on: false }));
+  refreshOpts();
+  $("preset").value = name;
+  request(false);
+  saveSettings();
+}
+
+function toggleOpt(path, label) {
+  const parts = path.split("."), holder = parts.slice(0, -1).reduce((o, k) => o[k], V.opts), key = parts[parts.length - 1];
+  holder[key] = !holder[key];
+  refreshOpts();
+  if (path === "seams" && needUV() && !D.placedUVs && D.ready) settle();
+  toast(`${label} ${holder[key] ? "on" : "off"}`);
+  request(false);
+  saveSettings();
+}
+
+function refreshToolbar() {
+  const st = V.activeVp(), cam = V.activeCam();
+  $("mode").value = String(st.mode);
+  $("lod").value = String(st.lod);
+  $("layout").value = V.layout;
+  $("proj").textContent = cam.ortho ? "ortho" : "persp";
+  $("fov").value = cam.goal.fov;
+  $("fov-val").textContent = `${cam.goal.fov.toFixed(0)}°`;
+  $("link").checked = D.link;
+  request(false);
+}
+
+function buildControls() {
+  const mode = $("mode");
+  MODES.forEach((m, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = m.label; mode.appendChild(o); });
+  mode.addEventListener("input", () => setMode(Number(mode.value)));
+  const lod = $("lod"), head = V.meshes.get("head");
+  head.lods.forEach((l, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = `LOD${i} · ${l.tri} tris`; lod.appendChild(o); });
+  lod.addEventListener("input", () => setLod(Number(lod.value)));
+  $("layout").addEventListener("input", (e) => setLayout(e.target.value));
+  $("proj").addEventListener("click", toggleOrtho);
+  $("named").addEventListener("input", (e) => { if (e.target.value) namedView(e.target.value); e.target.value = ""; });
+  $("frame").addEventListener("click", frameHead);
+  $("frame-sel").addEventListener("click", frameSelection);
+  $("shot").addEventListener("click", (e) => screenshot(e.shiftKey ? "layout" : "viewport"));
+  $("shot-layout").addEventListener("click", () => screenshot("layout"));
+  $("help-btn").addEventListener("click", () => $("help").classList.toggle("hidden"));
+  $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").classList.add("hidden"); });
+  $("undo").addEventListener("click", undo);
+  $("redo").addEventListener("click", redo);
+  $("history").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) historyTo(Number(li.dataset.at)); });
+  $("fov").addEventListener("input", (e) => setFov(Number(e.target.value)));
+  $("link").addEventListener("change", (e) => { D.link = e.target.checked; saveSettings(); });
+  $("show-all").addEventListener("click", showAll);
+  $("ref").value = D.refSource;
+  $("ref").addEventListener("input", (e) => { D.refSource = e.target.value; ensureReference(); saveSettings(); });
+  $("ref-now").addEventListener("click", () => { D.refSource = "snapshot"; $("ref").value = "snapshot"; ensureReference(); saveSettings(); });
+  const preset = $("preset");
+  for (const [k, p] of Object.entries(LIGHT_PRESETS)) { const o = document.createElement("option"); o.value = k; o.textContent = p.label; preset.appendChild(o); }
+  const c = document.createElement("option"); c.value = "custom"; c.textContent = "custom"; preset.appendChild(c);
+  preset.value = D.preset;
+  preset.addEventListener("input", () => applyPreset(preset.value));
+  const lights = $("lights");
+  for (let i = 0; i < MAX_LIGHTS; i++) {
+    const row = document.createElement("div");
+    row.className = "light";
+    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="lights.${i}.on"> light ${i + 1}</label>
+      <label>azimuth <input type="range" min="-180" max="180" step="1" data-opt="lights.${i}.az"><span class="val"></span></label>
+      <label>elevation <input type="range" min="-90" max="90" step="1" data-opt="lights.${i}.el"><span class="val"></span></label>
+      <label>intensity <input type="range" min="0" max="3" step="0.01" data-opt="lights.${i}.i"><span class="val"></span></label>
+      <label>colour K <input type="range" min="2000" max="12000" step="100" data-opt="lights.${i}.k"><span class="val"></span></label>`;
+    lights.appendChild(row);
+  }
+  const clips = $("clips");
+  for (let i = 0; i < 3; i++) {
+    const row = document.createElement("div");
+    row.className = "clip";
+    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="clip.${i}.on"> plane ${i + 1}</label>
+      <label>axis <select data-opt="clip.${i}.axis"><option value="x">x (left-right)</option><option value="y">y (front-back)</option><option value="z">z (up-down)</option><option value="free">free</option></select></label>
+      <label>offset <input type="range" min="-0.15" max="0.15" step="0.0005" data-opt="clip.${i}.offset" data-fmt="mm"><span class="val"></span></label>
+      <label>azimuth (free) <input type="range" min="-180" max="180" step="1" data-opt="clip.${i}.az"><span class="val"></span></label>
+      <label>elevation (free) <input type="range" min="-90" max="90" step="1" data-opt="clip.${i}.el"><span class="val"></span></label>
+      <label><input type="checkbox" data-opt="clip.${i}.flip"> keep the other side</label>
+      <label><input type="checkbox" data-opt="clip.${i}.slab"> slab, thickness <input type="range" min="0.0005" max="0.05" step="0.0005" data-opt="clip.${i}.thick" data-fmt="mm"><span class="val"></span></label>`;
+    clips.appendChild(row);
+  }
+  document.querySelectorAll("[data-opt]").forEach(bindOpt);
+  document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("help-list").innerHTML = SHORTCUTS.map(([k, what]) => `<tr><td><kbd>${escapeHtml(k)}</kbd></td><td>${escapeHtml(what)}</td></tr>`).join("");
+  showTab(D.tab);
+  refreshToolbar();
+  renderHistory();
+  renderVisibility();
+  renderRegions();
+}
+
+function showTab(name) {
+  if (!$(`tab-${name}`)) name = "shape";
+  D.tab = name;
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === `tab-${name}`));
+  saveSettings();
+}
+
+function interaction() {
   const c = gl.canvas;
   let drag = null;
-  c.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY }; c.setPointerCapture(e.pointerId); });
+  c.addEventListener("contextmenu", (e) => e.preventDefault());
+  c.addEventListener("pointerdown", (e) => {
+    const r = V.rectAt(e.clientX, e.clientY);
+    V.active = r.slot;
+    drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey, cam: V.cams[r.cam], h: r.h };
+    c.setPointerCapture(e.pointerId);
+    V.pivotFlash = 0.4;
+    refreshToolbar();
+  });
   c.addEventListener("pointermove", (e) => {
     if (!drag) return;
-    D.camera.yaw -= (e.clientX - drag.x) * 0.008;
-    D.camera.pitch = Math.max(-1.4, Math.min(1.4, D.camera.pitch + (e.clientY - drag.y) * 0.008));
-    drag = { x: e.clientX, y: e.clientY };
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y, cam = drag.cam;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (drag.pan) {
+      const b = cam.basis(cam.goal), wpp = (2 * cam.goal.dist * Math.tan((cam.goal.fov * Math.PI) / 360)) / drag.h;
+      cam.set({ target: cam.goal.target.map((x, k) => x - b.s[k] * dx * wpp + b.u[k] * dy * wpp) });
+    } else {
+      cam.set({ yaw: cam.goal.yaw - dx * 0.008, pitch: cam.goal.pitch + dy * 0.008 });
+      if (cam.name !== "perspective") cam.name = "free";
+    }
+    V.pivotFlash = 0.4;
     request(false);
   });
-  c.addEventListener("pointerup", () => { drag = null; });
-  c.addEventListener("wheel", (e) => { D.camera.dist = Math.max(0.1, Math.min(2, D.camera.dist * Math.exp(e.deltaY * 0.001))); request(false); e.preventDefault(); }, { passive: false });
-  document.querySelectorAll("[data-cam]").forEach((b) => b.addEventListener("click", () => { D.camera.yaw = (Number(b.dataset.cam) * Math.PI) / 180; D.camera.pitch = 0.08; request(false); }));
-  $("shade").addEventListener("change", (e) => { D.shade = Number(e.target.value); request(false); });
+  const end = () => { drag = null; };
+  c.addEventListener("pointerup", end);
+  c.addEventListener("pointercancel", end);
+  c.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (e.altKey) {
+      const p = V.opts.clip[0];
+      p.on = true;
+      p.offset = Math.max(-0.15, Math.min(0.15, p.offset - Math.sign(e.deltaY) * 0.001));
+      refreshOpts();
+      request(false);
+      return;
+    }
+    const r = V.rectAt(e.clientX, e.clientY), cam = V.cams[r.cam];
+    cam.set({ dist: cam.goal.dist * Math.exp(e.deltaY * 0.0012) });
+    request(false);
+  }, { passive: false });
+  c.addEventListener("dblclick", (e) => {
+    const hit = V.pick(e.clientX, e.clientY);
+    if (!hit) { toast("no surface under the cursor"); return; }
+    const r = V.rectAt(e.clientX, e.clientY);
+    V.cams[r.cam].set({ target: hit.point });
+    D.lastPick = hit.point;
+    D.lastTarget = -1;
+    V.pivotFlash = 0.8;
+    toast(`pivot on ${hit.mesh} at ${hit.point.map((x) => (x * 1000).toFixed(1)).join(", ")} mm`);
+    request(false);
+  });
   window.addEventListener("resize", () => request(false));
+  window.addEventListener("keydown", (e) => {
+    if (e.target.matches?.("input[type=text], input[type=search], textarea")) return;
+    const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && (k === "z" || k === "Z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if (ctrl && (k === "y" || ((k === "z" || k === "Z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
+    if (ctrl || (e.altKey && k !== "h" && k !== "H")) return;
+    const code = e.code, handled = () => e.preventDefault();
+    if (k === "?") { $("help").classList.toggle("hidden"); return handled(); }
+    if (k === "Escape") { $("help").classList.add("hidden"); return; }
+    if (code === "Digit1" || code === "Numpad1") { namedView(e.shiftKey ? "back" : "front"); return handled(); }
+    if (code === "Digit3" || code === "Numpad3") { namedView(e.shiftKey ? "right" : "left"); return handled(); }
+    if (code === "Digit7" || code === "Numpad7") { namedView(e.shiftKey ? "bottom" : "top"); return handled(); }
+    if (code === "Digit9" || code === "Numpad9") { namedView("threequarter"); return handled(); }
+    if (code === "Digit5" || code === "Numpad5" || k === "o" || k === "O") { toggleOrtho(); return handled(); }
+    switch (k.toLowerCase()) {
+      case "f": e.shiftKey ? frameSelection() : frameHead(); break;
+      case "l": setLayout({ single: "side", side: "quad", quad: "single" }[V.layout]); break;
+      case "n": V.active = (V.active + 1) % V.rects().length; V.pivotFlash = 0.4; refreshToolbar(); break;
+      case "m": setMode(V.activeVp().mode + (e.shiftKey ? -1 : 1)); toast(MODES[V.activeVp().mode].label); break;
+      case "w": toggleOpt("wire", "wireframe"); break;
+      case "x": toggleOpt("xray", "hidden edges"); break;
+      case "p": toggleOpt("points", "vertex points"); break;
+      case "b": toggleOpt("backHi", "back-face highlight"); break;
+      case "e": toggleOpt("seams", "seams and boundaries"); break;
+      case "c": toggleOpt("clip.0.on", "clip plane 1"); break;
+      case "g": toggleOpt("lightGizmo", "light gizmo"); break;
+      case "h": if (e.altKey) showAll(); else setVisible("mesh", "head", !V.meshes.get("head").visible); break;
+      case "i": isolate("mesh", "head"); break;
+      case "k": screenshot(e.shiftKey ? "layout" : "viewport"); break;
+      case "[": setFov(V.activeCam().goal.fov - 5); break;
+      case "]": setFov(V.activeCam().goal.fov + 5); break;
+      case ",": setLod(V.activeVp().lod + 1); break;
+      case ".": setLod(V.activeVp().lod - 1); break;
+      default: return;
+    }
+    handled();
+  });
+}
+
+function sphere(centre, radius, rings = 16, segs = 24) {
+  const pos = [], idx = [];
+  for (let i = 0; i <= rings; i++) {
+    const th = (Math.PI * i) / rings;
+    for (let j = 0; j <= segs; j++) {
+      const ph = (2 * Math.PI * j) / segs;
+      pos.push(centre[0] + radius * Math.sin(th) * Math.cos(ph), centre[1] + radius * Math.sin(th) * Math.sin(ph), centre[2] + radius * Math.cos(th));
+    }
+  }
+  for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
+    const a = i * (segs + 1) + j, b = a + segs + 1;
+    idx.push(a, b, a + 1, a + 1, b, b + 1);
+  }
+  return { pos, idx };
+}
+
+async function loadScene() {
+  const input = { store, ...D.base };
+  if (opt("eyes")) input.eyes = opt("eyes");
+  const sc = await api("designer.scene", input);
+  D.scene = { lods: sc.lods.map((l) => ({ target: l.target, triangles: l.triangles, dropped: l.dropped_triangles })), eyes: sc.eyes };
+  const head = V.setHead(D.n, D.indices, sc.triangle_uvs_f32_b64 ? decodeF32(sc.triangle_uvs_f32_b64) : null);
+  head.label = "head (LOD0)";
+  for (const l of sc.lods) V.addHeadLod(decodeU32(l.triangles_u32_b64), decodeF32(l.triangle_uvs_f32_b64), `LOD ${l.target}`);
+  if (sc.eyes.length) {
+    const pos = [], idx = [];
+    for (const e of sc.eyes) { const s = sphere(e.centre, e.radius); const o = pos.length / 3; pos.push(...s.pos); idx.push(...s.idx.map((x) => x + o)); }
+    V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes (spheres)" }, "eyes");
+  }
+}
+
+function setPose(id, positions) {
+  if (positions == null) {
+    D.poses.delete(id);
+  } else {
+    const p = positions instanceof Float32Array ? positions : Float32Array.from(positions);
+    if (p.length !== D.n * 3) throw new Error(`setPose needs ${D.n * 3} floats (game LOD0 order), got ${p.length}`);
+    D.poses.delete(id);
+    D.poses.set(id, { positions: p, normals: vertexNormals(p, D.indices, D.n) });
+  }
+  request(true);
+}
+
+function makeApi(panelId) {
+  return {
+    call: (command, input) => api(command, input ?? {}),
+    character: () => JSON.parse(JSON.stringify(settleInput())),
+    onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
+    setPose,
+    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); renderVisibility(); request(false); },
+    setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); renderVisibility(); request(false); },
+    pushUndo,
+    requestRender: () => request(false),
+    panel: panelId,
+  };
+}
+
+window.GF = {
+  version: 1,
+  registerPanel(def) {
+    if (!def || typeof def.id !== "string" || typeof def.mount !== "function") throw new Error("registerPanel needs { id, title, order, mount(rootEl, api) }");
+    D.panelDefs.push(def);
+  },
+};
+
+async function loadPanels() {
+  const box = $("panels");
+  let ids = [];
+  try { ids = await (await fetch("panels/index.json", { cache: "no-store" })).json(); } catch (e) { box.innerHTML = `<div class="note">no panels/index.json: ${escapeHtml(e.message)}</div>`; return; }
+  if (!Array.isArray(ids)) ids = [];
+  for (const [k, id] of ids.entries()) {
+    if (typeof id !== "string" || !/^[A-Za-z0-9_-]+$/.test(id)) continue;
+    const before = D.panelDefs.length;
+    try { await import(`./panels/${id}.js`); } catch (e) { D.panels.push({ id, error: e.message }); box.insertAdjacentHTML("beforeend", `<div class="note">panel ${escapeHtml(id)} failed to load: ${escapeHtml(e.message)}</div>`); continue; }
+    for (const def of D.panelDefs.slice(before)) def._index = k;
+  }
+  const defs = [...D.panelDefs].sort((a, b) => (a.order ?? a._index ?? 0) - (b.order ?? b._index ?? 0) || (a._index ?? 0) - (b._index ?? 0));
+  for (const def of defs) {
+    const d = document.createElement("details");
+    d.className = "panel";
+    d.open = true;
+    d.innerHTML = `<summary>${escapeHtml(def.title || def.id)}</summary><div class="panel-body"></div>`;
+    box.appendChild(d);
+    try { def.mount(d.querySelector(".panel-body"), makeApi(def.id)); D.panels.push({ id: def.id, mounted: true }); }
+    catch (e) { d.querySelector(".panel-body").innerHTML = `<div class="note">mount failed: ${escapeHtml(e.message)}</div>`; D.panels.push({ id: def.id, error: e.message }); }
+  }
+  renderVisibility();
+  if (D.settled) notify("settle", { positions: D.settledPositions, measurements: D.settled.measurements, revision: D.settled.revision, placement: D.settled.placement });
 }
 
 async function save() {
@@ -445,21 +1043,33 @@ async function main() {
   const blob = await (await fetch(`/v1/blob/${hex}?store=${encodeURIComponent(store)}`)).arrayBuffer();
   await loadKernel(pack, blob);
   gl = await context();
-  setupGL();
+  if (!gl) throw new Error("WebGL2 is not available in this browser (on some Windows boxes Chrome needs --use-angle=gl)");
+  for (let attempt = 0; !V; attempt++) {
+    if (gl.isContextLost()) await new Promise((r) => { gl.canvas.addEventListener("webglcontextrestored", r, { once: true }); setTimeout(r, 15000); });
+    try { V = new Viewer(gl, $("vps")); } catch (e) { if (!gl.isContextLost() || attempt >= 2) throw e; }
+  }
+  D.viewer = V;
+  D.renderer = V.renderer;
+  await loadScene();
+  buildRegions();
+  applySettings(loadSettings());
   buildMacros();
   buildSliders();
-  orbit();
+  buildControls();
+  interaction();
   $("out").value = opt("out") || "";
   $("save").addEventListener("click", save);
   D.pack = pack;
   await settle();
   const a = views().anchor;
-  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-  for (let g = 0; g < D.n; g++) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], a[g * 3 + k]); hi[k] = Math.max(hi[k], a[g * 3 + k]); }
-  D.camera.centre = lo.map((x, k) => (x + hi[k]) / 2);
-  D.camera.dist = Math.max(hi[0] - lo[0], hi[2] - lo[2]) * 1.9;
+  V.bounds = V.computeBounds(a);
+  V.frameBox(V.bounds, V.cams, true);
+  if (V.vp.some((s) => s.mode === MODE_INDEX.displacement)) ensureReference();
   request(true);
+  await loadPanels();
+  D.ui = { setMode, setLod, setLayout, namedView, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
+           setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness") };
   D.ready = true;
 }
 
-main().catch((e) => { setStatus("preview", `error: ${e.message}`); D.error = e.message; });
+main().catch((e) => { setStatus("preview", `error: ${e.message}`); D.error = e.message; console.error(e); });
