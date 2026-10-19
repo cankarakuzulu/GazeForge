@@ -209,6 +209,44 @@ Game-ready options (each is opt-in; without them the output is unchanged):
 Morphs carry no UVs in glTF, so every LOD keeps the neutral character's UVs; the sidecar records, per morph, how far the
 placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_lod0`).
 
+#### Bodies
+
+A head joins a body at its neck seam. `body.import` builds a body pack (positions, triangles, UVs, the neck ring with a
+seam parameter per ring vertex, and two coarser LODs whose collar keeps every ring vertex):
+
+```
+gazeforge call body.import --input '{"mode":"makehuman","obj":"base.obj","dense":"data/dense","out":"bodies/makehuman",
+  "targets":"<makehuman targets>","macro":"<macro.json>","sliders":{...}}'
+gazeforge call body.import --input '{"mode":"mesh","obj":"body.obj","dense":"data/dense","out":"bodies/other",
+  "up":"y","unit_m":1.0,"cut_z_m":1.31}'
+```
+
+- **makehuman**: the MakeHuman base mesh (its `body` group). The dense head is the subdivided MakeHuman head, so the
+  correspondence is found by topology: the dense base's subdivision patches give the head cage, and the cage embeds in
+  the body's quads in exactly one orientation-preserving way. The neck ring is the cage boundary, vertex by vertex; no
+  position matching. Optional macro sliders shape the body with the MakeHuman macro targets.
+- **mesh**: any body. Its topmost open boundary loop is the neck (or `cut_z_m` removes every face above a plane and the
+  cut becomes the loop); `align` is `translate` (default), `similarity` or `none`; ring parameters come from arc length
+  with the best start offset, then each ring vertex's closest seam point nearby.
+
+`character.stitch` (LOD0, unplaced head, for previews and the designer's Body panel) and `export-glb --body PACK` (every
+LOD, placed head) join them: the body's ring vertices are replaced by copies of the head's seam vertices, and every body
+triangle on the ring becomes a fan over the seam points between its two ring corners, so the seam has no cracks or
+T-junctions by construction. The body is then bent onto the head over a band. Controls: `blend_mm` (band width, default
+60), `neck_offset_mm`, `head_scale` (about the seam centre), `body_scale` (about the ring centre), `smooth` (Laplacian
+passes over the band) and `tangent` (0..1, how far the first body row turns to continue the head surface; default 0.5);
+on export they are `--body-blend-mm`, `--body-neck-offset-mm`, `--head-scale`, `--body-scale`, `--body-smooth`,
+`--body-tangent`.
+
+In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
+layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
+of both meshes share position, normal (the two sides' average) and skin weights (1.0 on the neck joint), so they stay
+closed in every pose. Gates, per LOD, fail the export: seam gap (< 1e-5 m for makehuman packs, < 1e-4 m for mesh packs),
+open, non-manifold or mis-oriented seam edges, the angle between the head and body triangles on each seam edge (<= 40
+deg), flipped or folded triangles in the band, and head or body vertices behind the other surface near the neck. The
+`plant` input of `character.stitch` (`gap`, `crack`, `crease`, `flip`, `penetrate`) puts a defect in on purpose; each
+makes the gates fail.
+
 #### Gates
 
 ```

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
+pub mod body;
 mod commands;
 pub mod designer;
 pub mod error;

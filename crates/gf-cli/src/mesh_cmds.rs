@@ -41,6 +41,27 @@ const GLB_KEYS: &[&str] = &[
 ];
 const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
 const EYES_KEY: &[&str] = &["eyes"];
+const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
+
+fn body_options(opts: &Options) -> Result<Option<(gf_core::body::BodyPack, Value, gf_core::body::Controls)>, String> {
+    let Some(dir) = opts.get("body") else {
+        if let Some(k) = BODY_KEYS.iter().find(|k| opts.contains_key(**k)) {
+            return Err(format!("--{k} needs --body PACK"));
+        }
+        return Ok(None);
+    };
+    let (manifest, pack) = gf_io::body::load(Path::new(dir))?;
+    let controls = gf_core::body::Controls {
+        blend_m: number(opts, "body-blend-mm", 60.0)? / 1000.0,
+        neck_offset_m: number(opts, "body-neck-offset-mm", 0.0)? / 1000.0,
+        head_scale: number(opts, "head-scale", 1.0)?,
+        body_scale: number(opts, "body-scale", 1.0)?,
+        smooth: number(opts, "body-smooth", 0.0)?.round().max(0.0) as usize,
+        tangent: number(opts, "body-tangent", 0.5)?,
+    };
+    controls.check()?;
+    Ok(Some((pack, manifest, controls)))
+}
 const LID_FRONT_DEG: f64 = 75.0;
 const FACING_ROUNDS: usize = 8;
 const UNTANGLE_ITERATIONS: usize = 200;
@@ -533,6 +554,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let version = PlacementVersion::parse(&spec.base.placement)?;
     let mut allowed: Vec<&[&str]> = vec![GLB_KEYS];
     allowed.extend_from_slice(placement_keys(version.name));
+    allowed.push(BODY_KEYS);
     if opts.get("lids").map(String::as_str) == Some("auto") {
         allowed.push(LID_EXPORT_KEYS);
         if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
@@ -553,6 +575,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let catalog = store.load_catalog(&spec.base.catalog)?;
     let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
     let (manifest, base) = store.load_game(&game_ref)?;
+    let body = body_options(opts)?;
+    let head_scale = body.as_ref().map(|(p, _, c)| (p.pivot(), c.head_scale)).filter(|(_, s)| *s != 1.0);
     let facing = opts.get("facing").map(String::as_str).unwrap_or("keep");
     if !matches!(facing, "keep" | "repair" | "repair-states") {
         return Err(format!("--facing must be keep, repair or repair-states, got {facing}"));
@@ -659,6 +683,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             });
         }
         morph_games.push(placed.game);
+    }
+    if let Some((pivot, s)) = head_scale {
+        gf_core::body::scale_about(&mut neutral.game, pivot, s);
+        for mg in morph_games.iter_mut() {
+            gf_core::body::scale_about(mg, pivot, s);
+        }
     }
     let mut levels = vec![Level {
         name: "Head_LOD0".into(),
@@ -782,7 +812,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut rig_data: Option<(gltf::Rig, Vec<[f64; 3]>)> = None;
     if rigged {
         use gf_core::rig;
-        let eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
+        let mut eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
+        if let Some((pivot, s)) = head_scale {
+            for e in eyes.iter_mut() {
+                let mut c = [e.centre];
+                gf_core::body::scale_about(&mut c, pivot, s);
+                e.centre = c[0];
+                e.radius *= s;
+            }
+        }
         if eyes.len() != 2 {
             return Err(format!("--rig head needs two eyes, the eyes file has {}", eyes.len()));
         }
@@ -792,7 +830,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let seam = neck_loop(&base.triangles, &neutral.game)?;
         let (weights, skin_report) = rig::game_weights(&dense.positions, &base.kept, &seam, &share, &hinge);
         let neck = mean_point(seam.iter().map(|&g| neutral.game[g as usize]));
-        let hinge_now = rig::character_hinge(&dense.positions, &positions, &hinge);
+        let mut hinge_now = [rig::character_hinge(&dense.positions, &positions, &hinge)];
+        if let Some((pivot, s)) = head_scale {
+            gf_core::body::scale_about(&mut hinge_now, pivot, s);
+        }
+        let hinge_now = hinge_now[0];
         let (left, right) = if eyes[0].centre[0] >= eyes[1].centre[0] { (&eyes[0], &eyes[1]) } else { (&eyes[1], &eyes[0]) };
         let joints = rig::joints(neck, hinge_now, left.centre, right.centre);
         let attachments = [("Eye_L", 3usize, left.radius), ("Eye_R", 4usize, right.radius)]
@@ -823,16 +865,66 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             "bind": "joints are translation-only; each inverse bind matrix is the negated sum of the joint chain's local translations"});
         rig_data = Some((rig_value, weights));
     }
+    let mut body_lods = Vec::new();
+    let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
+    let mut body_meta = Value::Null;
+    if let Some((pack, pack_manifest, controls)) = &body {
+        use gf_core::body as gb;
+        let limits = if pack.mode == "makehuman" { gb::Limits::exact() } else { gb::Limits::any_body() };
+        let mut rows = Vec::new();
+        let mut failures = Vec::new();
+        for (i, level) in levels.iter().enumerate() {
+            let (game, _) = lod_state(level, &neutral.game);
+            let dense_of: Vec<u32> = level.map.iter().map(|&g| base.kept[g as usize]).collect();
+            let seam = gb::head_seam(pack, &game, &level.triangles, &dense_of)?;
+            let body_lod = i.min(pack.lod_count() - 1);
+            let st = gb::stitch_lod(pack, body_lod, &seam, controls)?;
+            let (report, failed) = gb::gates(&game, &level.triangles, &seam, &st, &limits);
+            failures.extend(failed.into_iter().map(|f| format!("{}: {f}", level.name)));
+            let (shared, normals) = gb::two_sided_normals(&game, &level.triangles, &st);
+            seam_normals.push(shared.into_iter().collect());
+            let surface = gm::split_seams(&st.triangles, &st.uvs);
+            let name = format!("Body_LOD{i}");
+            rows.push(json!({"node": name, "body_lod": body_lod, "head_node": level.name, "vertices": surface.source.len(),
+                             "triangles": st.triangles.len(), "seam_points": seam.len(), "gates": report}));
+            body_lods.push(Lod {
+                name,
+                positions: surface.source.iter().map(|&v| gm::to_gltf(st.positions[v as usize])).collect(),
+                normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
+                uvs: surface.uvs.clone(),
+                indices: surface.indices,
+                morphs: Vec::new(),
+                skin: rig_data.as_ref().map(|_| gltf::SkinData { joints: vec![[0, 1, 2, 0]; surface.source.len()], weights: vec![[1.0, 0.0, 0.0, 0.0]; surface.source.len()] }),
+            });
+        }
+        if !failures.is_empty() {
+            return Err(format!("body stitch gates failed: {}", failures.join("; ")));
+        }
+        body_meta = json!({"mode": pack.mode, "pack": opts.get("body"), "source": pack_manifest["source"], "controls": controls, "lods": rows,
+                           "mesh": "one mesh node per body LOD (Body_LODn beside Head_LODn), its own material slot and the body's UV layout; the seam vertices are copies of the head's with the same position, normal and skin weights",
+                           "skin": if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+    }
     let mut lods = Vec::new();
     let mut lod_meta = Vec::new();
     for (i, level) in levels.iter().enumerate() {
         let surface = gm::split_seams(&level.triangles, &level.uvs);
-        let (game, normals) = lod_state(level, &neutral.game);
+        let (game, mut normals) = lod_state(level, &neutral.game);
+        let shared = seam_normals.get(i);
+        if let Some(over) = shared {
+            for (&v, n) in over {
+                normals[v as usize] = *n;
+            }
+        }
         let pick = |v: &[Point]| -> Vec<Point> { surface.source.iter().map(|&g| v[g as usize]).collect() };
         let (gp, gn) = (pick(&game), pick(&normals));
         let mut morphs = Vec::new();
         for mg in &morph_games {
-            let (eg, en) = lod_state(level, mg);
+            let (eg, mut en) = lod_state(level, mg);
+            if let Some(over) = shared {
+                for (&v, n) in over {
+                    en[v as usize] = *n;
+                }
+            }
             let (ep, enn) = (pick(&eg), pick(&en));
             let mut positions_delta: Vec<[f32; 3]> = gp.iter().zip(&ep).map(|(a, b)| delta(*a, *b)).collect();
             let mut normals_delta: Vec<[f32; 3]> = gn.iter().zip(&enn).map(|(a, b)| delta(*a, *b)).collect();
@@ -889,7 +981,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let tool = format!("gazeforge {}", env!("CARGO_PKG_VERSION"));
     let extras = json!({"spec": spec.revision(), "pack": spec.base.pack, "game_base": game_ref,
                         "placement": placement.version().to_string(), "tool": tool});
-    let (bytes, report) = gltf::glb_rigged(&lods, &names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
+    let (bytes, report) = gltf::glb_full(&lods, &body_lods, &names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -934,6 +1026,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         dense::write_points(&npy_path, &neutral_dense)?;
         sidecar["lod0_out"] = json!({"obj": obj_path.display().to_string(), "dense": npy_path.display().to_string()});
     }
+    if !body_meta.is_null() {
+        sidecar["body"] = body_meta.clone();
+    }
     let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
     std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
     let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
@@ -947,6 +1042,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if lid_run.is_some() {
         result["lids"] = sidecar["lids"].clone();
+    }
+    if !body_meta.is_null() {
+        result["body"] = body_meta;
     }
     if lod0_out.is_some() {
         result["lod0_out"] = sidecar["lod0_out"].clone();

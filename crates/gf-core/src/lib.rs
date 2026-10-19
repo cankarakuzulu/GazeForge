@@ -1,3 +1,4 @@
+pub mod body;
 pub mod catalog;
 pub mod fit;
 pub mod game_mesh;
