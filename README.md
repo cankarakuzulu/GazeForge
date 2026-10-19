@@ -162,7 +162,7 @@ Game-ready options (each is opt-in; without them the output is unchanged):
 
 ```
                      [--morph-dir DIR] [--morph-floor MM] [--facing keep|repair|repair-states] [--lod-screen measured
-                     [--lod-pixels 1] [--lod-height 1080]] [--rig none|head --rig-jaw TARGET --eyes EYES.json]
+                     [--lod-pixels 1] [--lod-height 1080]] [--rig none|head|face --rig-jaw TARGET --eyes EYES.json [--rig-rounds 2]]
                      [--lids off|auto --eyes EYES.json [--lids-step-mm 0.05] [--lids-max-mm 1] [--lids-front-deg 75]
                      [--lids-tolerance-mm 0] [--lids-smooth 4]] [--lod0-out STEM]
 ```
@@ -206,6 +206,39 @@ Game-ready options (each is opt-in; without them the output is unchanged):
   character (the seam centroid, the fitted hinge moved with the face, the eye centres from `--eyes`), and two eyeball
   spheres `Eye_L` / `Eye_R` are children of the eye joints.
 
+##### Face rig
+
+`--rig face` (with `--morphs`, `--morph-dir`, `--rig-jaw` and `--eyes`, optionally `--rig-rounds N`, default 2) adds 24
+facial joints to the head rig: `brow_inner/mid/outer_L/R`, `lid_upper/lower_L/R`, `cheek_L/R`, `nose`, `nostril_L/R`,
+`lip_corner_L/R`, `lip_upper_L/C/R` (children of `head`) and `lip_lower_L/C/R`, `chin` (children of `jaw`). The head cage
+has no tongue geometry, so there is no tongue joint.
+
+- **Placement by index.** Each facial joint has a seed vertex on the dense base and sits at the mean of the character's
+  dense positions over the base vertices within 2 mm of it; the lid joints sit at the eye centres and turn about them.
+  Joint positions are rounded to 1/2^20 m so that the f32 joint chain and the inverse bind matrices cancel exactly.
+- **Weights on the base.** Computed once from the base and the shapes, at the game vertices' dense indices, and carried
+  to every LOD by index: distance falloffs around each joint (upper-lip joints share the head weight, lower-lip and chin
+  joints the jaw weight, lids split at the lid line), then rounds of fit-the-poses / re-solve each vertex's weights
+  (non-negative, summing to 1 - neck) / smooth over the mesh; the 4 largest are kept and quantised so the f32 weights sum
+  to exactly 1. The same for every character.
+- **Poses per shape.** For every morph, each posed joint (jaw and the facial joints) gets a bounded rotation about its
+  rest position and a translation, solved by Gauss-Newton so that linear blend skinning reproduces F(c + e) - F(c) on the
+  game LOD0 (vertices near the eyes count more). The sidecar's `rig.face.fit` lists, per shape, the error (mean / p95 /
+  max mm) and the fraction of its squared displacement the joints explain; shapes below 0.8 or above 1 mm p95 are listed
+  as poorly expressed.
+- **Animations.** One glTF animation per morph, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the
+  pose), so seeking to t gives roughly weight t. The blend shapes stay in the file: an engine uses either.
+
+`gazeforge gates rig --glb X.glb [--eyes EYES.json]` checks a rigged glb: the rest pose lands exactly on the exported
+positions, every vertex's f32 weights sum to exactly 1, and per animation and LOD the joint pose has no more folded
+triangles (against normals recomputed on the posed mesh) than the blend shape of the same name, and with `--eyes` no
+more vertices inside an eye (the `gates lids` rule).
+
+The registry command `rig.face` returns the same rig for a designer character (settled positions, joints, weights,
+fitted poses, errors, and the shapes' blend deltas), and the designer panel `web/panels/rig.js` drives it: expression
+sliders and presets as blend shapes or through the joints, per-joint pose controls, a joint overlay, undo for every
+change. Open the designer with `&face_morphs=<dir of the shapes' .npz>` (and `&face_prefix=` if their ids differ).
+
 Morphs carry no UVs in glTF, so every LOD keeps the neutral character's UVs; the sidecar records, per morph, how far the
 placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_lod0`).
 
@@ -218,6 +251,7 @@ gazeforge gates path --dense DIR --base DIR --start FILE.npy --delta FILE.npy [-
                      [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM]
 gazeforge gates facing --glb FILE.glb [--states neutral|all]
 gazeforge gates lids --glb FILE.glb --eyes EYES.json [--states all|neutral] [--front-deg 75] [--tolerance-mm 0]
+gazeforge gates rig  --glb FILE.glb [--eyes EYES.json] [--front-deg 75] [--tolerance-mm 0]
 ```
 
 `facing` reads a `.glb` and counts, per mesh, triangles whose winding faces against the mean of their three exported

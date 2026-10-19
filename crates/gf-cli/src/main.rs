@@ -14,6 +14,7 @@ mod front;
 mod http;
 mod mcp;
 mod mesh_cmds;
+mod rig_cmds;
 
 const USAGE: &str = "gazeforge <command> [--key value ...]
   build-base  --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy] [--min-angle 4] [--max-angle 170]
@@ -515,6 +516,7 @@ fn run(args: &[String]) -> Result<Value, String> {
             Some("path") => options(&args[2..]).and_then(|o| mesh_cmds::gates_path(&o)),
             Some("facing") => options(&args[2..]).and_then(|o| mesh_cmds::gates_facing(&o)),
             Some("lids") => options(&args[2..]).and_then(|o| mesh_cmds::gates_lids(&o)),
+            Some("rig") => options(&args[2..]).and_then(|o| rig_cmds::gates_rig(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some(group @ ("store" | "character" | "macro")) => match args.get(1) {

@@ -46,11 +46,23 @@ pub struct Attachment {
     pub indices: Vec<u32>,
 }
 
+pub struct Channel {
+    pub joint: usize,
+    pub rotation: [[f32; 4]; 2],
+    pub translation: [[f32; 3]; 2],
+}
+
+pub struct Animation {
+    pub name: String,
+    pub channels: Vec<Channel>,
+}
+
 pub struct Rig {
     pub names: Vec<String>,
     pub parents: Vec<Option<usize>>,
     pub global: Vec<[f32; 3]>,
     pub attachments: Vec<Attachment>,
+    pub animations: Vec<Animation>,
 }
 
 impl Rig {
@@ -251,6 +263,7 @@ pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Va
     }
     let mut roots: Vec<usize> = (0..nodes.len()).collect();
     let mut skins = Vec::new();
+    let mut animations: Vec<Value> = Vec::new();
     if let Some(rig) = rig {
         let first = nodes.len();
         let local = rig.local();
@@ -289,6 +302,44 @@ pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Va
         let ibm = b.raw(&matrices, None, FLOAT, rig.names.len(), "MAT4");
         skins.push(json!({"name": "head_rig", "inverseBindMatrices": ibm, "joints": (first..first + rig.names.len()).collect::<Vec<_>>(),
                           "skeleton": first + rig.parents.iter().position(|p| p.is_none()).unwrap_or(0)}));
+        if !rig.animations.is_empty() {
+            let times: Vec<u8> = [0.0f32, 1.0].iter().flat_map(|x| x.to_le_bytes()).collect();
+            let input = b.raw(&times, None, FLOAT, 2, "SCALAR");
+            b.accessors[input]["min"] = json!([0.0]);
+            b.accessors[input]["max"] = json!([1.0]);
+            let mut data: Vec<u8> = Vec::new();
+            let mut layout: Vec<(usize, &str)> = Vec::new();
+            for animation in &rig.animations {
+                for c in &animation.channels {
+                    if c.joint >= rig.names.len() {
+                        return Err(format!("animation {} names a joint the rig does not have", animation.name));
+                    }
+                    layout.push((data.len(), "VEC4"));
+                    data.extend(c.rotation.iter().flatten().flat_map(|x| x.to_le_bytes()));
+                    layout.push((data.len(), "VEC3"));
+                    data.extend(c.translation.iter().flatten().flat_map(|x| x.to_le_bytes()));
+                }
+            }
+            let view = b.view(&data, None);
+            let mut outputs = Vec::with_capacity(layout.len());
+            for &(offset, kind) in &layout {
+                b.accessors.push(json!({"bufferView": view, "byteOffset": offset, "componentType": FLOAT, "count": 2, "type": kind}));
+                outputs.push(b.accessors.len() - 1);
+            }
+            let mut next = outputs.into_iter();
+            for animation in &rig.animations {
+                let mut samplers = Vec::new();
+                let mut channels = Vec::new();
+                for c in &animation.channels {
+                    for path in ["rotation", "translation"] {
+                        let output = next.next().ok_or("animation outputs ran out")?;
+                        channels.push(json!({"sampler": samplers.len(), "target": {"node": first + c.joint, "path": path}}));
+                        samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+                    }
+                }
+                animations.push(json!({"name": animation.name, "samplers": samplers, "channels": channels}));
+            }
+        }
     }
     while b.bin.len() % 4 != 0 {
         b.bin.push(0);
@@ -306,6 +357,9 @@ pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Va
     });
     if !skins.is_empty() {
         document["skins"] = json!(skins);
+    }
+    if !animations.is_empty() {
+        document["animations"] = json!(animations);
     }
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
     while text.len() % 4 != 0 {
@@ -387,6 +441,41 @@ fn read_indices(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<u32>, String>
     }
 }
 
+pub fn chunks(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
+    let word = |at: usize| -> Result<u32, String> {
+        Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
+    };
+    if word(0)? != 0x4654_6C67 || word(4)? != 2 {
+        return Err("not a glTF 2.0 binary".into());
+    }
+    let json_len = word(12)? as usize;
+    let doc: Value = serde_json::from_slice(bytes.get(20..20 + json_len).ok_or("the JSON chunk is truncated")?).map_err(|e| e.to_string())?;
+    let bin_len = word(20 + json_len)? as usize;
+    let bin = bytes.get(28 + json_len..28 + json_len + bin_len).ok_or("the binary chunk is truncated")?;
+    Ok((doc, bin))
+}
+
+pub fn read_plain(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<f32>, String> {
+    let a = &doc["accessors"][index as usize];
+    let width = match a["type"].as_str() {
+        Some("SCALAR") => 1,
+        Some("VEC2") => 2,
+        Some("VEC3") => 3,
+        Some("VEC4") => 4,
+        Some("MAT4") => 16,
+        _ => return Err(format!("accessor {index} has an unknown type")),
+    };
+    let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize * width;
+    let view = &doc["bufferViews"][a["bufferView"].as_u64().ok_or("the accessor has no view")? as usize];
+    let offset = a["byteOffset"].as_u64().unwrap_or(0);
+    match a["componentType"].as_u64().map(|c| c as u32) {
+        Some(FLOAT) => Ok(accessor_bytes(doc, bin, view, offset, count * 4)?.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()),
+        Some(UNSIGNED_BYTE) => Ok(accessor_bytes(doc, bin, view, offset, count)?.iter().map(|&x| x as f32).collect()),
+        Some(UNSIGNED_SHORT) => Ok(accessor_bytes(doc, bin, view, offset, count * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as f32).collect()),
+        _ => Err(format!("accessor {index}: unsupported component type")),
+    }
+}
+
 pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
     let word = |at: usize| -> Result<u32, String> {
         Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
@@ -449,6 +538,7 @@ mod tests {
             global: vec![[0.1, 1.3, 0.0], [0.1, 1.5, 0.01]],
             attachments: vec![Attachment { name: "Eye".into(), joint: 1, positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                                            normals: vec![[0.0, 0.0, 1.0]; 3], indices: vec![0, 1, 2] }],
+            animations: Vec::new(),
         };
         let (bytes, _) = glb_rigged(&[skinned], &["m".into()], Sparse::Always, json!({}), "test", Some(&rig)).unwrap();
         let (doc, meshes) = read_glb(&bytes).unwrap();

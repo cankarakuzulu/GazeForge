@@ -114,6 +114,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: designer::macro_delta,
     },
     CommandDef {
+        name: "rig.face",
+        kind: Kind::Query,
+        summary: "The face rig for a character: facial joints placed from the base by index, skin weights computed on the base, and per expression shape the fitted joint poses with their reproduction error; with the settled game positions, the weights and the shapes' blend deltas for a preview.",
+        limits: "The weights are cached per pack, game base and shape list in the served process; a CLI call computes them every time (seconds). The blend deltas are the targets' dense deltas at the game vertices, not the export's placed morphs.",
+        input: designer::rig_face_input,
+        output: designer::rig_face_output,
+        run: designer::rig_face,
+    },
+    CommandDef {
         name: "designer.save",
         kind: Kind::Mutation,
         summary: "Write the designer's character (weights, macros, residual) as a spec file after validating it against the store.",

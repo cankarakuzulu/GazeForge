@@ -34,6 +34,7 @@ const GLB_KEYS: &[&str] = &[
     "facing",
     "rig",
     "rig-jaw",
+    "rig-rounds",
     "morph-dir",
     "morph-floor",
     "lids",
@@ -56,7 +57,7 @@ const EYE_SEGMENTS: u32 = 24;
 const NORMAL_FLOOR: f32 = 1e-3;
 const GAME_GATES: &[&str] = &["triq", "uv", "census", "seams"];
 
-fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
+pub(crate) fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
     let pass = failed.is_empty();
     let mut out = json!({"ok": pass, "command": command, "pass": pass, "gates": gates, "failed": failed});
     if !pass {
@@ -311,11 +312,11 @@ pub fn gates_facing(opts: &Options) -> Result<Value, String> {
     Ok(verdict("gates facing", json!({"facing": rows}), failed, json!({"glb": path, "states": states})))
 }
 
-fn from_gltf(p: [f32; 3]) -> Point {
+pub(crate) fn from_gltf(p: [f32; 3]) -> Point {
     [f64::from(p[0]), -f64::from(p[2]), f64::from(p[1])]
 }
 
-fn lid_settings(opts: &Options) -> Result<(f64, f64), String> {
+pub(crate) fn lid_settings(opts: &Options) -> Result<(f64, f64), String> {
     let front = number(opts, "front-deg", LID_FRONT_DEG)?;
     if front > 90.0 {
         return Err(format!("--front-deg must be at most 90, got {front}"));
@@ -581,11 +582,16 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--lids must be off or auto, got {other}")),
     };
     let lod0_out = opts.get("lod0-out").map(Path::new);
-    let rigged = match opts.get("rig").map(String::as_str).unwrap_or("none") {
-        "none" => false,
-        "head" => true,
-        other => return Err(format!("--rig must be none or head, got {other}")),
+    let (rigged, face_mode) = match opts.get("rig").map(String::as_str).unwrap_or("none") {
+        "none" => (false, false),
+        "head" => (true, false),
+        "face" => (true, true),
+        other => return Err(format!("--rig must be none, head or face, got {other}")),
     };
+    if !face_mode && opts.contains_key("rig-rounds") {
+        return Err("--rig-rounds goes with --rig face".into());
+    }
+    let rig_rounds = count(opts, "rig-rounds", 2)?;
     let morph_dir = opts.get("morph-dir").map(Path::new);
     let floor_m = if opts.contains_key("morph-floor") { Some(number(opts, "morph-floor", 0.0)? / 1000.0) } else { None };
     let measured = opts.get("lod-screen").map(String::as_str) == Some("measured");
@@ -780,6 +786,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     let mut rig_meta = Value::Null;
     let mut rig_data: Option<(gltf::Rig, Vec<[f64; 3]>)> = None;
+    let mut face_meta = Value::Null;
+    let mut face_skin: Option<gf_core::face_rig::Influences> = None;
     if rigged {
         use gf_core::rig;
         let eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
@@ -808,12 +816,53 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
             })
             .collect();
-        let rig_value = gltf::Rig {
+        let mut rig_value = gltf::Rig {
             names: rig::JOINTS.iter().map(|s| s.to_string()).collect(),
             parents: rig::PARENTS.to_vec(),
             global: joints.iter().map(|p| gm::to_gltf(*p)).collect(),
             attachments,
+            animations: Vec::new(),
         };
+        if face_mode {
+            use gf_core::face_rig as fr;
+            if ids.is_empty() {
+                return Err("--rig face needs --morphs (the shapes the joint poses are fitted to)".into());
+            }
+            let fit_started = std::time::Instant::now();
+            let targets: Vec<gf_core::catalog::SparseTarget> = ids.iter().map(|id| load(id)).collect::<Result<_, _>>()?;
+            let base_rig = fr::base_rig(&dense.positions, &base.kept, &base.triangles, &jaw, &targets, rig_rounds)?;
+            let pivots = fr::character_pivots([neck, hinge_now, left.centre, right.centre], &base_rig.regions, &positions);
+            let deltas: Vec<Vec<Point>> = morph_games.iter().map(|mg| mg.iter().zip(&neutral.game).map(|(a, b)| [0, 1, 2].map(|k| a[k] - b[k])).collect()).collect();
+            let emphasis = fr::lid_emphasis(&neutral.game, &[(left.centre, left.radius), (right.centre, right.radius)]);
+            let problem = fr::Problem { rest: &neutral.game, influences: &base_rig.influences, pivots: &pivots, emphasis: Some(&emphasis) };
+            let fits = fr::fit_shapes(&problem, &deltas);
+            rig_value.names = fr::names();
+            rig_value.parents = fr::parents();
+            rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
+            rig_value.animations = crate::rig_cmds::face_animations(&names, &fits, &pivots);
+            let parents = fr::parents();
+            let all_names = fr::names();
+            let joint_rows: Vec<Value> = (0..fr::count())
+                .map(|j| {
+                    let mut row = json!({"name": all_names[j], "parent": parents[j].map(|p| all_names[p].clone()), "position_gltf_m": rig_value.global[j],
+                                         "posed": fr::is_free(j)});
+                    if let Some(f) = j.checked_sub(rig::JOINTS.len()).and_then(|f| fr::FACE.get(f)) {
+                        row["seed_dense_vertex"] = json!(f.seed);
+                        row["seed_rule"] = json!(f.rule);
+                        row["falloff_mm"] = json!(f.radius_mm);
+                        row["region_vertices"] = json!(base_rig.regions[j - rig::JOINTS.len()].len());
+                    }
+                    row
+                })
+                .collect();
+            face_meta = json!({
+                "joints": joint_rows, "weights": base_rig.report, "fit": crate::rig_cmds::fit_report(&names, &fits),
+                "seconds": fit_started.elapsed().as_secs_f64(),
+                "pivots": format!("each facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; every joint position is rounded to 1/{} m so that the f32 joint chain and the inverse bind matrices cancel exactly", fr::REGION_MM, fr::PIVOT_GRID),
+                "poses": "per shape, every posed joint (jaw and the facial joints) gets a rotation about its rest position and a translation, solved by Gauss-Newton on the game LOD0 against F(c + e) - F(c) with the exported weights, bounded to 35 deg / 15 mm (jaw), 60 deg / 6 mm (lids, which turn about the eye centre) and 30 deg / 12 mm (other facial joints); vertices within 1.4 eye radii of an eye centre count 30 times in the fit",
+                "animations": "one glTF animation per shape, named as the morph, with LINEAR keys at t = 0 (rest) and t = 1 (the fitted pose) for the posed joints' rotation and translation; neck, head and the eyes are not animated"});
+            face_skin = Some(base_rig.influences);
+        }
         rig_meta = json!({
             "joints": rig::JOINTS.iter().zip(rig::PARENTS).zip(&rig_value.global)
                 .map(|((n, p), g)| json!({"name": n, "parent": p.map(|i| rig::JOINTS[i]), "position_gltf_m": g})).collect::<Vec<_>>(),
@@ -821,6 +870,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             "weights": "per game vertex from the dense base: jaw = the jaw target's displacement projected on the fitted hinge rotation (clamped 0..1), neck = 1 on the neck seam falling (smoothstep) to 0 at half the chin-to-seam distance, head = the rest",
             "eyes": "Eye_L / Eye_R spheres (radius from the eyes file) are children of eye_L / eye_R",
             "bind": "joints are translation-only; each inverse bind matrix is the negated sum of the joint chain's local translations"});
+        if face_mode {
+            rig_meta["mode"] = json!("face");
+            rig_meta["weights"] = json!("face: see face.weights.method; the neck / head / jaw split the facial weights start from is the head rig's");
+            rig_meta["face"] = face_meta.clone();
+        }
         rig_data = Some((rig_value, weights));
     }
     let mut lods = Vec::new();
@@ -852,7 +906,21 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         lod_meta.push(json!({"node": level.name, "game_vertices": level.mesh.kept.len(), "vertices": surface.source.len(),
                              "triangles": level.triangles.len(),
                              "screen_size": if i == 0 { 1.0 } else { screens[i - 1] }}));
-        let skin = rig_data.as_ref().map(|(_, weights)| {
+        let face_lod_skin = face_skin.as_ref().map(|influences| {
+            let mut joints = Vec::with_capacity(surface.source.len());
+            let mut weights = Vec::with_capacity(surface.source.len());
+            for &g in &surface.source {
+                let (mut j, mut w) = ([0u8; 4], [0.0f32; 4]);
+                for (k, &(joint, weight)) in influences[level.map[g as usize] as usize].iter().enumerate() {
+                    j[k] = joint as u8;
+                    w[k] = weight as f32;
+                }
+                joints.push(j);
+                weights.push(w);
+            }
+            gltf::SkinData { joints, weights }
+        });
+        let skin = if face_lod_skin.is_some() { face_lod_skin } else { rig_data.as_ref().map(|(_, weights)| {
             let w: Vec<[f32; 4]> = surface
                 .source
                 .iter()
@@ -865,7 +933,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 })
                 .collect();
             gltf::SkinData { joints: vec![[0, 1, 2, 0]; w.len()], weights: w }
-        });
+        }) };
         lods.push(Lod {
             name: level.name.clone(),
             positions: gp.iter().map(|p| gm::to_gltf(*p)).collect(),
