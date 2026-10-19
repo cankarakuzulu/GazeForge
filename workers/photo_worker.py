@@ -323,9 +323,10 @@ def ingest(args):
             rf = (stomion - pts[2, 1]) / max(pts[152, 1] - pts[2, 1], 1e-6)
             rp = (keys["stomion"][1] - keys["subnasale"][1]) / max(keys["chin_bottom"][1] - keys["subnasale"][1], 1e-6)
             gap = abs(rf - rp) / max(rf, 1e-6)
+            limit = args.get("max_ratio_gap")
             ratio = {"measure": "subnasale-to-stomion over subnasale-to-chin-bottom", "front": float(rf), "profile": float(rp),
-                     "relative_gap": float(gap), "limit": float(args.get("max_ratio_gap", 0.12))}
-            if gap > ratio["limit"]:
+                     "relative_gap": float(gap), "limit": None if limit is None else float(limit)}
+            if limit is not None and gap > float(limit):
                 failures.append(f"front and profile disagree on proportions (upper lip over lower face: {rf:.3f} vs {rp:.3f})")
         elif facing == side:
             failures.append("the profile keys (subnasale, stomion, chin bottom) were not all found")
@@ -711,7 +712,7 @@ def shell(args):
               "normals": ("file" if own_normals else "computed") if mode == "visible_vertices" else "outer triangles, oriented to the viewers",
               "vertices": int(len(p)), "triangles": int(len(tri)), "outer_vertices": int(visible.sum()),
               "landmarks": len(points), "overlay": overlay, "seconds": time.time() - started}
-    write_json(os.path.join(run, "shell_landmarks.json"), {"points": points, **result})
+    write_json(os.path.join(run, "shell_landmarks.json"), {"points": points, "tolerance_mm": 2.0, **result})
     emit({"ok": True, **result})
 
 

@@ -564,6 +564,7 @@ struct Shell {
     points: Vec<Point>,
     normals: Vec<Point>,
     marks: Vec<(usize, Point)>,
+    tolerance_mm: Option<f64>,
 }
 
 struct ShellMatch {
@@ -579,7 +580,8 @@ struct ShellState {
     sim: Similarity,
     marks: Vec<(Point, usize)>,
     pool: Vec<bool>,
-    seen: Vec<bool>,
+    seen: Option<Vec<bool>>,
+    trim: bool,
     cand: Vec<usize>,
     weight: f64,
     radius: f64,
@@ -604,7 +606,7 @@ fn load_shell(dir: &str) -> Result<Shell, ApiError> {
             Some((k.parse().ok()?, [a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?]))
         })
         .collect();
-    Ok(Shell { points, normals, marks })
+    Ok(Shell { points, normals, marks, tolerance_mm: doc["tolerance_mm"].as_f64() })
 }
 
 fn shell_start(shell: &Shell, p: &[Point], lm: &BTreeMap<usize, usize>) -> Result<(Similarity, Vec<(Point, usize)>), ApiError> {
@@ -626,7 +628,7 @@ fn shell_start(shell: &Shell, p: &[Point], lm: &BTreeMap<usize, usize>) -> Resul
     Ok((solve(&kept)?, kept))
 }
 
-fn shell_match(shell: &Shell, sim: &Similarity, x: &[Point], cand: &[usize], radius: f64) -> Vec<ShellMatch> {
+fn shell_match(shell: &Shell, sim: &Similarity, x: &[Point], cand: &[usize], radius: f64, trim: bool, facing: Option<&[Point]>) -> Vec<ShellMatch> {
     let grid = PointGrid::new(shell.points.iter().map(|q| sim.apply(*q)).collect(), 0.002);
     let mut out = Vec::new();
     for &v in cand {
@@ -638,10 +640,13 @@ fn shell_match(shell: &Shell, sim: &Similarity, x: &[Point], cand: &[usize], rad
                 continue;
             }
             let n = fit::scale(n, 1.0 / len);
+            if facing.is_some_and(|f| fit::dot(f[v], n).abs() < 0.5) {
+                continue;
+            }
             out.push(ShellMatch { vertex: v, point: s, normal: n, residual: fit::dot(n, fit::sub(x[v], s)), source: shell.points[i] });
         }
     }
-    if out.len() > 20 {
+    if trim && out.len() > 20 {
         let mut a: Vec<f64> = out.iter().map(|m| m.residual.abs()).collect();
         a.sort_by(f64::total_cmp);
         let cut = (3.0 * a[a.len() / 2]).max(0.0005);
@@ -650,8 +655,8 @@ fn shell_match(shell: &Shell, sim: &Similarity, x: &[Point], cand: &[usize], rad
     out
 }
 
-fn shell_update(st: &ShellState, x: &[Point]) -> Option<Similarity> {
-    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius);
+fn shell_update(st: &ShellState, x: &[Point], facing: Option<&[Point]>) -> Option<Similarity> {
+    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius, st.trim, facing);
     if m.len() < 100 {
         return None;
     }
@@ -672,7 +677,7 @@ fn shell_update(st: &ShellState, x: &[Point]) -> Option<Similarity> {
 }
 
 fn shell_report(st: &ShellState, x: &[Point]) -> Value {
-    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius);
+    let m = shell_match(&st.shell, &st.sim, x, &st.cand, st.radius, st.trim, None);
     let r: Vec<f64> = m.iter().map(|k| k.residual * 1000.0).collect();
     let lm: Vec<f64> = st.marks.iter().map(|(s, v)| fit::norm(fit::sub(st.sim.apply(*s), x[*v])) * 1000.0).collect();
     json!({"points": st.shell.points.len(), "landmark_pairs": st.marks.len(), "landmark_rms_mm": rms(&lm), "candidates": st.cand.len(),
@@ -700,11 +705,13 @@ pub fn input() -> Value {
                     "focal_px": {"type": "number", "exclusiveMinimum": 0, "description": "every photo's focal length in pixels (default 70/36 of the photo width: a 70 mm full-frame lens)"},
                     "outline_regions": {"type": "array", "items": {"type": "string", "enum": fit::REGIONS}, "description": "regions whose outline is fitted (default all but skull and neck: hair and clothing)"},
                     "leave_out": {"type": "string", "description": "a view name: fit without it, then solve its camera and report how well the fit predicts its outline and landmarks"},
-                    "shell": {"type": "string", "description": "a directory holding a generated mesh's outer shell (shell_points.npy, shell_normals.npy, shell_landmarks.json, as mesh.multiview writes them): adds a dense surface term, the shell placed by its landmarks and re-registered every round"},
+                    "shell": {"type": "string", "description": "a directory holding a generated mesh's outer shell (shell_points.npy, shell_normals.npy, shell_landmarks.json, as mesh.multiview writes them): adds a dense surface term on every vertex of shell_regions that has the shell within shell_radius_mm, the shell placed by its landmarks and re-registered every round; the stay-at-base prior then leaves shell_regions alone"},
                     "shell_weight": {"type": "number", "minimum": 0, "description": "weight of the shell term relative to the landmark term (default 3)"},
                     "shell_regions": {"type": "array", "items": {"type": "string", "enum": fit::REGIONS}, "description": "regions the shell term pulls (default all but eyes and neck: eyeballs and the cut neck)"},
                     "shell_radius_mm": {"type": "number", "exclusiveMinimum": 0, "description": "how far a vertex looks for the shell (default 8)"},
-                    "shell_tolerance_mm": {"type": "number", "minimum": 0, "description": "a dead band: a vertex within this distance of the shell (along its normal) is not pulled, one further away is pulled to the band's edge (default 2: about the generated surface's own error)"}
+                    "shell_trim": {"type": "boolean", "description": "drop shell matches further than 3x the median residual (default false: the trim drops exactly the vertices whose shape differs most from the shell; outliers are held off by shell_radius_mm, a normal test and the dead band)"},
+                    "shell_coverage": {"type": "string", "enum": ["seen", "all"], "description": "which vertices of shell_regions the shell pulls: those a photo sees (default) or every one with the shell within shell_radius_mm (a complete surface)"},
+                    "shell_tolerance_mm": {"type": "number", "minimum": 0, "description": "a dead band: a vertex within this distance of the shell (along its normal) is not pulled, one further away is pulled to the band's edge (default: the shell's own tolerance_mm from shell_landmarks.json, 2 for a mesh.multiview shell; else 0)"}
                 }),
             ),
         ),
@@ -750,15 +757,25 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 None => fit::REGIONS.iter().filter(|r| **r != "eyes" && **r != "neck").map(|r| r.to_string()).collect(),
             };
             let pool: Vec<bool> = region.iter().map(|r| names.iter().any(|n| n == fit::REGIONS[*r])).collect();
-            Some(ShellState { shell: loaded, sim, marks, seen: vec![false; p.len()], pool, cand: Vec::new(), weight: num(input, "shell_weight", 3.0),
-                              radius: num(input, "shell_radius_mm", 8.0) / 1000.0, tolerance: num(input, "shell_tolerance_mm", 2.0) / 1000.0, log: Vec::new() })
+            let all: Vec<usize> = (0..p.len()).filter(|v| pool[*v]).collect();
+            let seen_only = opt(input, "shell_coverage") != Some("all");
+            let cand: Vec<usize> = if seen_only { Vec::new() } else { all.iter().copied().step_by((all.len() / 20000).max(1)).collect() };
+            let trim = input.get("shell_trim").and_then(Value::as_bool).unwrap_or(false);
+            let tolerance = num(input, "shell_tolerance_mm", loaded.tolerance_mm.unwrap_or(0.0)) / 1000.0;
+            Some(ShellState { shell: loaded, sim, marks, seen: seen_only.then(|| vec![false; p.len()]), trim, pool, cand, weight: num(input, "shell_weight", 3.0),
+                              radius: num(input, "shell_radius_mm", 8.0) / 1000.0, tolerance, log: Vec::new() })
         }
         None => None,
     };
 
     let mut views: Vec<View> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
     for rec in views_doc["views"].as_array().ok_or_else(|| ApiError::invalid(format!("{views_path} has no views")))? {
         let name = rec["name"].as_str().unwrap_or("").to_string();
+        if rec.get("dropped").and_then(Value::as_bool) == Some(true) {
+            dropped.push(name);
+            continue;
+        }
         let role = rec["role"].as_str().unwrap_or("extra").to_string();
         let size = [rec["size"][0].as_u64().unwrap_or(0) as usize, rec["size"][1].as_u64().unwrap_or(0) as usize];
         if size[0] == 0 || size[1] == 0 {
@@ -819,7 +836,8 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let index: HashMap<&str, usize> = targets.ids.iter().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
     let sym_pairs: Vec<(usize, usize)> = targets.ids.iter().enumerate().filter_map(|(i, k)| index.get(k.replacen("/l-", "/r-", 1).as_str()).filter(|&&j| j != i).map(|&j| (i, j))).collect();
     let prior_everywhere = opt(input, "prior_scope") == Some("all");
-    let prior_all: Vec<usize> = (0..p.len()).filter(|v| prior_everywhere || (!allowed[*v] && fit::REGIONS[region[*v]] != "eyes")).collect();
+    let shell_covers = |v: usize| surface.as_ref().is_some_and(|st| st.pool[v]);
+    let prior_all: Vec<usize> = (0..p.len()).filter(|v| prior_everywhere || (!allowed[*v] && fit::REGIONS[region[*v]] != "eyes" && !shell_covers(*v))).collect();
     let prior_rows: Vec<usize> = prior_all.iter().copied().step_by((prior_all.len() / 8000).max(1)).collect();
     let mut prior = Normal::new(t);
     let prior_weight = wprior / (3 * prior_rows.len()).max(1) as f64;
@@ -834,6 +852,7 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let fitted_views = views.iter().filter(|v| !v.left_out).count().max(1) as f64;
     let mut w = vec![0.0; t];
     let mut log = Vec::new();
+    let mut scales: Vec<Value> = Vec::new();
     for round in 0..=rounds {
         let last = round == rounds;
         let radius = RADII_PX[round.min(RADII_PX.len() - 1)];
@@ -857,10 +876,11 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             if round == 0
                 && !view.left_out
                 && let Some(st) = surface.as_mut()
+                && let Some(seen) = st.seen.as_mut()
             {
                 for v in 0..x.len() {
-                    if st.pool[v] && !st.seen[v] && fr.visible(v, 0.004) {
-                        st.seen[v] = true;
+                    if st.pool[v] && !seen[v] && fr.visible(v, 0.004) {
+                        seen[v] = true;
                     }
                 }
             }
@@ -910,8 +930,9 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         log.push(json!({"round": round, "radius_px": radius, "views": round_log}));
         if round == 0
             && let Some(st) = surface.as_mut()
+            && let Some(seen) = &st.seen
         {
-            let all: Vec<usize> = (0..p.len()).filter(|v| st.seen[*v]).collect();
+            let all: Vec<usize> = (0..p.len()).filter(|v| seen[*v]).collect();
             st.cand = all.iter().copied().step_by((all.len() / 20000).max(1)).collect();
         }
         if last || round == 0 {
@@ -919,11 +940,11 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         if let Some(st) = surface.as_mut() {
             for _ in 0..2 {
-                if let Some(s) = shell_update(st, &x) {
+                if let Some(s) = shell_update(st, &x, Some(&normals)) {
                     st.sim = s;
                 }
             }
-            let matched = shell_match(&st.shell, &st.sim, &x, &st.cand, st.radius);
+            let matched = shell_match(&st.shell, &st.sim, &x, &st.cand, st.radius, st.trim, Some(&normals));
             let shell_w = st.weight / matched.len().max(1) as f64;
             for m in matched.iter().filter(|m| m.residual.abs() > st.tolerance) {
                 let rows = targets.rows(m.vertex).to_vec();
@@ -933,11 +954,14 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             let r: Vec<f64> = matched.iter().map(|m| m.residual * 1000.0).collect();
             st.log.push(json!({"round": round, "matched": matched.len(), "residual_rms_mm": rms(&r), "scale": st.sim.scale}));
         }
+        let data_trace = (0..t).map(|i| acc.gram[i * t + i] - prior.gram[i * t + i]).sum::<f64>() / t as f64;
+        let prior_trace = (0..t).map(|i| prior.gram[i * t + i]).sum::<f64>() / t as f64;
         let sw = wsym / sym_pairs.len().max(1) as f64;
         for (i, j) in &sym_pairs {
             acc.add(&[(*i, 1.0), (*j, -1.0)], 0.0, sw);
         }
         let trace: f64 = (0..t).map(|i| acc.gram[i * t + i]).sum::<f64>() / t as f64;
+        scales.push(json!({"round": round, "data": data_trace, "prior": prior_trace, "symmetry": 2.0 * sw * sym_pairs.len() as f64 / t as f64, "used": trace}));
         for i in 0..t {
             acc.gram[i * t + i] += ridge * trace;
         }
@@ -964,10 +988,10 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "targets": t, "nonzero": weights.len(), "at_1": w.iter().filter(|x| **x >= 1.0 - 1e-9).count(),
         "weights_in_bounds": w.iter().all(|x| (0.0..=1.0).contains(x)), "weight_min": w.iter().copied().fold(f64::INFINITY, f64::min),
         "weight_max": w.iter().copied().fold(f64::NEG_INFINITY, f64::max), "weights": weights,
-        "views": per_view, "cameras": cameras, "leave_out": leave_out, "outline_regions": region_names,
+        "views": per_view, "cameras": cameras, "dropped_views": dropped, "leave_out": leave_out, "outline_regions": region_names,
         "term_weights": {"landmarks": wl, "outline": wo, "prior": wprior, "symmetry": wsym, "ridge": ridge, "rounds": rounds, "pose_prior_deg": pose_sigma, "sparsity": sparsity, "extra_landmark_weight": extra_lm},
         "samples": {"prior": prior_rows.len(), "symmetry_pairs": sym_pairs.len()},
-        "shell_gate": shell, "rounds": log, "load_seconds": load_seconds, "seconds": started.elapsed().as_secs_f64(),
+        "shell_gate": shell, "rounds": log, "term_scales": scales, "load_seconds": load_seconds, "seconds": started.elapsed().as_secs_f64(),
         "fitted": run.join("fitted_dense.npy").display().to_string()
     });
     if let Some(st) = &surface {
@@ -1063,6 +1087,10 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let ingested = step("0 photo.ingest", photo::ingest(ctx, &ingest_in), t0)?;
     let mut photos = vec![json!({"name": "front", "path": text(input, "front"), "role": "front"}),
                           json!({"name": "profile", "path": text(input, "profile"), "role": "profile", "side": side})];
+    if let Some(path) = opt(input, "other_profile") {
+        let other = if side == "left" { "right" } else { "left" };
+        photos.push(json!({"name": format!("profile_{other}"), "path": path, "role": "profile", "side": other}));
+    }
     for (i, e) in input.get("extras").and_then(Value::as_array).into_iter().flatten().enumerate() {
         let name = e.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("extra_{}", i + 1));
         photos.push(json!({"name": name, "path": e["path"].clone(), "role": "extra"}));
@@ -1121,6 +1149,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let mut report = json!({"run": run.display().to_string(), "fit": "photos", "spec": spec_path.display().to_string(), "glb": glb.display().to_string(),
                         "sheet": sheet_out, "total_seconds": started.elapsed().as_secs_f64(), "stages": stages,
                         "facing": ingested.get("facing"), "views": viewed.get("views").and_then(Value::as_array).map(Vec::len),
+                        "dropped": viewed.get("dropped"), "warnings": viewed.get("warnings"),
                         "fitted": {"nonzero": fitted["nonzero"], "views": fitted["views"], "shell_gate": fitted["shell_gate"], "weights_in_bounds": fitted["weights_in_bounds"]},
                         "export": exported, "review": reviewed,
                         "texture": "not projected: texture.project reads the mesh path's orthographic front and profile cameras"});
@@ -1187,6 +1216,22 @@ mod tests {
         assert!(crate::schema::validate(&input(), &shell).is_empty());
         assert!(!crate::schema::validate(&input(), &json!({"run": "r", "store": "s", "pack": "p", "catalog": "c", "shell_regions": ["face"]})).is_empty());
         assert!(!crate::schema::validate(&views_input(), &json!({"run": "r", "photos": [{"name": "a", "path": "b", "role": "side"}, {"name": "c", "path": "d", "role": "front"}]})).is_empty());
+    }
+
+    #[test]
+    fn a_far_shell_match_is_kept() {
+        let mut points = Vec::new();
+        for i in 0..60 {
+            for j in 0..60 {
+                points.push([i as f64 * 0.001, j as f64 * 0.001, 0.0]);
+            }
+        }
+        let shell = Shell { normals: vec![[0.0, 0.0, 1.0]; points.len()], points, marks: Vec::new(), tolerance_mm: None };
+        let x: Vec<Point> = (0..40).map(|k| [0.01 + 0.001 * k as f64, 0.03, if k < 30 { 0.0005 } else { 0.006 }]).collect();
+        let cand: Vec<usize> = (0..x.len()).collect();
+        let m = shell_match(&shell, &Similarity::identity(), &x, &cand, 0.008, false, None);
+        assert_eq!(m.len(), 40);
+        assert!(m.iter().filter(|k| k.residual > 0.005).count() == 10);
     }
 
     #[test]
