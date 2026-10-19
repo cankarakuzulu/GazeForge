@@ -3,8 +3,9 @@
 A character system in Rust in the spirit of MakeHuman: one shared dense base mesh, linear targets on it, characters as
 data, and a game-resolution mesh built once from the dense base. Meant to be driven by people and by AI agents alike.
 
-**Status: 0.1.0, the first edition.** Every milestone below has working code; the gates that are still open are listed,
-with their last measurements, in [CHANGELOG.md](CHANGELOG.md). Interfaces may change before 1.0.
+**Status: 0.2.0.** Every milestone below has working code, and 0.2.0 adds facial animation as an experimental feature; the
+gates that are still open are listed, with their last measurements, in [CHANGELOG.md](CHANGELOG.md). Interfaces may
+change before 1.0.
 
 ## How it works
 
@@ -783,7 +784,9 @@ gazeforge call animation.from_csv --input '{"csv": "TAKE.csv", "fps": 60, "out":
 - **Joint tracks (approximate).** With a face-rigged character (`export-glb --rig face`), `joint_tracks: true` adds a
   second animation `<name>_joints` driving the facial joints instead of the blend shapes: per joint, the rest plus each
   shape's fitted pose difference times its weight (rotations summed as quaternion differences and normalised). This is an
-  approximation of the blend shapes, not a solve; an engine plays one animation or the other, not both.
+  approximation of the blend shapes, not a solve; an engine plays one animation or the other, not both. On a character
+  exported with `--rig face2 --rig-correctives on`, the joint animation does not drive the corrective morphs (they stay
+  at 0), so it plays at the quality of the joints alone.
 - **Live Link Face CSV (EXPERIMENTAL).** `animation.from_csv` reads a CSV whose header names ARKit blendshapes
   (PascalCase as the iOS app is believed to write them, or camelCase), with an optional `Timecode` column
   (`HH:MM:SS:FF`, frames at `fps`; otherwise row index / `fps`). The app's column list, timecode format and head rotation
@@ -829,7 +832,7 @@ python macro_weights.py MACRO_JSON TARGETS_ROOT SLIDERS_JSON [--mode mpfb|gf]
 
 Each milestone ends on a measured gate, not a declaration.
 
-| | What | Gate | State in 0.1.0 |
+| | What | Gate | State in 0.2.0 |
 |---|---|---|---|
 | M0 | Pilot: the Rust core reads the dense base and targets and builds the shared ~20k-vertex game base; a sculpt maps onto it by index | per-region error against the dense sculpt within budget; no sliver triangles outside the eye and nostril areas; no UV flips; a painted look-development render passes review | open: slivers, canthus folds and the clay difference on held-out faces; review pending |
 | M1 | Core: the character spec (JSON: target weights, head-only macros, residual), evaluation and placement onto the game base, shape and game-mesh gates (folds, inner surfaces, move roughness, triangle quality, UV flips, orientation, seams, path continuity), glTF export with blend shapes and the nested LOD chain | a spec round-trips to glTF and into a game engine; every gate fires on a planted defect | met; the shell gate's fold rule is under review |
@@ -837,7 +840,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M3 | Browser designer: sliders and a live 3D view, a WASM preview kernel over the pure maths crate, heavy jobs on the server | slider response under 16 ms on the 20k base | met (frame p95 under 10 ms); server settle under 300 ms with `f5` on an idle machine |
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
-| 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | planned |
+| 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
 
 ## Development
 

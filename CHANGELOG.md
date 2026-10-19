@@ -4,6 +4,44 @@ All notable changes to GazeForge. The project follows [Semantic Versioning](http
 version may change interfaces. Every milestone ends on a measured gate, and a gate that is still open is listed here as
 open, with its last measurement, rather than left out.
 
+## [0.2.0] - 2026-10-19
+
+Facial animation, released as **experimental**: it works end to end and is deterministic, but its quality gates are
+open, and every number below was measured on rendered test faces - no recording of a real person has been processed yet.
+
+### Added
+
+- **Facial animation from video.** `animation.from_video` (a job): MediaPipe's Face Landmarker on every frame
+  (blendshape scores and head pose), a per-frame gate with rejected frames interpolated and listed, neutral and optional
+  range-of-motion calibration, a squint/smile coupling, One Euro smoothing, retarget by name to the character's morphs,
+  head rotation, and a glTF animation written into a copy of the character (a weights channel per head mesh, a head-joint
+  rotation, and optional approximate joint tracks for the face rig). An opt-in lid guard.
+- **Face-capture CSV (EXPERIMENTAL).** `animation.from_csv` reads a CSV of ARKit blendshape columns, as a Live Link Face
+  recording is believed to have; the app's columns and units have not been checked against a real recording.
+- **Designer.** A Timeline panel: load or run a clip, play, scrub, loop, speed, with the head rotation shown; it offers
+  its state, clip included, through the panel API's getState / setState.
+
+### Changed
+
+- The tool version written into glTF exports is now 0.2.0. Every other byte of existing exports is unchanged: the glb
+  files differ from 0.1.0's only in the three version characters, and the placement and OBJ suites are identical.
+
+### Open gates (measured, not met)
+
+- **Exact truth on a rendered clip with known weights:** the 8 driven channels pass correlation, error and lag; head
+  pitch r 0.921 (bar 0.95). Brow-down reaches 0.04-0.05 of its true peak (bar 0.6-1.4): the landmarker barely moves it on
+  these renders. Channels the clip never drives leak up to 0.28 (p95; bar 0.15), mostly while the head turns.
+- **Reprojection** of the animated character onto the source landmarks: median 7.2 px (bar 4 px).
+- **Eyelids and facing on mixed expressions:** fail. A single blink shape at a weight between 0 and 1 already puts the
+  lid inside the eyeball, because its straight-line path crosses the ball - the same root cause as the eyelid defect
+  listed under 0.1.0. The opt-in lid guard passes this gate only by cutting blinks.
+- **Godot:** blend weights match exactly; skinned positions differ by 7.2e-5 m against a 1e-5 m bar, which is the
+  engine's own rest-pose error with its 16-bit skin weights (7.1e-5 m).
+- **A held-out face** fails blink and brow correlation, the wink check, the brow and blink amplitude bars and jitter.
+- On a character with face-rig correctives, the joint-track animation does not drive the correctives.
+
+Every open gate of 0.1.0 is unchanged.
+
 ## [0.1.0] - 2026-10-19
 
 The first edition: every milestone of the roadmap has working code, a CLI, HTTP and MCP front door over one registry, and a
