@@ -315,9 +315,9 @@ through another that uses the same directory.
 
 A browser page served by `gazeforge serve`: sliders for the 290 head targets (cheek, chin, ears, eyebrows, eyes,
 forehead, head, mouth, neck, nose) with search, a category filter and reset (double-click resets one slider), the macro
-sliders (head only: the similarity is stripped and the neck seam pinned) when a macro definition file is given, a 3D view
-(orbit, wheel zoom, front / 30 / 85 degree cameras, clay or normal shading), the `character.measure` measurements of the
-settled character, and saving the character as a spec file.
+sliders (head only: the similarity is stripped and the neck seam pinned) when a macro definition file is given, a 3D
+viewer for topology inspection (below), undo / redo of every edit, extension panels, and saving the character as a spec
+file.
 
 ```
 gazeforge serve --port 7878 --web web       # --web: the folder holding index.html (default ./web, or GAZEFORGE_WEB)
@@ -334,7 +334,7 @@ sliders preview with a one-sided slope fetched when the drag starts (`designer.m
 Everything heavy stays on the server: the dense pack, the catalog and the placement never reach the browser. The page
 downloads one preview pack per target set (game triangles plus each target's i16 delta at the game vertices and a scale,
 a content-addressed store blob, cached by hash) and the settled positions. The commands, usable from every front door:
-`designer.sliders`, `designer.pack`, `designer.settle`, `designer.macro_delta`, `designer.save`. The served process keeps
+`designer.sliders`, `designer.pack`, `designer.settle`, `designer.macro_delta`, `designer.scene`, `designer.save`. The served process keeps
 one pack, catalog and game base in memory between settles. `GET /v1/blob/<sha256>?store=STORE` serves a store blob.
 
 With them it keeps, built on the first settle, everything the placement computes that does not depend on the character:
@@ -349,6 +349,65 @@ Building the page's kernel: `cargo build --release -p gf-wasm --target wasm32-un
 `target/wasm32-unknown-unknown/release/gf_wasm.wasm` to `web/gf_wasm.wasm` (`CARGO_PROFILE_RELEASE_DEBUG=0` keeps it
 small). The page uses WebGL2 and no third-party scripts. On some Windows machines Chrome's default graphics backend gives
 no WebGL context; `--use-angle=gl` does.
+
+#### Viewer controls
+
+The viewer draws the head by vertex pulling (positions, normals and indices live in textures), so every mode shares one
+upload per frame. `designer.scene` returns the game base's coarser levels of detail as triangles over the finest level's
+vertices, the base triangle UVs, and the eyeballs of an optional eyes file as spheres.
+
+- **Camera:** orbit, pan and zoom with damping; double-click a surface point to orbit around it; perspective or
+  orthographic with matched framing; named views; field of view (the framing at the pivot is kept).
+- **Layouts:** single, side by side, quad (front, side and top orthographic plus perspective). Each viewport has its own
+  camera; the active one is outlined and receives the camera controls. Render mode and level of detail are per viewport
+  (linked by default).
+- **Render modes:** clay, flat, Gouraud, Blinn-Phong, anisotropic (Kajiya-Kay along horizontal or vertical tangent rings),
+  matcap, normals, hidden line, triangle quality (smallest angle), displacement from a reference in mm (the starting
+  character, the neutral base or a snapshot; signed along the normal), mean curvature from the vertex normals, UV checker.
+  Overlays on any mode: wireframe (constant pixel width, optionally faded where triangles are only a few pixels tall),
+  hidden edges through the surface, vertex points, back-face
+  highlight, UV seams and open boundaries. Levels of detail switch per viewport.
+- **Lighting:** presets (studio three-point, flat, rim, top, single key), up to four lights with azimuth, elevation,
+  intensity and colour temperature, a hemisphere ambient, exposure, lights fixed to the camera or to the world, a gizmo.
+- **Clipping:** up to three planes (x, y, z or free), each optionally a slab of two parallel planes; the section cap is
+  filled (stencil) and the back faces inside a cut are drawn in their own colour.
+- **Hide:** show, hide or isolate the head, the eyes, extra meshes and overlays; hide regions (each vertex belongs to the
+  category of the local target that moves it most relative to that target's largest move) or everything inside a box.
+- **History:** sliders, macros, reset, visibility and panel actions undo and redo; camera moves are not recorded.
+- **Screenshot:** a PNG of the active viewport or of the whole layout. View settings are remembered in the browser.
+
+| key | action | key | action |
+|---|---|---|---|
+| Ctrl+Z, Ctrl+Y | undo, redo | F, Shift+F | frame the head, frame the selection |
+| double-click | orbit pivot on the surface | drag, right / middle / Shift drag, wheel | orbit, pan, zoom |
+| O or 5 | perspective / orthographic | 1, Shift+1 | front, back |
+| 3, Shift+3 | left side, right side | 7, Shift+7, 9 | top, bottom, three-quarter |
+| [ and ] | field of view | L, N | next layout, next viewport |
+| M, Shift+M | next, previous render mode | `,` and `.` | coarser, finer level of detail |
+| W, X, P | wireframe, hidden edges, points | B, E | back faces, seams and boundaries |
+| C, Alt+wheel | clip plane 1, move it | G | light gizmo |
+| H, Alt+H, I | hide the head, show everything, isolate the head | K, Shift+K | PNG of the view, of the layout |
+| ? | shortcut help | Esc | close the help |
+
+#### Panels
+
+A panel is an ES module `web/panels/<id>.js` listed in `web/panels/index.json` (an array of ids; its order is the UI
+order). The page imports every listed module at start; the module calls `window.GF.registerPanel({ id, title, order,
+mount(rootEl, api) })`. The `api` given to `mount`:
+
+```
+call(command, input) -> Promise<result>     a registry command over HTTP (POST /v1/<command>)
+character()                                 the current character as the page holds it (store, pack, catalog, game, weights, ...)
+onCharacterChange(cb)                       cb(character, { kind: "settle" | "slider", positions?, measurements? })
+setPose(id, positions | null)               temporary head positions (Float32Array, finest-level order); last non-null wins
+setExtraMesh(id, { positions, indices, normals?, color? } | null)
+setOverlay(id, { lines?, points?, color } | null)
+pushUndo({ label, undo(), redo() })         a panel action joins the page's undo / redo history
+requestRender()
+```
+
+Panels never reach the renderer directly. `web/panels/measurements.js` (the settled measurements, a bounding-box overlay
+with undo, the level-of-detail sizes through `call`) is the example.
 
 ### Image to character
 
