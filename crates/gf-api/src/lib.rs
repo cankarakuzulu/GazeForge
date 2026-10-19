@@ -5,13 +5,17 @@ use serde_json::{Value, json};
 pub mod body;
 mod commands;
 pub mod designer;
+pub mod exactjson;
 pub mod error;
 pub mod jobs;
 pub mod photo;
 pub mod photo_fit;
 pub mod photo_gate;
 mod process;
+pub mod project;
+pub mod resources;
 pub mod schema;
+pub mod zipsafe;
 
 pub use error::{ApiError, Code};
 
@@ -60,13 +64,14 @@ pub struct Ctx {
     pub jobs_dir: PathBuf,
     pub exe: PathBuf,
     pub job_id: Option<String>,
+    pub projects: PathBuf,
 }
 
 impl Ctx {
     pub fn from_env() -> Ctx {
         let jobs_dir = std::env::var_os("GAZEFORGE_JOBS").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("gazeforge-jobs"));
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gazeforge"));
-        Ctx { jobs_dir, exe, job_id: None }
+        Ctx { jobs_dir, exe, job_id: None, projects: project::default_root() }
     }
 }
 
@@ -168,7 +173,7 @@ mod tests {
 
     #[test]
     fn unknown_commands_bad_input_and_direct_jobs_are_refused_with_codes() {
-        let ctx = Ctx { jobs_dir: std::env::temp_dir(), exe: PathBuf::from("x"), job_id: None };
+        let ctx = Ctx { jobs_dir: std::env::temp_dir(), exe: PathBuf::from("x"), job_id: None, projects: std::env::temp_dir() };
         assert_eq!(error_code(&call(&ctx, "no.such", &json!({}))), Some(Code::NotFound));
         assert_eq!(error_code(&call(&ctx, "commands.list", &json!({"x": 1}))), Some(Code::InvalidInput));
         assert_eq!(error_code(&call(&ctx, "debug.slow", &json!({"seconds": 1}))), Some(Code::InvalidInput));

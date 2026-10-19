@@ -211,6 +211,7 @@ pub fn work(jobs_dir: &Path, id: &str) -> Result<(), String> {
         jobs_dir: jobs_dir.to_path_buf(),
         exe: std::env::current_exe().map_err(|e| e.to_string())?,
         job_id: Some(id.to_string()),
+        projects: crate::project::default_root(),
     };
     let envelope = call(&ctx, text(&record, "command"), record.get("input").unwrap_or(&json!({})));
     write_atomic(&dir.join("result.json"), crate::text(&envelope).as_bytes())

@@ -160,12 +160,12 @@ pub fn stitch_input() -> Value {
     let mut props = json!({
         "store": {"type": "string", "minLength": 1, "description": "path of the store directory"},
         "spec": {"type": "string", "description": "path of a spec file"},
-        "character": {"type": "object", "description": "a spec object (instead of spec)"},
+        "character": {"type": "object", "description": "a spec object, or the designer's character (store, pack, catalog, game, weights, ...), instead of spec"},
         "macro": {"type": "string", "description": "the macro definition, for a spec with macro sliders"},
         "body": {"type": "string", "minLength": 1, "description": "a body pack directory written by body.import"},
         "lod": {"type": "integer", "description": "0 (this command stitches the finest LOD; export-glb --body stitches every LOD)"},
         "out_obj": {"type": "string", "description": "write the head and the stitched body as one OBJ"},
-        "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices) and the seam as overlay lines"},
+        "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
         "enforce": {"type": "boolean", "description": "fail with gate_failed when a gate fails (default true)"},
         "plant": {"enum": ["gap", "crack", "crease", "flip", "penetrate"], "description": "gate self-test: plant this defect after stitching; the gates must fail"}
     });
@@ -203,6 +203,18 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
     let spec: Spec = match (input.get("character"), text(input, "spec")) {
+        (Some(c), _) if c.is_object() && c.get("format").is_none() && c.get("pack").is_some() => {
+            let mut form = c.clone();
+            if form.get("store").is_none() {
+                form["store"] = json!(root);
+            }
+            if form.get("macro").is_none()
+                && let Some(m) = input.get("macro")
+            {
+                form["macro"] = m.clone();
+            }
+            crate::designer::spec_from_input(&form)?
+        }
         (Some(c), _) if c.is_object() => serde_json::from_value(c.clone()).map_err(|e| ApiError::invalid(format!("character: {e}")))?,
         (_, p) if !p.is_empty() => ch::read_spec(Path::new(p)).map_err(ApiError::invalid)?,
         _ => return Err(ApiError::invalid("pass spec (a path) or character (a spec object)")),
@@ -259,7 +271,8 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             lines.push(seam[(m + 1) % seam.len()].position);
         }
         result["mesh"] = json!({"frame": "dense frame: metres, z up", "positions": f32s(&st.positions), "normals": f32s(&normals),
-                                "indices": b64(&indices), "seam_lines": f32s(&lines)});
+                                "indices": b64(&indices), "seam_lines": f32s(&lines), "head_positions": f32s(&head),
+                                "head_scale": controls.head_scale});
     }
     if !failed.is_empty() && input.get("enforce").and_then(Value::as_bool).unwrap_or(true) {
         return Err(ApiError::new(Code::GateFailed, format!("stitch gates failed: {}", failed.join("; "))).details(result));

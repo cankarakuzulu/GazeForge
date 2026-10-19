@@ -1,14 +1,18 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
 
 const params = new URLSearchParams(location.search);
-const store = params.get("store");
+let store = params.get("store");
 const opt = (k) => params.get(k) || undefined;
 const $ = (id) => document.getElementById(id);
 
 async function api(name, input) {
   const r = await fetch(`/v1/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   const env = await r.json();
-  if (!env.ok) throw new Error(`${name}: ${env.error?.message || r.status}`);
+  if (!env.ok) {
+    const e = new Error(`${name}: ${env.error?.message || r.status}`);
+    Object.assign(e, { code: env.error?.code, details: env.error?.details, hint: env.error?.hint });
+    throw e;
+  }
   return env.result;
 }
 
@@ -28,6 +32,8 @@ const D = {
   dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
+  panelHooks: new Map(), pendingVis: new Map(),
+  project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
 };
 window.gfDesigner = D;
 let V = null;
@@ -40,6 +46,7 @@ const SHORTCUTS = [
   ["[ / ]", "narrower / wider field of view (framing kept)"], ["L", "layout: single, side by side, quad"], ["N", "next viewport"], ["M / Shift+M", "next / previous render mode"], [", / .", "coarser / finer level of detail"],
   ["W", "wireframe overlay"], ["X", "hidden edges through the surface (x-ray wire)"], ["P", "vertex points"], ["B", "back-face highlight"], ["E", "seams and boundary edges"],
   ["C", "clip plane 1 on / off"], ["G", "light gizmo"], ["H / Alt+H", "hide the head / show everything"], ["I", "isolate the head"], ["K / Shift+K", "PNG of the active view / the whole layout"],
+  ["Ctrl+N / Ctrl+O", "new / open project"], ["Ctrl+S / Ctrl+Shift+S", "save / save the project as"],
   ["?", "this help"], ["Esc", "close the help"],
 ];
 D.shortcuts = SHORTCUTS;
@@ -214,7 +221,7 @@ function frame(ts) {
   D.raf = 0;
   const t0 = performance.now();
   if (D.hooks.beforeFrame) D.hooks.beforeFrame();
-  if (D.dirty) {
+  if (D.dirty && V.meshes.has("head")) {
     const pose = activePose();
     if (pose) V.updateHead(pose.positions, pose.normals);
     else {
@@ -345,6 +352,7 @@ function renderHistory() {
   $("redo").disabled = !H.undone.length;
   $("undo").title = H.done.length ? `Undo ${H.done[H.done.length - 1].label} (Ctrl+Z)` : "Nothing to undo (Ctrl+Z)";
   $("redo").title = H.undone.length ? `Redo ${H.undone[H.undone.length - 1].label} (Ctrl+Y)` : "Nothing to redo (Ctrl+Y)";
+  scheduleDirty();
   if (!list) return;
   const rows = [`<li class="${H.done.length ? "" : "now"}" data-at="0">start</li>`];
   H.done.forEach((e, i) => rows.push(`<li class="${i === H.done.length - 1 ? "now" : ""}" data-at="${i + 1}">${escapeHtml(e.label)}</li>`));
@@ -883,8 +891,15 @@ function interaction() {
   });
   window.addEventListener("resize", () => request(false));
   window.addEventListener("keydown", (e) => {
-    if (e.target.matches?.("input[type=text], input[type=search], textarea")) return;
     const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && !e.altKey && D.ready) {
+      const kl = k.toLowerCase();
+      if (kl === "s") { e.preventDefault(); if (e.shiftKey) saveProjectAs(); else saveProject(); return; }
+      if (kl === "o") { e.preventDefault(); openProject(); return; }
+      if (kl === "n") { e.preventDefault(); newProject(); return; }
+    }
+    if (k === "Escape" && P.dialogDone) { P.dialogDone(false); return; }
+    if (e.target.matches?.("input[type=text], input[type=search], textarea") || P.dialogDone) return;
     if (ctrl && (k === "z" || k === "Z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (ctrl && (k === "y" || ((k === "z" || k === "Z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
     if (ctrl || (e.altKey && k !== "h" && k !== "H")) return;
@@ -970,8 +985,8 @@ function makeApi(panelId) {
     character: () => JSON.parse(JSON.stringify(settleInput())),
     onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
     setPose,
-    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); renderVisibility(); request(false); },
-    setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); renderVisibility(); request(false); },
+    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); pendingVisibility("mesh", String(id)); renderVisibility(); request(false); },
+    setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
     pushUndo,
     requestRender: () => request(false),
     panel: panelId,
@@ -1004,7 +1019,13 @@ async function loadPanels() {
     d.open = true;
     d.innerHTML = `<summary>${escapeHtml(def.title || def.id)}</summary><div class="panel-body"></div>`;
     box.appendChild(d);
-    try { def.mount(d.querySelector(".panel-body"), makeApi(def.id)); D.panels.push({ id: def.id, mounted: true }); }
+    try {
+      const ret = def.mount(d.querySelector(".panel-body"), makeApi(def.id)) || {};
+      const getState = typeof ret.getState === "function" ? ret.getState : typeof def.getState === "function" ? def.getState : null;
+      const setState = typeof ret.setState === "function" ? ret.setState : typeof def.setState === "function" ? def.setState : null;
+      if (getState || setState) D.panelHooks.set(def.id, { getState, setState });
+      D.panels.push({ id: def.id, mounted: true, state: !!getState });
+    }
     catch (e) { d.querySelector(".panel-body").innerHTML = `<div class="note">mount failed: ${escapeHtml(e.message)}</div>`; D.panels.push({ id: def.id, error: e.message }); }
   }
   renderVisibility();
@@ -1024,12 +1045,405 @@ async function save() {
   }
 }
 
-async function main() {
-  if (!store) {
-    setStatus("preview", "open this page with ?store=<store path> (optional &spec=, &macro=, &eyes=)");
+const P = D.project;
+const PROJECT_OPTIONS = ["macro", "eyes", "face_morphs", "face_prefix"];
+const RKEY = "gazeforge.designer.recent";
+const rootArg = () => (opt("root") ? { root: opt("root") } : {});
+const slotName = () => P.name || "untitled";
+
+function pendingVisibility(kind, id) {
+  const key = `${kind}:${id}`;
+  if (!D.pendingVis.has(key)) return;
+  const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id);
+  if (t) { t.visible = D.pendingVis.get(key); D.pendingVis.delete(key); }
+}
+
+function viewerState() {
+  return JSON.parse(JSON.stringify({
+    opts: V.opts, layout: V.layout, active: V.active, vp: V.vp, link: D.link, refSource: D.refSource, preset: D.preset,
+    cams: V.cams.map((c) => ({ yaw: c.goal.yaw, pitch: c.goal.pitch, dist: c.goal.dist, target: c.goal.target, fov: c.goal.fov, ortho: c.ortho, name: c.name })),
+    visibility: visState(),
+  }));
+}
+
+function applyViewerState(s) {
+  if (!s || typeof s !== "object" || !s.opts) return;
+  applySettings(s);
+  const o = s.opts;
+  if (o.box && Array.isArray(o.box.lo) && Array.isArray(o.box.hi)) Object.assign(V.opts.box, { on: !!o.box.on, lo: o.box.lo.slice(0, 3), hi: o.box.hi.slice(0, 3) });
+  if (Number.isInteger(o.hiddenRegions)) V.opts.hiddenRegions = o.hiddenRegions;
+  if (Array.isArray(s.cams)) s.cams.slice(0, 4).forEach((c, i) => {
+    if (!c) return;
+    V.cams[i].set({ yaw: c.yaw, pitch: c.pitch, dist: c.dist, target: c.target, fov: c.fov, ortho: !!c.ortho }, true);
+    if (typeof c.name === "string") V.cams[i].name = c.name;
+  });
+  if (Number.isInteger(s.active)) V.active = Math.max(0, Math.min(s.active, LAYOUTS[V.layout].length - 1));
+  if (Array.isArray(s.visibility)) for (const [kind, id, on] of s.visibility) {
+    const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id);
+    if (t) t.visible = !!on; else D.pendingVis.set(`${kind}:${id}`, !!on);
+  }
+  $("preset").value = D.preset;
+  $("ref").value = D.refSource;
+  refreshOpts();
+  refreshToolbar();
+  renderRegions();
+  renderVisibility();
+  if (V.vp.some((x) => x.mode === MODE_INDEX.displacement)) ensureReference();
+  if (needUV() && !D.placedUVs) settle();
+  request(false);
+}
+
+function panelStates() {
+  const out = {};
+  for (const [id, h] of D.panelHooks) {
+    if (!h.getState) continue;
+    try { out[id] = JSON.parse(JSON.stringify(h.getState() ?? null)); } catch (e) { console.warn(`panel ${id} getState: ${e.message}`); }
+  }
+  return out;
+}
+
+function applyPanelStates(states) {
+  if (!states || typeof states !== "object") return;
+  for (const [id, s] of Object.entries(states)) {
+    const h = D.panelHooks.get(id);
+    if (!h?.setState) continue;
+    try { h.setState(s); } catch (e) { toast(`panel ${id} could not restore its state: ${e.message}`); }
+  }
+}
+
+function characterInput() {
+  const c = settleInput();
+  for (const k of ["store", "eyes", "uvs", "fast"]) delete c[k];
+  return JSON.parse(JSON.stringify(c));
+}
+
+function currentOptions() {
+  const o = {};
+  for (const k of PROJECT_OPTIONS) if (opt(k)) o[k] = opt(k);
+  return o;
+}
+
+function projectSig() {
+  return JSON.stringify({ c: characterInput(), p: panelStates(), n: $("p-notes").value });
+}
+
+function scheduleDirty() {
+  if (P.dirtyTimer) return;
+  P.dirtyTimer = setTimeout(() => { P.dirtyTimer = 0; updateDirty(); }, 0);
+}
+
+function updateDirty() {
+  if (!D.ready || P.savedSig === null) return;
+  P.dirty = P.recovered || P.relinked || projectSig() !== P.savedSig;
+  const label = P.name || "untitled";
+  $("p-name").textContent = label;
+  $("p-name").classList.toggle("dirty", P.dirty);
+  $("p-name").title = P.dirty ? "unsaved changes" : "saved";
+  document.title = `${P.dirty ? "* " : ""}${label} - GazeForge Designer`;
+}
+
+function projectInput(name) {
+  const doc = P.doc, a = P.active;
+  const chars = doc ? doc.characters.map((c, i) => (i === a ? { id: c.id, designer: characterInput(), history: c.history } : { id: c.id, spec: c.spec, history: c.history }))
+    : [{ id: "c1", designer: characterInput() }];
+  return { name, ...rootArg(), store, characters: chars, active: a, panels: panelStates(), viewer: viewerState(), notes: $("p-notes").value, options: currentOptions() };
+}
+
+function readRecent() { try { const r = JSON.parse(localStorage.getItem(RKEY) || "[]"); return Array.isArray(r) ? r.filter((x) => typeof x === "string") : []; } catch { return []; } }
+function addRecent(name) { try { localStorage.setItem(RKEY, JSON.stringify([name, ...readRecent().filter((x) => x !== name)].slice(0, 8))); } catch {} }
+
+async function renderRecent() {
+  const sel = $("p-recent");
+  let names = readRecent();
+  try {
+    const l = await api("project.list", rootArg());
+    const have = new Set(l.projects.filter((p) => !p.error).map((p) => p.name));
+    names = [...names.filter((n) => have.has(n)), ...l.projects.filter((p) => !p.error && !names.includes(p.name)).map((p) => p.name)].slice(0, 8);
+  } catch {}
+  sel.innerHTML = `<option value="">recent…</option>` + names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+}
+
+function renderProjectTab() {
+  const doc = P.doc;
+  $("p-info").textContent = doc
+    ? `${doc.name}: saved ${doc.modified}, created ${doc.created}; store ${doc.store}; base pack ${doc.base.pack.slice(0, 19)}…, ${doc.base.blobs} base blobs`
+    : "untitled: not saved yet (Save As names it)";
+  $("p-chars").innerHTML = (doc ? doc.characters : [{ id: "c1", name: D.start.name, revision: "", history: [] }])
+    .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.id)} ${escapeHtml((c.revision || "").slice(0, 15))} · ${(c.history || []).length} revisions</span></li>`).join("");
+  $("p-export").disabled = !P.name;
+}
+
+function leave(url) {
+  P.leaving = true;
+  location.href = url;
+}
+
+function projectUrl(name, extra = {}) {
+  const q = new URLSearchParams();
+  for (const k of ["root", "fast", "measure"]) if (params.get(k)) q.set(k, params.get(k));
+  if (name) q.set("project", name);
+  for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") q.set(k, String(v));
+  return `${location.pathname}?${q}`;
+}
+
+function dialog({ title, note = "", name = null, list = null, ok = "OK" }) {
+  return new Promise((resolve) => {
+    const box = $("p-dialog"), input = $("p-dlg-name"), ul = $("p-dlg-list");
+    $("p-dlg-title").textContent = title;
+    $("p-dlg-note").textContent = note;
+    $("p-dlg-ok").textContent = ok;
+    input.classList.toggle("hidden", name === null);
+    input.value = name ?? "";
+    ul.innerHTML = "";
+    let picked = null;
+    for (const it of list || []) {
+      const li = document.createElement("li");
+      li.textContent = it.label;
+      li.dataset.value = it.value;
+      li.addEventListener("click", () => { picked = it.value; ul.querySelectorAll("li").forEach((x) => x.classList.toggle("now", x === li)); });
+      li.addEventListener("dblclick", () => { picked = it.value; done(true); });
+      ul.appendChild(li);
+    }
+    const done = (yes) => {
+      box.classList.add("hidden");
+      $("p-dlg-ok").onclick = $("p-dlg-cancel").onclick = input.onkeydown = null;
+      P.dialogDone = null;
+      resolve(yes ? (name !== null ? input.value.trim() : list ? picked : true) : null);
+    };
+    P.dialogDone = done;
+    $("p-dlg-ok").onclick = () => done(true);
+    $("p-dlg-cancel").onclick = () => done(false);
+    input.onkeydown = (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+    box.classList.remove("hidden");
+    if (name !== null) input.focus();
+  });
+}
+
+async function confirmDiscard(what) {
+  updateDirty();
+  if (!P.dirty) return true;
+  return !!(await dialog({ title: "Unsaved changes", note: `${P.name || "untitled"} has unsaved changes; ${what} discards them (its autosave stays recoverable until you save or discard it).`, ok: "discard changes" }));
+}
+
+async function saveProject(asName) {
+  const name = asName || P.name;
+  if (!name) return saveProjectAs();
+  if (D.start.macros && !D.macros?.available) { toast("this character has macro sliders: open it with its macro definition (macro) to save it"); return false; }
+  const was = P.name;
+  P.saving = true;
+  try {
+    const r = await api("project.save", projectInput(name));
+    if (!was && name !== "untitled") { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
+    P.name = name;
+    P.doc = r.project;
+    P.recovered = false;
+    P.relinked = false;
+    P.autosaved = false;
+    P.savedSig = projectSig();
+    params.set("project", name);
+    params.delete("recovery");
+    params.delete("spec");
+    history.replaceState(null, "", `${location.pathname}?${params}`);
+    addRecent(name);
+    renderRecent();
+    renderProjectTab();
+    updateDirty();
+    $("p-status").textContent = `saved ${r.path} (${r.bytes} bytes) at ${r.modified}`;
+    toast(`saved ${name}`);
+    return true;
+  } catch (e) {
+    $("p-status").textContent = `save failed: ${e.message}`;
+    toast(`save failed: ${e.message}`);
+    return false;
+  } finally { P.saving = false; }
+}
+
+async function saveProjectAs() {
+  const name = await dialog({ title: "Save project as", note: "1 to 64 letters, digits, spaces, '_', '-' or '.'", name: P.name || D.start.name || "" , ok: "save" });
+  if (!name) return false;
+  return saveProject(name);
+}
+
+async function openProject(name) {
+  if (!name) {
+    let items = [];
+    try { items = (await api("project.list", rootArg())).projects.filter((p) => !p.error).map((p) => ({ value: p.name, label: `${p.name} · ${p.modified} · ${p.characters} character(s)` })); } catch (e) { toast(e.message); return; }
+    if (!items.length) { toast("no saved projects yet"); return; }
+    name = await dialog({ title: "Open project", list: items, ok: "open" });
+    if (!name) return;
+  }
+  if (!(await confirmDiscard(`opening ${name}`))) return;
+  leave(projectUrl(name));
+}
+
+async function newProject() {
+  if (!(await confirmDiscard("a new project"))) return;
+  const extra = { store };
+  for (const k of PROJECT_OPTIONS) if (opt(k)) extra[k] = opt(k);
+  leave(projectUrl(null, extra));
+}
+
+async function autosave(reason = "settle") {
+  if (!D.ready || P.saving || P.autosaving) return;
+  updateDirty();
+  const name = slotName();
+  if (!P.dirty) {
+    if (P.autosaved) { P.autosaved = false; try { await api("project.discard", { name, ...rootArg() }); } catch {} }
     return;
   }
-  const sl = await api("designer.sliders", { store, spec: opt("spec"), macro: opt("macro") });
+  const sig = projectSig();
+  if (reason === "settle" && sig === P.lastAutoSig) return;
+  P.autosaving = true;
+  try {
+    const r = await api("project.save", { ...projectInput(name), recovery: true });
+    P.autosaved = true;
+    P.lastAutoSig = sig;
+    P.autosaves++;
+    P.lastAutosave = r.modified;
+    P.unresolved = r.unresolved || [];
+    $("p-status").textContent = `autosaved (${reason}) at ${r.modified}` + (P.unresolved.length ? `; not found, kept as typed: ${unresolvedText(P.unresolved)}` : "");
+  } catch (e) {
+    $("p-status").textContent = `autosave failed: ${e.message}`;
+  } finally { P.autosaving = false; }
+}
+
+function unresolvedText(list) {
+  return list.map((u) => `${u.role} (${u.path})`).join(", ");
+}
+
+function relinkDialog(unresolved, message, given) {
+  return new Promise((resolve) => {
+    const box = $("p-relink"), rows = $("p-relink-rows");
+    $("p-relink-note").textContent = `${message}. Give the new location of each, then retry.`;
+    rows.innerHTML = "";
+    const items = [];
+    for (const u of unresolved) {
+      const row = document.createElement("div");
+      row.className = "relink-row";
+      row.dataset.role = u.role;
+      const label = document.createElement("label");
+      label.textContent = `${u.role} (${u.kind}${u.file ? `, ${u.file}` : ""})`;
+      const why = document.createElement("div");
+      why.className = "note";
+      why.textContent = u.reason || "";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "wide";
+      input.placeholder = "path of the file or folder";
+      input.value = given[u.role] || "";
+      row.append(label, why, input);
+      let skip = null;
+      if (u.optional) {
+        const l = document.createElement("label");
+        skip = document.createElement("input");
+        skip.type = "checkbox";
+        l.append(skip, document.createTextNode(" open without it"));
+        row.append(l);
+      }
+      rows.append(row);
+      items.push({ role: u.role, input, skip });
+    }
+    const done = (yes) => {
+      box.classList.add("hidden");
+      $("p-relink-ok").onclick = $("p-relink-cancel").onclick = null;
+      if (!yes) { resolve(null); return; }
+      const resources = {}, skip = [];
+      for (const it of items) {
+        if (it.skip?.checked) skip.push(it.role);
+        else if (it.input.value.trim()) resources[it.role] = it.input.value.trim();
+      }
+      resolve({ resources, skip });
+    };
+    $("p-relink-ok").onclick = () => done(true);
+    $("p-relink-cancel").onclick = () => done(false);
+    box.classList.remove("hidden");
+    items[0]?.input.focus();
+  });
+}
+
+async function offerRecovery() {
+  if (P.recovered) return;
+  let slot = null;
+  try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
+  if (!slot) return;
+  P.recoveryOffer = slot;
+  $("p-recover-text").textContent = `Unsaved work on ${slot.name} from ${slot.modified} was kept by autosave (the last session ended without saving).`;
+  $("p-recover").classList.remove("hidden");
+}
+
+function buildProjectControls() {
+  $("p-new").addEventListener("click", newProject);
+  $("p-open").addEventListener("click", () => openProject());
+  $("p-save").addEventListener("click", () => saveProject());
+  $("p-saveas").addEventListener("click", saveProjectAs);
+  $("p-recent").addEventListener("input", (e) => { const n = e.target.value; e.target.value = ""; if (n) openProject(n); });
+  $("p-notes").addEventListener("input", scheduleDirty);
+  $("p-export").addEventListener("click", async () => {
+    try { const r = await api("project.export", { name: P.name, ...rootArg() }); $("p-status").textContent = `portable file ${r.out} (${r.bytes} bytes, ${r.character_blobs} character blobs)`; }
+    catch (e) { $("p-status").textContent = `export failed: ${e.message}`; }
+  });
+  $("p-chars").addEventListener("click", async (e) => {
+    const li = e.target.closest("li");
+    if (!li || !P.doc || Number(li.dataset.i) === P.active) return;
+    if (!(await confirmDiscard("switching the character"))) return;
+    leave(projectUrl(P.name, { character: li.dataset.i }));
+  });
+  $("p-restore").addEventListener("click", () => { $("p-recover").classList.add("hidden"); leave(projectUrl(slotName(), { recovery: 1, ...(P.name ? {} : { store }) })); });
+  $("p-discard").addEventListener("click", async () => {
+    $("p-recover").classList.add("hidden");
+    try { await api("project.discard", { name: slotName(), ...rootArg() }); toast("autosave discarded"); } catch (e) { toast(e.message); }
+  });
+  window.addEventListener("beforeunload", (e) => {
+    updateDirty();
+    if (P.dirty && !P.leaving) { e.preventDefault(); e.returnValue = ""; }
+  });
+  P.timer = setInterval(() => autosave("timer"), 60000);
+  renderRecent();
+  renderProjectTab();
+}
+
+async function loadProjectDoc() {
+  const name = params.get("project");
+  if (!name) return null;
+  const recovery = params.get("recovery") === "1";
+  let extra = {}, r;
+  for (;;) {
+    try {
+      r = await api("project.load", { name, recovery, ...rootArg(), ...extra });
+      break;
+    } catch (e) {
+      const un = e.details?.unresolved;
+      if (!Array.isArray(un) || !un.length) throw e;
+      const answer = await relinkDialog(un, e.message, extra.resources || {});
+      if (!answer) throw e;
+      extra = { resources: { ...(extra.resources || {}), ...answer.resources }, skip: [...new Set([...(extra.skip || []), ...answer.skip])] };
+      P.relinked = true;
+    }
+  }
+  const doc = r.project;
+  P.loadUnresolved = Object.entries(r.checked?.resources || {}).filter(([, v]) => v.unresolved).map(([role, v]) => ({ role, path: v.hint, reason: v.unresolved }));
+  P.name = name === "untitled" ? null : name;
+  P.doc = name === "untitled" ? null : doc;
+  P.recovered = recovery;
+  P.loadReport = r.checked;
+  if (!params.get("store")) { store = doc.store; params.set("store", store); }
+  for (const k of PROJECT_OPTIONS) if (!params.get(k) && doc.options?.[k]) params.set(k, doc.options[k]);
+  history.replaceState(null, "", `${location.pathname}?${params}`);
+  const k = params.get("character") !== null ? Number(params.get("character")) : doc.active ?? 0;
+  P.active = Number.isInteger(k) && k >= 0 && k < doc.characters.length ? k : 0;
+  $("p-notes").value = doc.notes || "";
+  if (P.name) addRecent(P.name);
+  return doc;
+}
+
+async function main() {
+  const doc = await loadProjectDoc();
+  if (!store) {
+    setStatus("preview", "open this page with ?store=<store path> (optional &spec=, &macro=, &eyes=) or ?project=<name>");
+    return;
+  }
+  const startFrom = doc ? { character: doc.characters[P.active].spec } : { spec: opt("spec") };
+  const sl = await api("designer.sliders", { store, ...startFrom, macro: opt("macro") });
   D.base = { pack: sl.pack, catalog: sl.catalog, game: sl.game };
   D.start = sl.start;
   D.categories = sl.categories;
@@ -1067,9 +1481,21 @@ async function main() {
   if (V.vp.some((s) => s.mode === MODE_INDEX.displacement)) ensureReference();
   request(true);
   await loadPanels();
+  if (doc) {
+    applyViewerState(doc.viewer);
+    applyPanelStates(doc.panels);
+  }
+  buildProjectControls();
+  if (P.loadUnresolved?.length) $("p-status").textContent = `not found, kept as typed: ${unresolvedText(P.loadUnresolved)}`;
+  else if (P.relinked) $("p-status").textContent = "resources relinked: save to keep the new locations";
   D.ui = { setMode, setLod, setLayout, namedView, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
-           setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness") };
+           setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"),
+           project: { save: saveProject, saveAs: saveProjectAs, open: openProject, newProject, autosave, viewerState, applyViewerState, panelStates, projectSig, updateDirty, dialog } };
   D.ready = true;
+  P.savedSig = projectSig();
+  updateDirty();
+  D.listeners.push((s, info) => { if (info.kind === "settle") autosave("settle"); });
+  offerRecovery();
 }
 
 main().catch((e) => { setStatus("preview", `error: ${e.message}`); D.error = e.message; console.error(e); });

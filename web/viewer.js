@@ -548,6 +548,7 @@ export class Viewer {
 
   updateHead(positions, normals) {
     const m = this.meshes.get("head");
+    if (!m) return false;
     this.upload(m.pos, positions);
     this.upload(m.nrm, normals);
     m.cpuPos = positions;

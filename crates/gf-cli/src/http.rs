@@ -132,7 +132,11 @@ fn blob(path: &str, hex: &str) -> Served {
         return not_found(format!("{hex} is not a sha256 hex digest"));
     }
     match std::fs::read(Path::new(&store).join("blobs").join(&hex[..2]).join(hex)) {
-        Ok(body) => Served { status: 200, content_type: "application/octet-stream", body, immutable: true },
+        Ok(body) if gf_core::hash::sha256_hex(&body) == hex => Served { status: 200, content_type: "application/octet-stream", body, immutable: true },
+        Ok(_) => {
+            let envelope = gf_api::envelope("http", Err(ApiError::new(gf_api::error::Code::Conflict, format!("blob {hex} in {store} is corrupt: its bytes no longer match their hash"))));
+            Served { status: 409, content_type: "application/json", body: gf_api::text(&envelope).into_bytes(), immutable: false }
+        }
         Err(_) => not_found(format!("no blob {hex} in {store}")),
     }
 }
@@ -214,14 +218,15 @@ fn handle(ctx: &Ctx, web: &Path, mut stream: TcpStream) {
     let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&served.body)).and_then(|_| stream.flush());
 }
 
-fn serve_args(args: &[String]) -> Result<(u16, PathBuf), String> {
-    let usage = || "usage: gazeforge serve [--port 7878]".to_string();
-    let (mut port, mut web) = (7878u16, None);
+fn serve_args(args: &[String]) -> Result<(u16, PathBuf, Option<PathBuf>), String> {
+    let usage = || "usage: gazeforge serve [--port 7878] [--web DIR] [--projects DIR]".to_string();
+    let (mut port, mut web, mut projects) = (7878u16, None, None);
     let mut rest = args;
     while let [flag, value, tail @ ..] = rest {
         match flag.as_str() {
             "--port" => port = value.parse::<u16>().map_err(|_| format!("--port must be 0 to 65535, got {value}"))?,
             "--web" => web = Some(PathBuf::from(value)),
+            "--projects" => projects = Some(PathBuf::from(value)),
             _ => return Err(usage()),
         }
         rest = tail;
@@ -230,7 +235,7 @@ fn serve_args(args: &[String]) -> Result<(u16, PathBuf), String> {
         return Err(usage());
     }
     let web = web.or_else(|| std::env::var_os("GAZEFORGE_WEB").map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("web"));
-    Ok((port, web))
+    Ok((port, web, projects))
 }
 
 pub fn serve(args: &[String]) -> ExitCode {
@@ -238,7 +243,7 @@ pub fn serve(args: &[String]) -> ExitCode {
         println!("{}", json!({"ok": false, "command": "serve", "error": {"code": "invalid_input", "message": message}}));
         ExitCode::from(2)
     };
-    let (port, web) = match serve_args(args) {
+    let (port, web, projects) = match serve_args(args) {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
@@ -247,7 +252,10 @@ pub fn serve(args: &[String]) -> ExitCode {
         Err(e) => return fail(format!("cannot listen on 127.0.0.1:{port}: {e}")),
     };
     let address = listener.local_addr().map(|a| a.to_string()).unwrap_or_default();
-    let ctx = Ctx::from_env();
+    let mut ctx = Ctx::from_env();
+    if let Some(p) = projects {
+        ctx.projects = p;
+    }
     println!("{}", json!({"ok": true, "command": "serve", "listening": address, "jobs_dir": ctx.jobs_dir.display().to_string()}));
     let _ = std::io::stdout().flush();
     for stream in listener.incoming().flatten() {
