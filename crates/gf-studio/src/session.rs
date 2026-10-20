@@ -592,7 +592,7 @@ mod tests {
         let (_, bases) = eye_meshes(&eyes);
         let a = 0.2_f64;
         let settled = Similarity { scale: 1.1, rotation: [[a.cos(), -a.sin(), 0.0], [a.sin(), a.cos(), 0.0], [0.0, 0.0, 1.0]], translation: [0.001, 0.002, -0.003] };
-        let mut spec = EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(format!("sha256:{}", "0".repeat(64))), left: Default::default(), right: Default::default() };
+        let mut spec = EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(format!("sha256:{}", "0".repeat(64))), model: None, left: Default::default(), right: Default::default() };
         spec.left.offset_mm = [1.0, 0.0, 0.0];
         let same = eye_display(&bases[0], Some(&settled), Some(&spec), Some(&spec));
         let c = bases[0].centre;

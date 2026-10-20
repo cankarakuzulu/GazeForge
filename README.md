@@ -166,6 +166,12 @@ radius by default, the cornea's radius of curvature 0.65 of it, the limbus 0.96 
 MakeHuman's helper eyeballs where the eye rig puts them on the dense base; `helper_radius: true` uses MakeHuman's
 helper radius instead, and `shape` sets the proportions. The eyelid clearance reads only the outer parts (sclera and
 cornea) of an eyes file that names its parts, and only triangles facing forward, which gives the same surface table.
+**Eye models.** `eyes.inventory` lists premade eye models (25 today, in families brown, hazel, amber, green, grey, blue
+and special: heterochromia, a pale eye, dilated and constricted pupils), each with its proportions and its iris, sclera
+and cornea looks. A character takes one through `eyeballs.model` (`{"id": "...", "radius_mm": 12}`, the radius in
+[5, 20] mm; the model needs `eyeballs.rig`): the settle, `rig.face` and `export-glb` then build that model's eyes at the
+eye rig's places instead of reading an eyes file (a model wins over `--eyes`), so the character carries its eyes.
+`eyes.generate` takes `model` for the proportions too.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

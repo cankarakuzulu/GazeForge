@@ -17,6 +17,7 @@ pub fn generate_input() -> Value {
                "rig": {"type": "string", "minLength": 1, "description": "an eye rig reference; default: the store's rig for the catalog"},
                "radius_mm": {"type": "number", "exclusiveMinimum": 0, "description": "eyeball radius, default 12"},
                "helper_radius": {"type": "boolean", "description": "use the radius of MakeHuman's helper eyeball instead of radius_mm"},
+               "model": {"type": "string", "minLength": 1, "description": "an eye model of the inventory (eyes.inventory); its proportions are used unless shape is given, and the file records the model"},
                "shape": {"type": "object", "description": "eyeball shape: cornea_curvature (cornea radius of curvature over the eyeball radius, 0.65), limbus (limbus diameter over the radius, 0.96), iris_depth (iris plane behind the cornea apex, over the radius, 0.24), pupil (pupil radius over the limbus radius, 0.3), segments (32), rings (16)"},
                "gaze": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "gaze direction in the dense frame, default [0, -1, 0] (the base head looks along -y)"},
                "out": {"type": "string", "minLength": 1, "description": "the eyes file to write"}}),
@@ -36,8 +37,25 @@ fn unit(v: [f64; 3]) -> Result<[f64; 3], ApiError> {
     Ok(v.map(|x| x / l))
 }
 
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+pub fn inventory_input() -> Value {
+    obj(json!({"family": {"type": "string", "minLength": 1, "description": "only the models of one family"}}), &[])
+}
+
+pub fn inventory_output() -> Value {
+    shape(json!({"default": {"type": "string"}, "families": {"type": "array"}, "models": {"type": "array"}}))
+}
+
+pub fn inventory(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let family = input.get("family").and_then(Value::as_str);
+    let all = gf_core::eye_inventory::models();
+    let mut families: Vec<&str> = Vec::new();
+    for m in &all {
+        if !families.contains(&m.family.as_str()) {
+            families.push(&m.family);
+        }
+    }
+    let models: Vec<&gf_core::eye_inventory::EyeModel> = all.iter().filter(|m| family.is_none_or(|f| m.family == f)).collect();
+    Ok(json!({"default": gf_core::eye_inventory::DEFAULT_MODEL, "families": families, "models": models}))
 }
 
 pub fn generate(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -51,21 +69,19 @@ pub fn generate(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     if rig.catalog != catalog {
         return Err(ApiError::invalid(format!("eye rig {rig_ref} belongs to catalog {}, not {catalog}", rig.catalog)));
     }
-    let mut eyeball: EyeballShape = match input.get("shape") {
-        Some(s) => serde_json::from_value(s.clone()).map_err(|e| ApiError::invalid(format!("shape: {e}")))?,
-        None => EyeballShape::default(),
+    let model = match input.get("model").and_then(Value::as_str) {
+        Some(id) => Some(gf_core::eye_inventory::model(id).ok_or_else(|| ApiError::invalid(format!("eye model {id:?} is not in the inventory")).hint("eyes.inventory lists the models"))?),
+        None => None,
+    };
+    let mut eyeball: EyeballShape = match (input.get("shape"), &model) {
+        (Some(s), _) => serde_json::from_value(s.clone()).map_err(|e| ApiError::invalid(format!("shape: {e}")))?,
+        (None, Some(m)) => m.shape.clone(),
+        (None, None) => EyeballShape::default(),
     };
     let gaze = match input.get("gaze").and_then(Value::as_array) {
         Some(g) => unit([0, 1, 2].map(|k| g[k].as_f64().unwrap_or(f64::NAN)))?,
-        None => [0.0, -1.0, 0.0],
+        None => gf_io::character::MODEL_GAZE,
     };
-    let up = unit({
-        let w = [0.0, 0.0, 1.0];
-        let d = w[0] * gaze[0] + w[1] * gaze[1] + w[2] * gaze[2];
-        [w[0] - d * gaze[0], w[1] - d * gaze[1], w[2] - d * gaze[2]]
-    })
-    .map_err(|_| ApiError::invalid("gaze must not point straight up or down"))?;
-    let side = cross(up, gaze);
     let mut eyes = Vec::new();
     let mut report = Vec::new();
     let mut triangles = 0;
@@ -78,18 +94,13 @@ pub fn generate(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         } else {
             input.get("radius_mm").and_then(Value::as_f64).unwrap_or(DEFAULT_RADIUS_MM)
         };
-        let mesh = eyeball.mesh().map_err(ApiError::invalid)?;
-        let rotate = |p: [f64; 3]| [0, 1, 2].map(|k| side[k] * p[0] + up[k] * p[1] + gaze[k] * p[2]);
-        let vertices: Vec<[f64; 3]> = mesh.positions.iter().map(|&p| {
-            let r = rotate(p);
-            [0, 1, 2].map(|k| centre[k] + r[k])
-        }).collect();
+        let mesh = eyeball.mesh().map_err(ApiError::invalid)?.placed(centre, gaze).map_err(ApiError::invalid)?;
         triangles += mesh.triangles.len();
         report.push(json!({"side": name, "centre_mm": centre.map(|x| (x * 1e5).round() / 100.0), "radius_mm": eyeball.radius_mm, "helper_radius_mm": helper_radius * 1000.0}));
-        eyes.push(json!({"name": name, "centre": centre, "radius": eyeball.radius_mm / 1000.0, "gaze": gaze, "vertices": vertices, "triangles": mesh.triangles,
-                         "normals": mesh.normals.iter().map(|&n| rotate(n)).collect::<Vec<_>>(), "uvs": mesh.uvs, "parts": mesh.parts, "shape": eyeball}));
+        eyes.push(json!({"name": name, "centre": centre, "radius": eyeball.radius_mm / 1000.0, "gaze": gaze, "vertices": mesh.positions, "triangles": mesh.triangles,
+                         "normals": mesh.normals, "uvs": mesh.uvs, "parts": mesh.parts, "shape": eyeball}));
     }
-    let doc = json!({"eyes": eyes, "generator": {"command": "eyes.generate", "rig": rig_ref, "placement": "the centres of MakeHuman's helper eyeballs on the dense base"}});
+    let doc = json!({"eyes": eyes, "model": model, "generator": {"command": "eyes.generate", "rig": rig_ref, "placement": "the centres of MakeHuman's helper eyeballs on the dense base"}});
     let bytes = serde_json::to_vec(&doc).map_err(|e| ApiError::internal(e.to_string()))?;
     gf_geom::lids::eyes_from_json(std::str::from_utf8(&bytes).map_err(|e| ApiError::internal(e.to_string()))?).map_err(|e| ApiError::internal(format!("the generated eyes do not load: {e}")))?;
     let out = text(input, "out");

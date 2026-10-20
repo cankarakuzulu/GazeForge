@@ -96,12 +96,29 @@ impl EyeAdjust {
     }
 }
 
+pub const MODEL_RADIUS_MM: f64 = 12.0;
+pub const MODEL_RADIUS_RANGE_MM: [f64; 2] = [5.0, 20.0];
+
+fn model_radius() -> f64 {
+    MODEL_RADIUS_MM
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EyeModelChoice {
+    pub id: String,
+    #[serde(default = "model_radius")]
+    pub radius_mm: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EyeballSpec {
     pub follow: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rig: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<EyeModelChoice>,
     #[serde(default)]
     pub left: EyeAdjust,
     #[serde(default)]
@@ -110,7 +127,8 @@ pub struct EyeballSpec {
 
 impl EyeballSpec {
     pub fn canonical(&self) -> EyeballSpec {
-        EyeballSpec { left: self.left.canonical(), right: self.right.canonical(), ..self.clone() }
+        let model = self.model.as_ref().map(|m| EyeModelChoice { id: m.id.clone(), radius_mm: round_to(m.radius_mm, 1e-4) });
+        EyeballSpec { left: self.left.canonical(), right: self.right.canonical(), model, ..self.clone() }
     }
 
     pub fn follows(&self) -> bool {
@@ -120,16 +138,23 @@ impl EyeballSpec {
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         match self.follow.as_str() {
-            FOLLOW_HELPER => match &self.rig {
-                None => out.push(format!("eyeballs.follow {FOLLOW_HELPER} needs eyeballs.rig, the eye rig of the catalog")),
-                Some(r) => {
-                    if let Err(e) = crate::hash::parse_reference(r) {
-                        out.push(format!("eyeballs.rig: {e}"));
-                    }
-                }
-            },
-            FOLLOW_NONE => {}
+            FOLLOW_HELPER if self.rig.is_none() => out.push(format!("eyeballs.follow {FOLLOW_HELPER} needs eyeballs.rig, the eye rig of the catalog")),
+            FOLLOW_HELPER | FOLLOW_NONE => {}
             other => out.push(format!("eyeballs.follow {other:?} is not one of {FOLLOW_HELPER}, {FOLLOW_NONE}")),
+        }
+        if let Some(Err(e)) = self.rig.as_deref().map(crate::hash::parse_reference) {
+            out.push(format!("eyeballs.rig: {e}"));
+        }
+        if let Some(m) = &self.model {
+            if crate::eye_inventory::model(&m.id).is_none() {
+                out.push(format!("eyeballs.model.id {:?} is not in the eye inventory (eyes.inventory lists it)", m.id));
+            }
+            if !(m.radius_mm.is_finite() && (MODEL_RADIUS_RANGE_MM[0]..=MODEL_RADIUS_RANGE_MM[1]).contains(&m.radius_mm)) {
+                out.push(format!("eyeballs.model.radius_mm {} is outside [{}, {}]", m.radius_mm, MODEL_RADIUS_RANGE_MM[0], MODEL_RADIUS_RANGE_MM[1]));
+            }
+            if self.rig.is_none() {
+                out.push("eyeballs.model needs eyeballs.rig: the catalog's eye rig places the model's eyes on the base".into());
+            }
         }
         out.extend(self.left.problems("left"));
         out.extend(self.right.problems("right"));
@@ -359,10 +384,10 @@ mod tests {
 
     #[test]
     fn out_of_range_adjustments_and_a_missing_rig_are_refused() {
-        let spec = EyeballSpec { follow: FOLLOW_HELPER.into(), rig: None, left: EyeAdjust { scale: 2.0, ..EyeAdjust::default() }, right: EyeAdjust::default() };
+        let spec = EyeballSpec { follow: FOLLOW_HELPER.into(), rig: None, model: None, left: EyeAdjust { scale: 2.0, ..EyeAdjust::default() }, right: EyeAdjust::default() };
         let p = spec.problems();
         assert_eq!(p.len(), 2, "{p:?}");
-        let ok = EyeballSpec { follow: FOLLOW_NONE.into(), rig: None, left: EyeAdjust::default(), right: EyeAdjust::default() };
+        let ok = EyeballSpec { follow: FOLLOW_NONE.into(), rig: None, model: None, left: EyeAdjust::default(), right: EyeAdjust::default() };
         assert!(ok.problems().is_empty());
     }
 }

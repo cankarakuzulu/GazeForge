@@ -32,7 +32,7 @@ fn set_eye_field(a: &mut EyeAdjust, f: usize, x: f64) {
 }
 
 fn no_eyeballs() -> EyeballSpec {
-    EyeballSpec { follow: er::FOLLOW_NONE.into(), rig: None, left: EyeAdjust::default(), right: EyeAdjust::default() }
+    EyeballSpec { follow: er::FOLLOW_NONE.into(), rig: None, model: None, left: EyeAdjust::default(), right: EyeAdjust::default() }
 }
 
 pub trait ShapeInput {

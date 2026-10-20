@@ -189,6 +189,10 @@ impl Eye {
     }
 }
 
+pub fn eye_from_mesh(centre: [f64; 3], radius: f64, gaze: [f64; 3], mesh: &crate::eyeball::EyeballMesh) -> Result<Eye, String> {
+    Eye::new(&EyeEntry { centre, radius, gaze, vertices: mesh.positions.clone(), triangles: mesh.triangles.clone(), parts: mesh.parts.clone() })
+}
+
 pub fn eyes_from_json(text: &str) -> Result<Vec<Eye>, String> {
     let file: EyeFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
     if file.eyes.is_empty() {

@@ -158,6 +158,35 @@ impl EyeballShape {
     }
 }
 
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    (l.is_finite() && l > 1e-9).then(|| v.map(|x| x / l))
+}
+
+impl EyeballMesh {
+    pub fn placed(&self, centre: [f64; 3], gaze: [f64; 3]) -> Result<EyeballMesh, String> {
+        let gaze = unit(gaze).ok_or("gaze must be a finite, non-zero direction")?;
+        let d = gaze[2];
+        let up = unit([-d * gaze[0], -d * gaze[1], 1.0 - d * gaze[2]]).ok_or("gaze must not point straight up or down")?;
+        let side = cross(up, gaze);
+        let rotate = |p: [f64; 3]| [0, 1, 2].map(|k| side[k] * p[0] + up[k] * p[1] + gaze[k] * p[2]);
+        Ok(EyeballMesh {
+            positions: self.positions.iter().map(|&p| {
+                let r = rotate(p);
+                [0, 1, 2].map(|k| centre[k] + r[k])
+            }).collect(),
+            normals: self.normals.iter().map(|&n| rotate(n)).collect(),
+            uvs: self.uvs.clone(),
+            triangles: self.triangles.clone(),
+            parts: self.parts.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +230,16 @@ mod tests {
         }
         let apex = m.positions.iter().map(|p| p[2]).fold(f64::MIN, f64::max);
         assert!((apex - l.apex_z).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_placed_eye_looks_along_its_gaze_from_its_centre() {
+        let s = EyeballShape::default();
+        let l = s.layout().unwrap();
+        let m = s.mesh().unwrap().placed([0.03, -0.1, 1.5], [0.0, -1.0, 0.0]).unwrap();
+        let apex = m.positions.iter().copied().fold([0.0, f64::MAX, 0.0], |a, p| if p[1] < a[1] { p } else { a });
+        assert!((apex[0] - 0.03).abs() < 1e-12 && (apex[1] - (-0.1 - l.apex_z)).abs() < 1e-12 && (apex[2] - 1.5).abs() < 1e-12, "{apex:?}");
+        assert!(m.normals.iter().all(|n| (len(*n) - 1.0).abs() < 1e-9));
     }
 
     #[test]

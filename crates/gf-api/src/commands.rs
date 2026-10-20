@@ -132,6 +132,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: eyes::generate,
     },
     CommandDef {
+        name: "eyes.inventory",
+        kind: Kind::Query,
+        summary: "The eye inventory: premade eye models (proportions, iris colours and pattern, sclera tint and veins, cornea index of refraction), grouped by family, and the default model.",
+        limits: "A character takes a model through eyeballs.model ({id, radius_mm}); the settle and the export then build that model's eyes at the eye rig's places instead of reading an eyes file.",
+        input: eyes::inventory_input,
+        output: eyes::inventory_output,
+        run: eyes::inventory,
+    },
+    CommandDef {
         name: "grid.chart",
         kind: Kind::Query,
         summary: "The face chart of a game base: every game vertex's chart coordinate (angle about the head's vertical axis, millimetres below the top of the head), its cell (column letter, row number, keypad subcell), its region, one label anchor per cell, and the chart's sanity figures (cells over the face front, the largest and smallest cell area, folded triangles).",

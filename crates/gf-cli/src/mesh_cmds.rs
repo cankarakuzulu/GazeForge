@@ -645,9 +645,14 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         None => None,
     };
     let (positions, _, evaluation, pin) = ch::evaluate_traced(&store, &spec, source.as_ref())?;
-    let placed_eyes = match (spec.eyeballs.is_some(), opts.get("eyes")) {
-        (true, Some(p)) => Some(ch::place_eyes(&store, &spec, pin.as_ref(), gf_io::load_eyes(Path::new(p))?)?),
-        _ => None,
+    let base_eyes = match ch::model_eyes(&store, &spec)? {
+        Some(eyes) => Some(eyes),
+        None if spec.eyeballs.is_some() => opts.get("eyes").map(|p| gf_io::load_eyes(Path::new(p))).transpose()?,
+        None => None,
+    };
+    let placed_eyes = match base_eyes {
+        Some(eyes) => Some(ch::place_eyes(&store, &spec, pin.as_ref(), eyes)?),
+        None => None,
     };
     let moved_eyes = placed_eyes.as_ref().map(|(e, _)| e.clone());
     let eyes_report = placed_eyes.and_then(|(_, r)| r);

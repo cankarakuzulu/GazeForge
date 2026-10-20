@@ -589,7 +589,7 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         Ok(r) => (r, None),
         Err(e) => (None, Some(e)),
     };
-    let new_eyeballs = eyerig.as_ref().map(|r| EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(r.clone()), left: Default::default(), right: Default::default() });
+    let new_eyeballs = eyerig.as_ref().map(|r| EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(r.clone()), model: None, left: Default::default(), right: Default::default() });
     let start = match &spec {
         Some(s) => json!({"name": s.name, "placement": s.base.placement, "weights": s.weights, "macros": s.macros, "residual": s.residual, "eyeballs": s.eyeballs}),
         None => json!({"name": "character", "placement": gp::DEFAULT.to_string(), "weights": {}, "macros": null, "residual": null, "eyeballs": new_eyeballs}),
@@ -859,16 +859,23 @@ pub struct SettleSeconds {
     pub placed: f64,
 }
 
+fn eyes_for(loaded: &Loaded, spec: &Spec, input: &Value) -> Result<Vec<Eye>, ApiError> {
+    if let Some(eyes) = gf_io::character::model_eyes(&loaded.store, spec).map_err(ApiError::invalid)? {
+        return Ok(eyes);
+    }
+    match input.get("eyes").and_then(Value::as_str) {
+        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid),
+        None => Ok(Vec::new()),
+    }
+}
+
 pub fn settle_mesh(input: &Value) -> Result<Settled, ApiError> {
     let started = Instant::now();
     let (loaded, cached) = load(input)?;
     let t_load = started.elapsed().as_secs_f64();
     let source = macro_source(input)?;
     let spec = spec_of(input, &loaded, source.as_ref())?;
-    let eyes = match input.get("eyes").and_then(Value::as_str) {
-        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?,
-        None => Vec::new(),
-    };
+    let eyes = eyes_for(&loaded, &spec, input)?;
     let version = PlacementVersion::parse(&spec.base.placement).map_err(ApiError::invalid)?;
     let draft = input.get("fast").and_then(Value::as_bool).unwrap_or(false) && matches!(version.name, "f3" | "f4");
     let t0 = started.elapsed().as_secs_f64();
@@ -1041,10 +1048,7 @@ pub fn rig_face(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let t_rig = started.elapsed().as_secs_f64();
     let source = macro_source(input)?;
     let spec = spec_of(input, &loaded, source.as_ref())?;
-    let eyes = match input.get("eyes").and_then(Value::as_str) {
-        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?,
-        None => Vec::new(),
-    };
+    let eyes = eyes_for(&loaded, &spec, input)?;
     let version = PlacementVersion::parse(&spec.base.placement).map_err(ApiError::invalid)?;
     let (dense, trace) = loaded.evaluate_traced(&spec, source.as_ref())?;
     let (eyes, _) = loaded.place_eyes(&spec, trace.as_ref(), eyes)?;
