@@ -384,13 +384,61 @@ pub fn parse_address(text: &str) -> Address {
     Address { dense: number_after(body, "dense "), game: number_after(body, "game v"), cell, vertex_cell, surface: surface_part(body) }
 }
 
+pub fn unreadable_fields(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    let line = trimmed.strip_prefix(fc::ADDRESS_PREFIX);
+    let mut out = Vec::new();
+    let mut fields: Vec<&str> = line.unwrap_or(trimmed).split('|').map(str::trim).collect();
+    if let Some(mm) = fields.iter().position(|f| f.ends_with(" mm")) {
+        fields.truncate(mm + 1);
+    }
+    for prefix in ["game v", "dense", "region ", "LOD"] {
+        let n = fields.iter().filter(|f| f.starts_with(prefix)).count();
+        if n > 1 {
+            out.push(format!("{n} fields start with {:?}; a line states each part once", prefix.trim()));
+        }
+    }
+    for (i, field) in fields.into_iter().enumerate() {
+        if i == 0 && line.is_some() {
+            let (cell, vin) = match field.split_once('(') {
+                Some((c, v)) => (c.trim(), Some(v.trim())),
+                None => (field, None),
+            };
+            if !cell.is_empty() && fc::parse_cell(cell).is_none() {
+                out.push(format!("the cell field {cell:?} is not a cell"));
+            }
+            if let Some(v) = vin
+                && v.strip_prefix("v in ").and_then(|r| r.strip_suffix(')')).and_then(fc::parse_cell).is_none()
+            {
+                out.push(format!("the vertex cell field \"({v}\" is not \"(v in <cell>)\""));
+            }
+        }
+        let numbers: &[&str] = if field.starts_with("game v") {
+            if field.contains("dense") { &["game v", "dense "] } else { &["game v"] }
+        } else if field.starts_with("dense") {
+            &["dense "]
+        } else {
+            &[]
+        };
+        for marker in numbers {
+            if number_after(field, marker).is_none() {
+                out.push(format!("{field:?} has no readable number after {:?}", marker.trim()));
+            }
+        }
+        if field.starts_with("LOD") && surface_part(field).is_none() {
+            out.push(format!("the surface field {field:?} is not \"LODn tT b(b1,b2)\""));
+        }
+    }
+    out
+}
+
 pub fn resolve(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let (g, cached) = grid(input)?;
     let address = input.get("address").and_then(Value::as_str).unwrap_or("");
     let accept = input.get("accept_inconsistent").and_then(Value::as_bool).unwrap_or(false);
     let a = parse_address(address);
-    let mut warnings: Vec<String> = Vec::new();
-    let mut checked: Vec<&str> = Vec::new();
+    let mut warnings: Vec<String> = unreadable_fields(address);
+    let mut checked: Vec<&str> = vec!["every stated field reads"];
     if let Some(d) = a.dense
         && d >= g.cells.dense_count()
     {
@@ -431,27 +479,30 @@ pub fn resolve(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 warnings.push(format!("the line gives {which} as {}, but the vertex lies in {}", stated.name(), fc::cell_name(vcell)));
             }
         }
-        if let (Some((lod, t, bary)), Some(stated)) = (a.surface, a.cell) {
+        if let Some((lod, t, bary)) = a.surface {
             if lod == 0 {
-                checked.push("cell = the cell of the LOD0 surface point");
-                match g.cells.point_cell(t, bary) {
-                    Some(hit) if stated.contains(hit) => {}
-                    Some(hit) => warnings.push(format!("the line gives the point's cell as {}, but LOD0 t{t} at those barycentrics lies in {}", stated.name(), fc::cell_name(hit))),
+                match g.cells.triangles.get(t) {
                     None => warnings.push(format!("the line names LOD0 triangle {t}, past the {} game triangles", g.cells.triangles.len())),
-                }
-                if let (Some(tri), Some(gv)) = (g.cells.triangles.get(t), vertex)
-                    && !tri.contains(&(gv as u32))
-                {
-                    warnings.push(format!("game v{gv} is not a corner of LOD0 t{t}"));
+                    Some(tri) => {
+                        if let (Some(stated), Some(hit)) = (a.cell, g.cells.point_cell(t, bary)) {
+                            checked.push("cell = the cell of the LOD0 surface point");
+                            if !stated.contains(hit) {
+                                warnings.push(format!("the line gives the point's cell as {}, but LOD0 t{t} at those barycentrics lies in {}", stated.name(), fc::cell_name(hit)));
+                            }
+                        }
+                        if let Some(gv) = vertex {
+                            checked.push("the vertex is a corner of the LOD0 triangle");
+                            if !tri.contains(&(gv as u32)) {
+                                warnings.push(format!("game v{gv} is not a corner of LOD0 t{t}"));
+                            }
+                        }
+                    }
                 }
             } else {
-                checked.push("the point's cell of a LOD1+ line is not checked (the server holds the finest level only)");
+                checked.push("the point of a LOD1+ line is not checked (the server holds the finest level only)");
             }
         }
-        if !warnings.is_empty() && !accept {
-            return Err(ApiError::invalid(format!("the address disagrees with itself: {}", warnings.join("; ")))
-                .hint("pass accept_inconsistent: true to resolve it by its dense index (or game index when it has no dense index) with the disagreements listed under warnings"));
-        }
+        refuse_unless_accepted(&warnings, accept)?;
         let consistent = warnings.is_empty();
         if let Some(gv) = vertex {
             let d = g.cells.kept[gv] as usize;
@@ -468,6 +519,8 @@ pub fn resolve(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         return Err(ApiError::invalid(format!("{address:?} names no cell, dense vertex or game vertex"))
             .hint("give a cell like M12 or M12.3, \"dense 485123\", \"game v10234\" or a GF@ address line"));
     };
+    refuse_unless_accepted(&warnings, accept)?;
+    let consistent = warnings.is_empty();
     let members: Vec<usize> = (0..g.cells.game_uv.len()).filter(|&v| q.contains(fc::cell_at(g.cells.game_uv[v]))).collect();
     let dense_count = (0..g.cells.dense_count()).filter(|&d| q.contains(g.cells.dense_cell(d).unwrap())).count();
     let centroid = if members.is_empty() {
@@ -490,7 +543,15 @@ pub fn resolve(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     Ok(json!({"kind": if q.sub.is_some() { "subcell" } else { "cell" }, "query": address, "cell": q.name(), "game_vertices": members, "game_count": members.len(),
               "dense_count": dense_count, "centroid_base_mm": centroid.map(|c| c.map(|x| round(x * 1000.0, 2))), "nearest_game": nearest, "regions": regions,
-              "consistent": true, "warnings": [], "checked": [], "cached": cached}))
+              "consistent": consistent, "warnings": warnings, "checked": checked, "cached": cached}))
+}
+
+fn refuse_unless_accepted(warnings: &[String], accept: bool) -> Result<(), ApiError> {
+    if warnings.is_empty() || accept {
+        return Ok(());
+    }
+    Err(ApiError::invalid(format!("the address disagrees with itself: {}", warnings.join("; ")))
+        .hint("pass accept_inconsistent: true to resolve it by its dense index (or game index when it has no dense index) with the disagreements listed under warnings"))
 }
 
 #[cfg(test)]
@@ -511,6 +572,40 @@ mod tests {
         assert_eq!(parse_address("dense 7").dense, Some(7));
         assert_eq!(parse_address(" f9 ").cell.unwrap().name(), "F9");
         assert_eq!(parse_address("nothing here"), Address::default());
+    }
+
+    #[test]
+    fn stated_fields_that_do_not_read_are_named() {
+        for good in [
+            "GF@ M12.3 | region nose | game v10234 = dense 485123 | LOD0 t33012 b(0.21,0.35) | 12.3,45.6,-7.8 mm | x",
+            "GF@ M14.5 (v in M14.6) | region nose | game v1 = dense 2 | LOD2 t9 b(0.000,1.000) | 0,0,0 mm | y",
+            "GF@ | game v1060 = dense 446284",
+            "GF@ M14.5 | region nose | game v1060 = dense 446284 | LOD0 t13322 b(1.000,0.000) | -1.7,-151.1,1473.9 mm | dense LOD study region x",
+            "game v1060 = dense 446284 | LOD0 t5 b(0.300,0.300)",
+            "dense 7",
+            "game v3",
+            "M12",
+            " f9 ",
+        ] {
+            assert_eq!(unreadable_fields(good), Vec::<String>::new(), "{good}");
+        }
+        for (bad, n) in [
+            ("GF@ Q | region nose | game v1060 = dense 446284 | LOD0 t5 b(0.300,0.300)", 1),
+            ("GF@ Z99.5 | game v1060 = dense 446284", 1),
+            ("GF@ M14.10 | game v1060 = dense 446284", 1),
+            ("GF@ M14.0 | game v1060 = dense 446284", 1),
+            ("GF@ M14.5 (v in Q) | game v1060 = dense 446284", 1),
+            ("GF@ M14.5 (v M14.6) | game v1060 = dense 446284", 1),
+            ("game v1060 = dense 99999999999999999999999", 1),
+            ("dense 99999999999999999999999", 1),
+            ("game vx = dense y", 2),
+            ("GF@ M14.5 | game v1060 = dense 446284 | LOD0 t5 b(0.3)", 1),
+            ("GF@ Q (v in Q) | game v1 = dense x | LOD1 t", 4),
+            ("GF@ M14.5 | region nose | game v1060 = dense 446284 | game v5 = dense 7", 1),
+            ("GF@ M14.5 | region nose | region chin | game v1060", 1),
+        ] {
+            assert_eq!(unreadable_fields(bad).len(), n, "{bad}: {:?}", unreadable_fields(bad));
+        }
     }
 
     #[test]
