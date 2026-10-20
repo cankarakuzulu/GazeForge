@@ -17,17 +17,23 @@ fn table() -> &'static HashMap<String, &'static str> {
             }
         };
         add(EN);
-        if let Some(path) = std::env::var_os("GAZEFORGE_LOCALE")
-            && let Ok(text) = std::fs::read_to_string(path)
-        {
-            add(&text);
+        if let Some(path) = std::env::var_os("GAZEFORGE_LOCALE") {
+            match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| e.to_string()).map(|_| t)) {
+                Ok(text) => add(&text),
+                Err(e) => eprintln!("GAZEFORGE_LOCALE {}: {e}; English shown", std::path::Path::new(&path).display()),
+            }
         }
         out
     })
 }
 
 pub fn tr(key: &str) -> &'static str {
-    table().get(key).copied().unwrap_or_else(|| Box::leak(key.to_string().into_boxed_str()))
+    if let Some(s) = table().get(key) {
+        return s;
+    }
+    static MISSING: OnceLock<std::sync::Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut m = MISSING.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(key.to_string()).or_insert_with(|| Box::leak(key.to_string().into_boxed_str()))
 }
 
 pub fn tr_or<'a>(key: &str, otherwise: &'a str) -> &'a str {

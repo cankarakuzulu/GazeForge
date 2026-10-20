@@ -248,7 +248,11 @@ impl Studio<'_> {
         }
     }
 
-    fn tip(&self, what: &str, id: &str) -> String {
+    fn keymap_source(&self) -> String {
+        if self.s.keymap.source == "defaults" { tr("studio.keys_defaults").to_string() } else { self.s.keymap.source.clone() }
+    }
+
+    pub fn tip(&self, what: &str, id: &str) -> String {
         let keys = self.s.keymap.describe(id);
         if keys.is_empty() { what.to_string() } else { format!("{what} ({keys})") }
     }
@@ -419,8 +423,8 @@ impl Studio<'_> {
         });
         egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
             ui.checkbox(&mut self.world.hud.on, tr("action.hud"));
-            ui.label(trf("studio.shape_input", &[("name", &self.s.input.name())]));
-            ui.label(trf("studio.keys_source", &[("source", &self.s.keymap.source)]));
+            ui.label(trf("studio.shape_input", &[("name", &tr_or(&format!("studio.input.{}", self.s.input.name()), self.s.input.name()))]));
+            ui.label(trf("studio.keys_source", &[("source", &self.keymap_source())]));
             for p in &self.s.keymap.problems {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
@@ -483,7 +487,7 @@ impl Studio<'_> {
                 ui.separator();
                 ui.label(tr("studio.help.mouse"));
                 ui.label(tr("studio.help.cube"));
-                ui.label(trf("studio.help.keymap", &[("source", &self.s.keymap.source)]));
+                ui.label(trf("studio.help.keymap", &[("source", &self.keymap_source())]));
             });
         });
         self.s.show_help = open;
@@ -540,7 +544,7 @@ impl Studio<'_> {
                 Some((_, hit)) => {
                     self.world.state.cams[r.cam].set(|g| g.target = hit, false);
                     self.world.state.pivot_flash = 0.8;
-                    self.s.status = trf("designer.pivot", &[("mesh", &"head"), ("point", &format!("{:.1}, {:.1}, {:.1}", hit[0] * 1000.0, hit[1] * 1000.0, hit[2] * 1000.0))]);
+                    self.s.status = trf("designer.pivot", &[("mesh", &tr("mesh.head")), ("point", &format!("{:.1}, {:.1}, {:.1}", hit[0] * 1000.0, hit[1] * 1000.0, hit[2] * 1000.0))]);
                 }
                 None => self.s.status = tr("designer.no_surface").into(),
             }

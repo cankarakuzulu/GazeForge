@@ -208,7 +208,7 @@ fn photos() -> Value {
                      {"name": "other_profile", "path": "$photos.input.other_profile", "role": "profile", "side": "$photos.input.other_profile_side"},
                  ]},
              ],
-             "shows": [{"kind": "images", "from": "$views.result.views", "path": "overlay", "label": "Name"}, {"kind": "report"}]},
+             "shows": [{"kind": "images", "from": "$views.result.views", "path": "overlay", "label": "name"}, {"kind": "report"}]},
             {"id": "fit", "title": "Fit", "command": "fit.photos",
              "help": "The targets fitted to every photo's landmarks and outline through solved cameras, with a stay-at-base prior; per photo the landmark and outline errors.",
              "fields": [
@@ -724,6 +724,9 @@ mod tests {
             match v {
                 Value::Object(m) => {
                     for (k, x) in m {
+                        if k == "shows" {
+                            continue;
+                        }
                         if let (true, Some(s)) = (["title", "label", "summary", "help", "notes", "group"].contains(&k.as_str()), x.as_str())
                             && s.chars().next().is_some_and(char::is_lowercase)
                         {

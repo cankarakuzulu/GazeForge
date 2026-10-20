@@ -56,8 +56,8 @@ canvas { width: 100%; height: 100%; display: block; touch-action: none; }
 .toast { position: absolute; left: 50%; bottom: 36px; transform: translateX(-50%); background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
 .toast.on { opacity: 1; }
 aside { width: 390px; max-width: 45%; overflow-y: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 0 12px 8px; }
-.tabs { display: flex; gap: 2px; position: sticky; top: 0; background: var(--panel); padding: 6px 0; z-index: 2; border-bottom: 1px solid var(--line); }
-.tabs button { flex: 1; background: transparent; border-color: transparent; color: var(--muted); }
+.tabs { display: flex; gap: 2px; overflow-x: auto; position: sticky; top: 0; background: var(--panel); padding: 6px 0; z-index: 2; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1 0 auto; background: transparent; border-color: transparent; color: var(--muted); }
 .tabs button:hover { color: var(--ink); background: var(--hover); }
 .tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .tab { display: none; }

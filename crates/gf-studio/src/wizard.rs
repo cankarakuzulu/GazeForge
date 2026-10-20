@@ -221,7 +221,7 @@ impl Wizards {
         if self.pending.is_some() {
             return Err(tr("wizard.already_running").into());
         }
-        let run = self.state.as_ref().ok_or("no run")?["run"].clone();
+        let run = self.state.as_ref().ok_or(tr("wizard.no_run"))?["run"].clone();
         let id = self.step_def(self.at)["id"].clone();
         let input = self.input()?;
         let (tx, rx) = channel();
@@ -255,8 +255,8 @@ impl Wizards {
     }
 
     fn cancel_job(&mut self) -> Result<(), String> {
-        let job = self.step_state(self.at)["job"].as_str().ok_or("this step has no job")?.to_string();
-        let run = self.state.as_ref().ok_or("no run")?["run"].clone();
+        let job = self.step_state(self.at)["job"].as_str().ok_or(tr("wizard.no_job"))?.to_string();
+        let run = self.state.as_ref().ok_or(tr("wizard.no_run"))?["run"].clone();
         let _ = call("jobs.cancel", json!({"id": job, "wait_s": 0.5}));
         self.state = Some(call("wizards.state", json!({"run": run}))?);
         self.shown_for = None;
