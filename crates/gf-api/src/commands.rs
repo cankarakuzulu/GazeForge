@@ -116,7 +116,7 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "designer.scene",
         kind: Kind::Query,
-        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyeballs of an optional eyes file as spheres.",
+        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes of an optional eyes file (centre, radius, side, gaze and mesh).",
         limits: "A level with a vertex outside the finest level drops that triangle and counts it; eyes are the file's spheres, not a placed eye mesh.",
         input: designer::scene_input,
         output: designer::scene_output,

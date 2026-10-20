@@ -433,7 +433,7 @@ pub fn macro_delta_output() -> Value {
 
 pub fn scene_input() -> Value {
     obj(
-        with(base_props(), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file; its eyeballs come back as spheres"}})),
+        with(base_props(), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file; each eye comes back with its centre, radius, side, gaze and mesh"}})),
         &["store", "pack", "catalog", "game"],
     )
 }
@@ -500,7 +500,15 @@ pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         })
         .collect();
     let eyes: Vec<Value> = match input.get("eyes").and_then(Value::as_str) {
-        Some(p) => gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?.iter().map(|e| json!({"centre": e.centre, "radius": e.radius})).collect(),
+        Some(p) => gf_io::load_eyes(Path::new(p))
+            .map_err(ApiError::invalid)?
+            .iter()
+            .map(|e| {
+                let triangles: Vec<u8> = e.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+                json!({"centre": e.centre, "radius": e.radius, "side": if e.centre[0] < 0.0 { "right" } else { "left" }, "gaze": e.gaze(),
+                       "vertices_f32_b64": f32_base64(e.vertices.iter().flatten().copied()), "triangles_u32_b64": base64(&triangles)})
+            })
+            .collect(),
         None => Vec::new(),
     };
     let base_uvs = f32_base64(mesh.triangle_uvs.iter().flatten().flatten().map(|&x| x as f64));

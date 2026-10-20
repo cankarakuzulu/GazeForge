@@ -471,7 +471,7 @@ no WebGL context; `--use-angle=gl` does.
 
 The viewer draws the head by vertex pulling (positions, normals and indices live in textures), so every mode shares one
 upload per frame. `designer.scene` returns the game base's coarser levels of detail as triangles over the finest level's
-vertices, the base triangle UVs, and the eyeballs of an optional eyes file as spheres.
+vertices, the base triangle UVs, and the eyes of an optional eyes file (centre, radius, side, gaze and mesh).
 
 - **Camera:** orbit, pan and zoom with damping; double-click a surface point to orbit around it; perspective or
   orthographic with matched framing; named views; field of view (the framing at the pivot is kept).
@@ -542,6 +542,13 @@ moves and refits after the settle.
 `describe(triangle, bary)`, `pointOf(triangle, bary)`, `normalOf(triangle)`, `goTo(address)`, `setMarkers(id, list | fn)`,
 `character()` and `definition()`. The Pins panel (`web/panels/pins.js`) is built on it.
 
+`api.eyes` gives `get()` and `set(eyeballs)` (the character's `eyeballs`, see Characters; `set` settles), `rig()` (the
+catalog's eye rig), `placed()` (the last settle's eye report) and `hasEyes()`. The Eyes panel (`web/panels/eyes.js`) is
+built on it: follow the sockets, link left and right (default), and per eye the out, up and forward offsets, pitch, yaw,
+roll and scale relative to the socket; each slider release joins undo and redo. The page draws the eyes file's own eye
+meshes and places them from each settle's eye report, so an eye moves when the settle lands (no live preview between
+settles in the browser; the native studio previews it).
+
 ### Grid and addresses
 
 A way to say *where* on the face something is, the same way for a person looking at the designer and for a tool reading a
@@ -590,7 +597,7 @@ crosses the upper half of the head; a bottom letter sits under the point where i
 (it is only placed when the column reaches the bottom outline), so following a strip down to the bottom edge reads its
 letter; a row number sits level with its row. Hovering shows the cell under the cursor, and once a cell is large enough
 on screen (zoomed in) it carries its own label. Labels are tested against the surface depth, so none shows through the
-head. The **eyes** option sets what the eye spheres do while the grid is on: the grid drawn over them (from their own
+head. The **eyes** option sets what the eyes do while the grid is on: the grid drawn over them (from their own
 positions in the chart frame), hidden, or plain. **R** draws a millimetre grid: in an axis-aligned orthographic view
 (front, side, top) lines every 10 mm labelled at the edges, with 5, 2 or 1 mm lines as the view zooms in; in perspective
 a 10 mm back plane behind the head. No label is drawn over a viewport caption, the toolbar or the address card.
@@ -1064,7 +1071,7 @@ gazeforge call animation.from_csv --input '{"csv": "TAKE.csv", "fps": 60, "out":
 - **Designer.** The `Timeline` panel (`web/panels/timeline.js`) loads a clip from a file or runs either command, plays,
   pauses, scrubs, loops and changes speed, and shows the weights on the head (from the shapes' deltas, through `rig.face`;
   open the designer with `&face_morphs=`) and the head rotation (a rigid turn about the head joint in the preview, with
-  the angles shown; the designer's eye spheres turn with it). It offers `getState()` / `setState(state)` for a host
+  the angles shown; the designer's eyes turn with it). It offers `getState()` / `setState(state)` for a host
   that saves panel state; the state includes the clip.
 - **Limits.** The landmarker reads one face per frame and its scores are estimates relative to an average face, not
   measurements; channels it barely moves (brows lowering, eye look on a face whose eyeballs do not turn) come out weak
