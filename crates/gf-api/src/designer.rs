@@ -379,7 +379,8 @@ pub fn sliders_input() -> Value {
     obj(
         json!({"store": {"type": "string", "minLength": 1}, "spec": {"type": "string", "minLength": 1, "description": "optional spec file to start from"},
                "character": {"type": "object", "description": "optional spec object to start from (instead of spec)"},
-               "macro": {"type": "string", "minLength": 1, "description": "optional macro definition file; without it the macro group is unavailable"}}),
+               "macro": {"type": "string", "minLength": 1, "description": "optional macro definition file; without it the macro group is unavailable"},
+               "game": {"type": "string", "minLength": 1, "description": "optional game base of the pack to design on instead of the spec's (or the store's default); a topology-improved base, for one"}}),
         &["store"],
     )
 }
@@ -586,12 +587,24 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 .ok_or_else(|| ApiError::not_found("the store has no catalog for its pack"))?;
             let game = list("game")
                 .into_iter()
-                .filter_map(|g| store.get_manifest::<GameManifest>("game", &g).ok().filter(|m| m.pack == pack).map(|m| (m.vertices, g)))
+                .filter_map(|g| {
+                    store.get_manifest::<GameManifest>("game", &g).ok().filter(|m| m.pack == pack).map(|m| (m.build.get("topology").is_none(), m.vertices, g))
+                })
                 .max()
-                .map(|(_, g)| g)
+                .map(|(_, _, g)| g)
                 .unwrap_or_default();
             (pack, catalog, game)
         }
+    };
+    let game = match input.get("game").and_then(Value::as_str) {
+        Some(g) => {
+            let m: GameManifest = store.get_manifest("game", g).map_err(ApiError::not_found)?;
+            if m.pack != pack {
+                return Err(ApiError::invalid(format!("game base {g} belongs to pack {}, the character to {pack}", m.pack)));
+            }
+            g.to_string()
+        }
+        None => game,
     };
     if game.is_empty() {
         return Err(ApiError::not_found("no game base: the spec names none and the store has none for its pack"));

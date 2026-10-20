@@ -150,6 +150,9 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .pins .pinrow { display: grid; grid-template-columns: auto 1fr auto auto; gap: 4px; align-items: center; margin: 3px 0; }
 .pins .pinrow b { color: #d81b60; }
 .pins .pinrow input { width: 100%; min-width: 0; }
+.topology .hidden { display: none; }
+.topology progress { width: 100%; height: 8px; }
+.topology .nums td:not(:first-child), .topology .nums th:not(:first-child) { text-align: right; }
 
 .wizard { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 11; }
 .wizard.hidden, .wz-cancel.hidden { display: none; }

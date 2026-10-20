@@ -60,10 +60,9 @@ pub fn ctx() -> Result<Ctx, String> {
     let mut ctx = Ctx::from_env();
     let name = if cfg!(windows) { "gazeforge.exe" } else { "gazeforge" };
     let cli = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name(name);
-    if !cli.is_file() {
-        return Err(format!("job steps run the command line tool, which is not next to the studio: {}", cli.display()));
+    if cli.is_file() {
+        ctx.exe = cli;
     }
-    ctx.exe = cli;
     Ok(ctx)
 }
 

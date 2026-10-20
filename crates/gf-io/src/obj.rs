@@ -2,12 +2,18 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use gf_geom::decimate::Decimated;
+use gf_geom::topology::Face;
 
 pub fn write(path: &Path, game_positions: &[[f64; 3]], mesh: &Decimated) -> Result<(), String> {
     write_triangles(path, game_positions, &mesh.triangles, &mesh.triangle_uvs)
 }
 
 pub fn write_triangles(path: &Path, game_positions: &[[f64; 3]], triangles: &[[u32; 3]], triangle_uvs: &[[gf_geom::Uv; 3]]) -> Result<(), String> {
+    let faces: Vec<Face> = (0..triangles.len() as u32).map(Face::Triangle).collect();
+    write_faces(path, game_positions, triangles, triangle_uvs, &faces)
+}
+
+pub fn write_faces(path: &Path, game_positions: &[[f64; 3]], triangles: &[[u32; 3]], triangle_uvs: &[[gf_geom::Uv; 3]], faces: &[Face]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut out = BufWriter::new(file);
     let io = |e: std::io::Error| e.to_string();
@@ -21,9 +27,12 @@ pub fn write_triangles(path: &Path, game_positions: &[[f64; 3]], triangles: &[[u
         }
     }
     writeln!(out, "s 1").map_err(io)?;
-    for (t, tri) in triangles.iter().enumerate() {
-        let corner = |i: usize| format!("{}/{}", tri[i] + 1, t * 3 + i + 1);
-        writeln!(out, "f {} {} {}", corner(0), corner(1), corner(2)).map_err(io)?;
+    let corner = |t: u32, i: u8| format!("{}/{}", triangles[t as usize][i as usize] + 1, t as usize * 3 + i as usize + 1);
+    for face in faces {
+        match *face {
+            Face::Triangle(t) => writeln!(out, "f {} {} {}", corner(t, 0), corner(t, 1), corner(t, 2)).map_err(io)?,
+            Face::Quad(c) => writeln!(out, "f {} {} {} {}", corner(c[0].0, c[0].1), corner(c[1].0, c[1].1), corner(c[2].0, c[2].1), corner(c[3].0, c[3].1)).map_err(io)?,
+        }
     }
     Ok(())
 }

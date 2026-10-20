@@ -8,6 +8,7 @@ use gf_core::fit::Similarity;
 use gf_geom::lids::Eye;
 use serde_json::{Value, json};
 
+#[derive(Clone)]
 pub struct Lod {
     pub label: String,
     pub indices: Vec<u32>,
@@ -341,7 +342,7 @@ fn ms(t: Instant) -> f64 {
 }
 
 impl Session {
-    pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes_file: Option<&str>) -> Result<(Session, Value), String> {
+    pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes_file: Option<&str>, game: Option<&str>) -> Result<(Session, Value), String> {
         let ctx = Ctx::from_env();
         let (eyes, eye_bases) = match eyes_file {
             Some(p) => {
@@ -358,6 +359,9 @@ impl Session {
         }
         if let Some(m) = macro_file {
             input["macro"] = json!(m);
+        }
+        if let Some(g) = game {
+            input["game"] = json!(g);
         }
         let sl = designer::sliders(&ctx, &input).map_err(err)?;
         timings.insert("sliders_ms".into(), ms(t));

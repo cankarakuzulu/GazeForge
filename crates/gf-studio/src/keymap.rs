@@ -41,6 +41,8 @@ pub const ACTIONS: &[(&str, &str, &[&str])] = &[
     ("reset_shape", "every slider back to the start values", &[]),
     ("hud", "timings overlay", &["Alt+H"]),
     ("help", "show the key map", &["F1"]),
+    ("bad_triangles", "show the bad triangles (smallest angle under the Topology limit)", &["Alt+Q"]),
+    ("topology_improve", "improve the topology of the game base (runs a job)", &[]),
 ];
 
 #[derive(Clone, Debug, PartialEq)]

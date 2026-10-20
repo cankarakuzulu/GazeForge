@@ -2,7 +2,8 @@ use serde_json::{Map, Value, json};
 
 use super::data::{IMPORT_CATALOG_KEYS, IMPORT_EYERIG_KEYS, IMPORT_GAME_KEYS, IMPORT_PACK_KEYS, LABELS_KEYS, WEIGHTS_KEYS};
 use super::mesh::{BODY_KEYS, GAME_KEYS, GLB_KEYS, LID_EXPORT_KEYS, LIDS_GATE_KEYS, PATH_KEYS, SHELL_KEYS};
-use super::{BUILD_KEYS, COLLIDE_KEYS, EXPORT_KEYS, F2_KEYS, F3_KEYS, F4_KEYS, F5_KEYS, F6_KEYS, FIT_KEYS, OPTIMAL_KEYS, Options, data, mesh, rig};
+use super::topology::{IMPROVE_KEYS, INSPECT_KEYS};
+use super::{BUILD_KEYS, COLLIDE_KEYS, EXPORT_KEYS, F2_KEYS, F3_KEYS, F4_KEYS, F5_KEYS, F6_KEYS, FIT_KEYS, OPTIMAL_KEYS, Options, data, mesh, rig, topology};
 use crate::commands::{obj, shape};
 use crate::{ApiError, Code, Ctx};
 
@@ -31,6 +32,9 @@ const INTEGERS: &[&str] = &[
     "pop-limit",
     "lids-smooth",
     "rig-rounds",
+    "samples",
+    "seed",
+    "rounds",
 ];
 
 const NUMBERS: &[&str] = &[
@@ -94,6 +98,10 @@ const NUMBERS: &[&str] = &[
     "body-scale",
     "body-smooth",
     "body-tangent",
+    "below",
+    "min-gain",
+    "max-fold",
+    "max-spread",
 ];
 
 const ANY: &[&str] = &["macro-base", "sliders", "floor"];
@@ -109,6 +117,9 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("cells", &["on", "off"]),
     ("states", &["neutral", "all"]),
     ("precision", &["f32", "f64"]),
+    ("shape-targets", &["all", "head", "none"]),
+    ("levels", &["all", "finest"]),
+    ("quads", &["on", "off"]),
 ];
 
 const TEXT: &[(&str, &str)] = &[
@@ -151,6 +162,17 @@ const TEXT: &[(&str, &str)] = &[
     ("f3-eye-depth", "pair: a,b"),
     ("f5-eye-depth", "pair: a,b"),
     ("f6-sliver-eye", "pair: a,b"),
+    ("game", "game base reference, sha256:<hex>, as store.list prints it"),
+    ("shape-targets", "catalog targets scored one at a time: all, head (designer categories, expressions and macro keys) or none"),
+    ("samples", "random combinations of head targets (and expressions) scored as well"),
+    ("seed", "seed of the random combinations"),
+    ("below", "only edges of triangles whose worst angle over the shape range is below this many degrees are tried"),
+    ("min-gain", "a flip must raise the worst angle of its two triangles by at least this many degrees"),
+    ("max-fold", "degrees: in every scored shape, each new triangle's normal stays within this of the old pair's normal"),
+    ("max-spread", "degrees: an edge whose four corners' rest surface normals (the dense base's, angle-weighted) differ by more than this sits on a crease and keeps its cut"),
+    ("rounds", "most flip rounds"),
+    ("levels", "all: the levels of detail are improved too and the new base names the new levels; finest: the old levels are kept"),
+    ("quads", "on: write clean triangle pairs as quads (planar, convex, not across a seam), paired on the base's rest shape"),
 ];
 
 fn field(key: &str) -> String {
@@ -338,6 +360,22 @@ pub fn lids(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, mesh::gates_lids)
 }
 
+pub fn topology_improve_input() -> Value {
+    schema(&[IMPROVE_KEYS], &["store", "game"])
+}
+
+pub fn topology_improve(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, topology::improve)
+}
+
+pub fn topology_inspect_input() -> Value {
+    schema(&[INSPECT_KEYS], &["store", "game"])
+}
+
+pub fn topology_inspect(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, topology::inspect)
+}
+
 pub fn rig_input() -> Value {
     schema(&[&["glb", "eyes", "front-deg", "tolerance-mm"]], &["glb"])
 }
@@ -368,6 +406,8 @@ mod tests {
             facing_input(),
             lids_input(),
             rig_input(),
+            topology_improve_input(),
+            topology_inspect_input(),
         ]
     }
 

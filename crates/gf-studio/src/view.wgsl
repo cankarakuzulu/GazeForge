@@ -318,6 +318,7 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
     c = mix(c, vec3<f32>(0.10, 0.80, 1.00), 1.0 - smoothstep(w2 - 0.5, w2 + 0.5, s));
     c = mix(c, vec3<f32>(1.00, 0.55, 0.05), 1.0 - smoothstep(w2 - 0.5, w2 + 0.5, b));
   }
+  if (u.o6.z > 0.5 && u.o3.w > 0.5 && (i.eflags & 64u) != 0u) { c = mix(c, vec3<f32>(1.00, 0.12, 0.62), 0.75); }
   if (u.o1.x > 0.5 || mode == 7) { c = mix(c, u.wire_col.xyz, wire); }
   return vec4<f32>(c, 1.0);
 }

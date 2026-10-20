@@ -413,7 +413,7 @@ impl Offscreen {
                 if let Some(n) = num("preview_threads") {
                     w.preview_threads = (n as usize).max(1);
                 }
-                w.request_load(store, text("spec"), text("macro"), text("eyes"));
+                w.request_load(store, text("spec"), text("macro"), text("eyes"), text("game"));
                 w.wait(|w| w.loading.is_none(), 600.0)?;
                 let r = w.load_result.clone().ok_or("the load returned nothing")??;
                 w.wait(|w| w.idle(), 600.0)?;
@@ -634,6 +634,43 @@ impl Offscreen {
                 json!({"file": file.display().to_string(), "floats": s.head.positions.len()})
             }
             "summary" => w.session.as_ref().ok_or("nothing is loaded")?.summary(),
+            "topology" => {
+                match text("do").unwrap_or("summary") {
+                    "show" => {
+                        w.state.opts.bad = step.get("on").and_then(Value::as_bool).unwrap_or(true);
+                        if let Some(d) = num("below") {
+                            w.topo.below_deg = d;
+                        }
+                        let on = w.state.opts.bad;
+                        w.with_topo(|t, w| t.sync(w, on));
+                    }
+                    "improve" => {
+                        let s = w.session.as_ref().ok_or("nothing is loaded")?;
+                        let (store, game) = (s.store.clone(), s.game.clone());
+                        w.topo.start(&store, &game)?;
+                        w.topo.wait(num("seconds").unwrap_or(900.0))?;
+                    }
+                    "after" | "before" => {
+                        let after = text("do") == Some("after");
+                        w.with_topo(|t, w| t.compare(w, after))?;
+                        w.with_topo(|t, w| t.wait_after(w, num("seconds").unwrap_or(120.0)))?;
+                        let on = w.state.opts.bad;
+                        w.with_topo(|t, w| t.sync(w, on));
+                    }
+                    "wait" => w.topo.wait(num("seconds").unwrap_or(900.0))?,
+                    "summary" => {
+                        let on = w.state.opts.bad;
+                        w.with_topo(|t, w| t.sync(w, on));
+                        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                        while w.topo.info.is_none() && std::time::Instant::now() < until {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            w.with_topo(|t, w| t.sync(w, on));
+                        }
+                    }
+                    other => return Err(format!("topology do is show, improve, wait, after, before or summary, got {other}")),
+                }
+                w.topo.summary()
+            }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));
                 let bound: Vec<String> = crate::keymap::ACTIONS.iter().map(|a| format!("{}={}", a.0, map.describe(a.0))).collect();

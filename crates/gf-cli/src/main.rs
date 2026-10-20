@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::process::ExitCode;
 
-use gf_api::tasks::{self, Options, data, mesh, rig};
+use gf_api::tasks::{self, Options, data, mesh, rig, topology};
 use serde_json::{Value, json};
 
 mod front;
@@ -13,7 +13,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
               [--max-turn 45] [--boundary-weight 100] [--improve-below 20] [--flip-flat 15]
               [--weights W.npy (per dense vertex, > 0, multiplies the collapse cost)] [--lods 8000,3000 (nested, into OUT/lod_N)]
   export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement f5|f6|subset|optimal|fit|f2|f3|f4|NAME/VERSION]
-              [--tip-vertex 185894]
+              [--tip-vertex 185894] [--quads on|off (clean triangle pairs written as quads; off by default)]
               optimal, fit, f2: [--max-move 3]
               fit, f2: [--fit-iterations 4] [--fit-smooth 0.1] [--fit-min-angle 5] [--fit-guard-steps 8] [--fit-repair-below 5] [--fit-trim 0]
               f2 only: [--f2-regular 1e-2] [--f2-max-turn 60] [--f2-turn-margin 2] [--f2-confident-spread 30] [--f2-confident-above 25]
@@ -53,6 +53,11 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   gates path  --dense DIR --base DIR --start base|shape:NAME|FILE.npy --delta FILE.npy [--steps 20] [--pop-limit 10]
               [--placement f3 and its options] [--plant STEP,GAME_VERTEX,MM (a planted forward jump, to prove the gate)]
   A gate that fails prints its report with \"ok\": false and exits non-zero.
+  topology improve --store DIR --game sha256:... [--catalog sha256:...] [--shape-targets all|head|none] [--samples 32] [--seed 1]
+              [--dense DIR (adds its manifest shapes)] [--below 30] [--min-gain 0.5] [--max-fold 20] [--max-spread 40] [--rounds 32] [--levels all|finest]
+              [--out DIR (also writes the new base as a directory, levels in DIR/lod_N)]
+              edge flips over the same vertices, scored over the shape range; imports the result as a new game base
+  topology inspect --store DIR --game sha256:...
 JSON|@FILE: inline JSON, or @ and a path to a JSON file. MACRO_JSON is read from the user's MakeHuman/MPFB install.
 An option the command does not read is refused; numbers must be finite and not negative; input positions must be finite.
 The command registry (the same commands over every front door):
@@ -89,6 +94,11 @@ fn run(args: &[String]) -> Result<Value, String> {
             Some("facing") => options(&args[2..]).and_then(|o| mesh::gates_facing(&o)),
             Some("lids") => options(&args[2..]).and_then(|o| mesh::gates_lids(&o)),
             Some("rig") => options(&args[2..]).and_then(|o| rig::gates_rig(&o)),
+            _ => Err(USAGE.to_string()),
+        },
+        Some("topology") => match args.get(1).map(String::as_str) {
+            Some("improve") => options(&args[2..]).and_then(|o| topology::improve(&o)),
+            Some("inspect") => options(&args[2..]).and_then(|o| topology::inspect(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some(group @ ("store" | "character" | "macro")) => match args.get(1) {

@@ -4,6 +4,34 @@ All notable changes to GazeForge. The project follows [Semantic Versioning](http
 version may change interfaces. Every milestone ends on a measured gate, and a gate that is still open is listed here as
 open, with its last measurement, rather than left out.
 
+## [Unreleased]
+
+### Added
+
+- **Topology improvement.** `topology improve` / `topology.improve` (a job) re-cuts a game base's triangles by edge
+  flips over the same vertices, scored over the shape range the base serves (the rest shape, every catalog target, seeded
+  combinations, optionally the dense pack's shapes), and stores the result as a new game base (its levels of detail too);
+  `topology inspect` / `topology.inspect` reports a base's triangle quality. On the test store's 20,000-vertex base:
+  triangles under 10 degrees at rest 777 -> 544, under 5 degrees 90 -> 66, over the whole range 5,468 -> 3,947; no scored
+  shape gains a triangle under 5 or 10 degrees or a turned triangle.
+- **Quads for OBJ.** `export-obj --quads on` writes clean triangle pairs as quads (off by default).
+- **Designers.** A Topology tool in the browser and the native studio: bad-triangle highlight, improve as a job with
+  progress, the numbers and the look before and after, and designing on the improved base. `designer.sliders` takes an
+  optional `game`; the browser takes it as a URL parameter, the studio in its Store section.
+
+### Changed
+
+- `designer.sliders` without a spec defaults to the store's largest game base that is not a topology result (before:
+  the largest, ties by reference), so importing an improved base does not move the default.
+- `export-obj` and `export.obj` accept `quads`; the unknown-option message lists it. Existing OBJ output is unchanged
+  byte for byte.
+
+### Open (measured)
+
+- On the held-out sculpted face the f5 placement on the improved base has 30 triangles under 5 degrees (41 on the old
+  base) but 10 under 2 degrees (7): placed vertices move with the triangulation (median 0.24 mm, up to 2.9 mm on the
+  neck and shoulders), and three unchanged eye-region triangles got thinner. Census over 90 degrees 26 -> 27.
+
 ## [0.2.0] - 2026-10-19
 
 Facial animation, released as **experimental**: it works end to end and is deterministic, but its quality gates are
