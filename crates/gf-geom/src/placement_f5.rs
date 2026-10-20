@@ -173,6 +173,7 @@ fn conjugate_gradient(a: &Blocks, b: &[[f64; 3]], x: &mut [[f64; 3]]) -> usize {
         if dot3(&r, &r).sqrt() < 1e-13 * norm_b {
             return iteration;
         }
+        crate::cancel::point();
         a.mul(&p, &mut ap);
         let alpha = rz / dot3(&p, &ap).max(1e-300);
         for i in 0..n {
@@ -653,6 +654,7 @@ fn place_with(
     prepared: &Prepared,
     f6: Option<&F6Settings>,
 ) -> (Vec<[f64; 3]>, Vec<[Uv; 3]>, F5Stats) {
+    crate::cancel::point();
     let count = mesh.kept.len();
     let (boundary, seam, fixed) = (&prepared.boundary, &prepared.seam, &prepared.fixed);
     let mut stats = F5Stats {
@@ -724,6 +726,7 @@ fn place_with(
             Vec::new()
         },
     };
+    crate::cancel::point();
     let (a, epsilon) = system.matrix();
     let mut fixed_at = subset.clone();
     let (first, iterations) = system.solve(&a, epsilon, &fixed_at);
@@ -759,6 +762,7 @@ fn place_with(
     stats.median_move_mm = moves[moves.len() / 2] * 1000.0;
     stats.max_move_mm = moves[moves.len() - 1] * 1000.0;
 
+    crate::cancel::point();
     let surface = Surface::with_topology(points, dense_triangles, dense_uvs, mesh, &prepared.surface);
     let spheres = uv_chart::triangle_spheres(points, dense_triangles);
     let derived: Vec<Option<Uv>> = crate::map_range(count, |g| {

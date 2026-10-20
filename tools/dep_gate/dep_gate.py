@@ -34,10 +34,11 @@ ALLOWED = {
     "gf-http": ["gf-api", "gf-io", "gf-core", "gf-geom"],
     "gf-mcp": ["gf-api", "gf-io", "gf-core", "gf-geom"],
     "gf-wasm": ["gf-geom"],
+    "gf-studio": ["gf-api", "gf-io", "gf-core", "gf-geom"],
 }
 PURE = ["gf-geom", "gf-core"]
 WASM = ["gf-geom", "gf-wasm"]
-FRONT_DOORS = ["gf-cli", "gf-http", "gf-mcp"]
+FRONT_DOORS = ["gf-cli", "gf-http", "gf-mcp", "gf-studio"]
 KEEP_BUILT = ["gf-core", "gf-io", "gf-api"]
 
 

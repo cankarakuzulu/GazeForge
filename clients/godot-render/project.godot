@@ -1,0 +1,21 @@
+; Engine configuration file.
+
+config_version=5
+
+[application]
+
+config/name="GazeForge render host"
+config/description="Renders a GazeForge character for the native client's Godot render mode."
+config/features=PackedStringArray("4.7", "Forward Plus")
+run/low_processor_mode=false
+
+[display]
+
+window/size/viewport_width=64
+window/size/viewport_height=64
+window/size/no_focus=true
+window/vsync/vsync_mode=0
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

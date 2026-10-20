@@ -1,6 +1,7 @@
 // Style lints only: the released arithmetic is kept as written so every placement stays byte-identical.
 #![allow(clippy::too_many_arguments, clippy::needless_range_loop, clippy::type_complexity, clippy::neg_cmp_op_on_partial_ord, clippy::needless_borrow)]
 
+pub mod cancel;
 pub mod decimate;
 pub mod face_chart;
 pub mod lids;

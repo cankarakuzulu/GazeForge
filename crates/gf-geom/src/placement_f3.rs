@@ -512,12 +512,14 @@ pub fn place_prepared(
     drop(local);
     let mut largest = 0.0;
     for _ in 0..settings.rounds {
+        crate::cancel::point();
         let hits = pl::project_pruned(points, &mesh.owner, &game, mesh, &prepared.rings);
         stats.fit_mm.push(mean_gap_mm(&hits));
         (game, largest) = fit.once(points, &hits, &subset, settings.smooth);
     }
     stats.seam_offset_max_mm = largest * 1000.0;
     stats.clamped = pl::clamp_moves(&mut game, &subset, settings.max_move);
+    crate::cancel::point();
     let surface = Surface::with_topology(points, dense_triangles, dense_uvs, mesh, &prepared.surface);
     fit.relax(&mut game, &subset, eyes, settings, &mut stats);
     if let Some(f4) = &settings.f4 {
