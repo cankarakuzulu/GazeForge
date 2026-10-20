@@ -671,6 +671,46 @@ impl Offscreen {
                 }
                 w.topo.summary()
             }
+            "rig" => {
+                match text("do").unwrap_or("summary") {
+                    "load" => {
+                        w.face_load();
+                        w.wait(|w| w.face.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if w.face.rig.is_none() {
+                            return Err(w.face.status.clone());
+                        }
+                    }
+                    "preset" => {
+                        let name = text("name").ok_or("rig preset needs name")?;
+                        w.face.weights = crate::face_rig::preset_weights(name).ok_or_else(|| format!("no rig preset {name}"))?;
+                    }
+                    "weights" => {
+                        w.face.weights = vec![0.0; crate::face_rig::SHAPES.len()];
+                        for (k, v) in step.get("weights").and_then(Value::as_object).into_iter().flatten() {
+                            let i = crate::face_rig::SHAPES.iter().position(|s| s == k).ok_or_else(|| format!("no face shape {k}"))?;
+                            w.face.weights[i] = v.as_f64().ok_or_else(|| format!("{k}: not a number"))?;
+                        }
+                    }
+                    "mode" => w.face.mode = if text("mode") == Some("joints") { crate::face_rig::Mode::Joints } else { crate::face_rig::Mode::Blend },
+                    "manual" => {
+                        let rig = w.face.rig.as_ref().ok_or("load the rig first")?;
+                        let name = text("joint").ok_or("rig manual needs joint")?;
+                        let j = rig.joints.iter().position(|x| x.name == name).ok_or_else(|| format!("no joint {name}"))?;
+                        let v = step.get("values").and_then(Value::as_array).ok_or("rig manual needs values [rx, ry, rz, tx, ty, tz]")?;
+                        w.face.manual.insert(j, std::array::from_fn(|c| v.get(c).and_then(Value::as_f64).unwrap_or(0.0)));
+                    }
+                    "clear" => {
+                        w.face.weights = vec![0.0; crate::face_rig::SHAPES.len()];
+                        w.face.manual.clear();
+                    }
+                    "summary" => {}
+                    other => return Err(format!("rig do is load, preset, weights, mode, manual, clear or summary, got {other}")),
+                }
+                w.face_update();
+                w.tick();
+                json!({"status": w.face.status, "loaded": w.face.rig.is_some(), "joints": w.face.rig.as_ref().map_or(0, |r| r.joints.len()),
+                       "mode": w.face.mode.name(), "active": w.face.active(), "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>()})
+            }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));
                 let bound: Vec<String> = crate::keymap::ACTIONS.iter().map(|a| format!("{}={}", a.0, map.describe(a.0))).collect();

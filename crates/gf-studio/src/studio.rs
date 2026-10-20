@@ -426,6 +426,7 @@ impl Studio<'_> {
             }
         });
         self.topology_panel(ui);
+        self.face_rig_panel(ui);
         if let Some(s) = &self.world.session {
             ui.separator();
             ui.horizontal(|ui| {
@@ -601,6 +602,7 @@ impl Studio<'_> {
                 painter.rect_stroke(rr, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(90, 150, 240)), egui::StrokeKind::Inside);
             }
         }
+        self.face_rig_paint(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
         if self.world.hud.on {
             let mut lines = self.world.hud.lines();

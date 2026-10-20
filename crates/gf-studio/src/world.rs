@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::face_rig::FaceRig;
 use crate::hud::Hud;
 use crate::i18n::{tr, tr_or, trf};
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
@@ -51,6 +52,9 @@ pub struct World {
     pub trace: Vec<Value>,
     pub topo: TopologyUi,
     pub head_generation: u64,
+    pub poses: Vec<(String, Vec<f32>)>,
+    pose_dirty: bool,
+    pub face: FaceRig,
 }
 
 impl Default for World {
@@ -94,6 +98,9 @@ impl Default for World {
             trace: Vec::new(),
             topo: TopologyUi::default(),
             head_generation: 0,
+            poses: Vec::new(),
+            pose_dirty: false,
+            face: FaceRig::default(),
         }
     }
 }
@@ -171,9 +178,92 @@ impl World {
         while let Some(done) = self.jobs.try_recv() {
             self.handle(done);
         }
+        self.face_poll();
         if self.preview_dirty {
             self.update_preview();
         }
+        if self.pose_dirty {
+            self.present_pose();
+        }
+    }
+
+    pub fn set_pose(&mut self, id: &str, positions: Option<Vec<f32>>) -> Result<(), String> {
+        let n = self.session.as_ref().map_or(0, |s| s.head.n);
+        if let Some(p) = &positions
+            && p.len() != n * 3
+        {
+            return Err(format!("set_pose needs {} floats (game LOD0 order), got {}", n * 3, p.len()));
+        }
+        self.poses.retain(|(k, _)| k != id);
+        if let Some(p) = positions {
+            self.poses.push((id.to_string(), p));
+        } else {
+            self.preview_dirty = true;
+        }
+        self.pose_dirty = true;
+        Ok(())
+    }
+
+    fn present_pose(&mut self) {
+        self.pose_dirty = false;
+        let (Some(s), Some((_, p))) = (self.session.as_mut(), self.poses.last()) else { return };
+        let h = &mut s.head;
+        h.positions.copy_from_slice(p);
+        h.normals = crate::session::vertex_normals(&h.positions, &h.lods[0].indices, h.n);
+        h.revision += 1;
+    }
+
+    pub fn face_load(&mut self) {
+        let Some(s) = &self.session else {
+            self.face.status = tr("studio.load_first").into();
+            return;
+        };
+        if self.face.job.is_some() {
+            self.face.stale = true;
+            return;
+        }
+        let mut input = s.settle_input(&s.character, false);
+        let prefix = std::env::var("GAZEFORGE_FACE_PREFIX").unwrap_or_else(|_| "faceunits/".into());
+        input["morphs"] = json!(crate::face_rig::SHAPES.iter().map(|n| format!("{prefix}{n}")).collect::<Vec<_>>());
+        if let Ok(dir) = std::env::var("GAZEFORGE_FACE_MORPHS") {
+            input["morph_dir"] = json!(dir);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let env = gf_api::call(&gf_api::Ctx::from_env(), "rig.face", &input);
+            let out = if env["ok"] == true { crate::face_rig::Rig::from_json(&env["result"]) } else { Err(env["error"]["message"].as_str().unwrap_or("rig.face failed").to_string()) };
+            let _ = tx.send(out);
+        });
+        self.face.job = Some(rx);
+        self.face.wanted = true;
+        self.face.stale = false;
+        self.face.status = tr("rig.fitting").into();
+    }
+
+    fn face_poll(&mut self) {
+        let Some(rx) = &self.face.job else { return };
+        let Ok(out) = rx.try_recv() else { return };
+        self.face.job = None;
+        match out {
+            Ok(rig) => {
+                if !rig.joints.get(self.face.joint).is_some_and(|j| j.posed) {
+                    self.face.joint = rig.joints.iter().position(|j| j.posed).unwrap_or(0);
+                }
+                self.face.rig = Some(rig);
+                self.face.status = self.face.loaded_text();
+            }
+            Err(e) => self.face.status = trf("rig.error", &[("error", &e)]),
+        }
+        if self.face.stale {
+            self.face_load();
+        } else {
+            self.face_update();
+        }
+    }
+
+    pub fn face_update(&mut self) {
+        let pose = self.face.pose();
+        let _ = self.set_pose("rig", pose);
     }
 
     pub fn wait(&mut self, done: impl Fn(&World) -> bool, seconds: f64) -> Result<f64, String> {
@@ -225,6 +315,8 @@ impl World {
                         self.preview = Some(preview);
                         self.uvs_dirty = true;
                         self.epoch += 1;
+                        self.poses.clear();
+                        self.face = FaceRig::default();
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
                         if let Some((id, _, _)) = self.samples_wanted.take() {
@@ -290,6 +382,9 @@ impl World {
                         self.hud.settle_latency.push(l);
                     }
                     self.note(trf("studio.settled", &[("placement", &out.placement), ("ms", &format!("{:.0}", latency.unwrap_or(out.ms)))]));
+                    if self.face.wanted {
+                        self.face_load();
+                    }
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {
@@ -472,6 +567,10 @@ impl World {
         if out.preview {
             self.preview_dirty = true;
             self.edit_at.get_or_insert_with(Instant::now);
+            if self.face.rig.is_some() && self.poses.iter().any(|(k, _)| k == "rig") {
+                self.poses.retain(|(k, _)| k != "rig");
+                self.face.status = tr("rig.changed").into();
+            }
         }
         let macros: Vec<String> = shape.macros.iter().map(|m| m.name.clone()).filter(|n| out.begin.contains(n)).collect();
         for m in macros {
@@ -536,6 +635,9 @@ impl World {
         }
         if let Some(e) = self.edit_at.take() {
             self.latency_mark = Some(e);
+        }
+        if !self.poses.is_empty() {
+            self.pose_dirty = true;
         }
     }
 

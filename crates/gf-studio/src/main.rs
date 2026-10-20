@@ -1,5 +1,6 @@
 mod app;
 mod cube;
+mod face_rig;
 mod godot;
 mod hud;
 mod i18n;
@@ -9,6 +10,7 @@ mod input;
 mod keymap;
 mod preview;
 mod render;
+mod rig_panel;
 mod script;
 mod session;
 mod shape;
