@@ -635,7 +635,7 @@ pub fn new(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 weights: BTreeMap::new(),
                 macros: None,
                 residual: None,
-                eyeballs: None,
+                eyeballs: s.pointer("/start/eyeballs").and_then(|e| serde_json::from_value(e.clone()).ok()),
             }
         }
     };
