@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
 use crate::tasks::api;
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -599,6 +599,51 @@ pub static REGISTRY: &[CommandDef] = &[
         input: api::rig_input,
         output: api::argv_output,
         run: api::rig,
+    },
+    CommandDef {
+        name: "wizards.list",
+        kind: Kind::Query,
+        summary: "The GUI wizards: guided tasks whose every step is one registry command (id, title, group, summary, step count).",
+        limits: "Developer wizards are listed only with developer true. A wizard adds no capability: each step runs the same command the CLI, HTTP and MCP run.",
+        input: wizards::list_input,
+        output: wizards::list_output,
+        run: wizards::list,
+    },
+    CommandDef {
+        name: "wizards.get",
+        kind: Kind::Query,
+        summary: "One wizard's definition: its steps, each with its command, kind, input schema, the fields a form shows (common or advanced, widget hints, bindings to run values and earlier steps) and what the step shows when it ends.",
+        limits: "Bindings: $run.NAME (a value given to wizards.start), $STEP.input.FIELD, $STEP.result.PATH, =TEXT (a literal).",
+        input: wizards::get_input,
+        output: wizards::get_output,
+        run: wizards::get,
+    },
+    CommandDef {
+        name: "wizards.start",
+        kind: Kind::Mutation,
+        summary: "Start a wizard run: a folder ROOT/runs/PROJECT/WIZARD-N holding one subfolder per step (its input, its result or job); returns the run's state.",
+        limits: "Runs are resumable: wizards.state reads them back at any time; nothing is deleted.",
+        input: wizards::start_input,
+        output: wizards::run_output,
+        run: wizards::start,
+    },
+    CommandDef {
+        name: "wizards.state",
+        kind: Kind::Query,
+        summary: "A wizard run's state: per step open, running, done, failed or stale, the proposed input (bindings resolved), the input given, the result or error and the job id; a finished job's result is collected here.",
+        limits: "A step's state is read from its folder; editing an earlier step marks the later ones stale until they run again.",
+        input: wizards::state_input,
+        output: wizards::run_output,
+        run: wizards::state,
+    },
+    CommandDef {
+        name: "wizards.step",
+        kind: Kind::Mutation,
+        summary: "Run one wizard step: its fields (hidden and bound fields not given take their bound values) are checked against the step command's schema and the command runs, or is submitted as a job; later steps that ran are marked stale.",
+        limits: "Steps run in order: a step needs every earlier non-optional step done. A job step returns at once; wizards.state collects its result.",
+        input: wizards::step_input,
+        output: wizards::run_output,
+        run: wizards::step,
     },
 ];
 
