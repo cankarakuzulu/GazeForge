@@ -778,11 +778,17 @@ pub fn load(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let extra: BTreeSet<String> = blobs.keys().cloned().collect();
     let (store, checked, source, resolved) = check_doc(&doc, input, &root, from_zip, &extra)?;
     for c in doc["characters"].as_array().into_iter().flatten() {
-        if let Some(rig) = c.pointer("/spec/eyeballs").filter(|e| e["follow"] == gf_core::eyerig::FOLLOW_HELPER).and_then(|e| e["rig"].as_str())
-            && let Err(e) = store.load_eyerig(rig)
-        {
-            return Err(ApiError::new(Code::NotFound, format!("{}: its eye rig {rig} cannot be used from this store ({e})", c["name"].as_str().unwrap_or("a character")))
-                .hint("import the catalog's eye rig into this store (store import-eyerig), or open the project with the store it was made with"));
+        if let Some(rig) = c.pointer("/spec/eyeballs").filter(|e| e["follow"] == gf_core::eyerig::FOLLOW_HELPER).and_then(|e| e["rig"].as_str()) {
+            let catalog = c.pointer("/spec/base/catalog").and_then(Value::as_str).unwrap_or_default();
+            let problem = match store.load_eyerig(rig) {
+                Ok(m) if m.catalog != catalog => Some(format!("it belongs to catalog {}, the character's catalog is {catalog}", m.catalog)),
+                Ok(_) => None,
+                Err(e) => Some(e),
+            };
+            if let Some(why) = problem {
+                return Err(ApiError::new(Code::NotFound, format!("{}: its eye rig {rig} cannot be used from this store ({why})", c["name"].as_str().unwrap_or("a character")))
+                    .hint("import the catalog's eye rig into this store (store import-eyerig), or open the project with the store it was made with"));
+            }
         }
     }
     if flag(input, "evaluate")
