@@ -1,5 +1,6 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
 import { ViewCube, elementName, elementDir, yawPitch } from "./cube.js";
+import { createWizards } from "./wizard.js";
 
 const params = new URLSearchParams(location.search);
 let store = params.get("store");
@@ -927,6 +928,21 @@ function buildControls() {
   $("shot-layout").addEventListener("click", () => screenshot("layout"));
   $("help-btn").addEventListener("click", () => $("help").classList.toggle("hidden"));
   $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").classList.add("hidden"); });
+  D.wizards = createWizards({
+    api, root: $("wizard"), toast,
+    prepare: async () => ({
+      project: P.name || "untitled",
+      values: { store },
+      after: async (dir) => {
+        const spec = `${dir}/character.gfchar.json`;
+        const input = { ...settleInput(), out: spec };
+        delete input.eyes;
+        await api("designer.save", input);
+        return { character: { store, spec }, export: { out: `${dir}/export.glb` } };
+      },
+    }),
+  });
+  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(`tasks: ${e.message}`)));
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("history").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) historyTo(Number(li.dataset.at)); });
@@ -1048,7 +1064,7 @@ function interaction() {
       if (kl === "n") { e.preventDefault(); newProject(); return; }
     }
     if (k === "Escape" && P.dialogDone) { P.dialogDone(false); return; }
-    if (e.target.matches?.("input[type=text], input[type=search], textarea") || P.dialogDone) return;
+    if (e.target.matches?.("input[type=text], input[type=search], textarea") || e.target.closest?.("#wizard") || P.dialogDone) return;
     if (ctrl && (k === "z" || k === "Z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (ctrl && (k === "y" || ((k === "z" || k === "Z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
     if (ctrl || (e.altKey && k !== "h" && k !== "H")) return;

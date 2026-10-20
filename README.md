@@ -484,6 +484,18 @@ after the kill. Elsewhere the worker gets its own process group, which is killed
 `GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled
 through another that uses the same directory.
 
+**Wizards.** A wizard is a guided task whose every step is one registry command, defined as data in `gf-api`:
+`wizards.list` and `wizards.get` (each step with its command, kind, input schema, the fields a form shows, common or
+advanced, and bindings: `$run.NAME`, `$STEP.input.FIELD`, `$STEP.result.PATH`, `=TEXT`). A run is a folder
+`ROOT/runs/PROJECT/WIZARD-N` with one subfolder per step: `wizards.start` makes it, `wizards.step` checks a step's input
+against its command's schema and runs it (or submits it as a job) and marks later steps stale, and `wizards.state` reads
+the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed. An agent
+can drive a wizard with the same calls. The first wizard, `export`, takes a character spec through `export.glb` (with an
+optional obj of the finest level) and `gates.facing`; it writes the same files the CLI writes. In the browser designer
+the Tasks button (wand icon) lists the wizards and runs them: the current character is saved into the run, each step is
+a form built from its command's schema (the named fields first, every other option under advanced), and a job step
+shows its progress.
+
 ### Designer
 
 A browser page served by `gazeforge serve`: sliders for the 290 head targets (cheek, chin, ears, eyebrows, eyes,

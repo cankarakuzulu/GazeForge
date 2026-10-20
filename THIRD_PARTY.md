@@ -2,7 +2,7 @@
 
 ## Lucide icons
 
-- What: 35 icons (SVG, 24x24, stroke) used by the browser designer (inlined into `web/index.html`) and the native
+- What: 36 icons (SVG, 24x24, stroke) used by the browser designer (inlined into `web/index.html`) and the native
   studio (`crates/gf-studio`, drawn as vector paths from the same files).
 - Where: `third_party/lucide/icons/`, copied verbatim from the npm package `lucide-static` version 1.60.0
   (https://registry.npmjs.org/lucide-static/-/lucide-static-1.60.0.tgz, npm integrity

@@ -151,7 +151,7 @@ pub fn step_input() -> Value {
 }
 
 pub fn run_output() -> Value {
-    shape(json!({"run": {"type": "string"}, "wizard": {"type": "string"}, "values": {"type": "object"},
+    shape(json!({"run": {"type": "string"}, "wizard": {"type": "string"}, "dir": {"type": "string", "description": "the run folder, where a client may put the files a step reads or writes"}, "values": {"type": "object"},
                  "steps": {"type": "array", "description": "per step: id, state (open, running, done, failed, stale), the proposed input, the input given, the result or error, the job id"}}))
 }
 
@@ -251,7 +251,7 @@ fn state_of(ctx: &Ctx, dir: &Path) -> Result<Value, ApiError> {
         done.insert(id.to_string(), json!({"input": rec["input"], "result": rec.get("result").cloned().unwrap_or(Value::Null)}));
         rows.push(rec);
     }
-    Ok(json!({"run": run["run"], "wizard": run["wizard"], "values": run["values"], "steps": rows}))
+    Ok(json!({"run": run["run"], "wizard": run["wizard"], "dir": dir.display().to_string(), "values": run["values"], "steps": rows}))
 }
 
 pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
