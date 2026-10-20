@@ -1,6 +1,9 @@
 mod app;
+mod cube;
 mod godot;
 mod hud;
+mod icon_data;
+mod icons;
 mod input;
 mod keymap;
 mod preview;

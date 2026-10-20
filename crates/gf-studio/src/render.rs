@@ -5,7 +5,6 @@ use crate::session::Head;
 use crate::viewer::{self, Camera, Matrices, Rect, SlotState, V3, ViewerState, add, cross, dot, mul, norm, sub};
 
 pub const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-pub const COLOR_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SAMPLES: u32 = 4;
 const UFLOATS: usize = 152;
@@ -129,7 +128,7 @@ struct SlotTarget {
 
 pub struct Composite {
     pub texture: wgpu::Texture,
-    pub srgb_view: wgpu::TextureView,
+    pub view: wgpu::TextureView,
     pub w: u32,
     pub h: u32,
     pub generation: u64,
@@ -428,11 +427,11 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: COLOR,
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[COLOR_SRGB],
+            view_formats: &[],
         });
-        let srgb_view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(COLOR_SRGB), ..Default::default() });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.generation += 1;
-        self.composite = Some(Composite { texture, srgb_view, w, h, generation: self.generation });
+        self.composite = Some(Composite { texture, view, w, h, generation: self.generation });
     }
 
     fn base_uniforms(st: &ViewerState, slot: SlotState, m: &Matrices, wind: f32, has_ref: bool, rect: &Rect, canvas_h: u32) -> [f32; UFLOATS] {
