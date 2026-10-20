@@ -706,8 +706,10 @@ toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eye
 character's `eyeballs` following (a new character starts that way when the catalog has an eye rig), each settle places
 the eyes and the drawn meshes move with them. The **Eyes** tab turns following on and off and sets each eye's offset,
 rotation and scale relative to its socket, linked between the sides by default; while a slider moves, the eye moves on
-the last settled socket, and the settle that follows clears the lids against it. Eye edits join undo and redo and are
-saved with the spec.
+the last settled socket, and the settle that follows clears the lids against it. The tab also picks an eye model from
+the inventory and its radius (needs the catalog's eye rig): the studio rebuilds the eyes at once and draws them in the
+lit modes like the browser does (textured sclera and iris, near-black pupil, a blended glossy cornea); other modes draw
+the plain geometry. Eye edits join undo and redo and are saved with the spec.
 
 Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
 weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the
