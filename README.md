@@ -494,7 +494,9 @@ can drive a wizard with the same calls. The first wizard, `export`, takes a char
 optional obj of the finest level) and `gates.facing`; it writes the same files the CLI writes. In the browser designer
 the Tasks button (wand icon) lists the wizards and runs them: the current character is saved into the run, each step is
 a form built from its command's schema (the named fields first, every other option under advanced), and a job step
-shows its progress.
+shows its progress. The native studio has the same Tasks window (the wand in the toolbar), calling the registry
+in-process; its job steps run through the `gazeforge` tool installed next to it, and the `--script` op `wizard` (`start`,
+`set`, `run`, `next`, `back`, `wait`) drives it for checks.
 
 ### Designer
 
