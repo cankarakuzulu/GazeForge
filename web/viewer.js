@@ -740,7 +740,7 @@ export class Viewer {
     const rects = this.rects();
     let moving = false;
     for (const r of rects) moving = this.cams[r.cam].step(dt) || moving;
-    this.dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    this.dark = document.documentElement.dataset.theme !== "light";
     this.syncEyeChart();
     gl.enable(gl.SCISSOR_TEST);
     for (const r of rects) this.renderViewport(r, dpr, h);
@@ -873,6 +873,7 @@ export class Viewer {
     if (this.labels) for (const s of this.labels.querySelectorAll(".vp span")) add(s, "caption");
     if (view) {
       for (const s of view.querySelectorAll(".overlay .row, .overlay .label")) add(s, "toolbar");
+      for (const s of view.querySelectorAll(".vcube")) add(s, "cube");
       add(view.querySelector(".addr:not(.hidden)"), "card");
     }
     return out;
@@ -976,9 +977,11 @@ export class Viewer {
     for (const r of rects) {
       const M = this.lastM?.[r.slot];
       if (!M) continue;
+      const rulerBoxes = [];
       if (o.normalGrid) for (const l of this.rulerLabels?.[r.slot] || []) {
         const w = l.text.length * 6.2 + 8, bx = l.cls ? { x0: l.x, x1: l.x + w, y0: l.y, y1: l.y + 14 } : { x0: l.x, x1: l.x + w, y0: l.y - 7, y1: l.y + 7 };
         if (blocked(bx)) { rulerDropped++; continue; }
+        if (l.cls) rulerBoxes.push(bx);
         parts.push(`<div class="rl${l.cls ? ` ${l.cls}` : ""}" style="left:${l.x.toFixed(1)}px;top:${l.y.toFixed(1)}px">${esc(l.text)}</div>`);
         ruler++;
       }
@@ -997,11 +1000,11 @@ export class Viewer {
           yTop = Math.min(yTop, s.y);
           yBot = Math.max(yBot, s.y);
         }
-        const mid = (yTop + yBot) / 2, colUp = new Map(), colDown = new Map(), rowAcc = new Map(), acc = (m, k, v) => { const a = m.get(k) || []; a.push(v); m.set(k, a); };
+        const mid = (yTop + yBot) / 2, colUp = new Map(), colDown = new Map(), colAll = new Map(), rowAcc = new Map(), acc = (m, k, v) => { const a = m.get(k) || []; a.push(v); m.set(k, a); };
         for (let i = 0; i < seen.length; i += 3) {
           const g = seen[i], sx = seen[i + 1], sy = seen[i + 2];
           const x = ch[2 * g] / def.column_deg + 0.5, k = Math.floor(x);
-          if (Math.abs(x - k - 0.5) < 0.3) { const c = (((k + ax.front) % cols) + cols) % cols; if (sy < mid) acc(colUp, c, sx); acc(colDown, c, [sx, sy]); }
+          if (Math.abs(x - k - 0.5) < 0.3) { const c = (((k + ax.front) % cols) + cols) % cols; acc(sy < mid ? colUp : colDown, c, sx); acc(colAll, c, sx); }
           const y = Math.max(0, ch[2 * g + 1]) / def.row_mm, row = Math.floor(y);
           if (Math.abs(y - row - 0.5) < 0.3) acc(rowAcc, row + 1, sy);
         }
@@ -1011,23 +1014,35 @@ export class Viewer {
           for (const it of items) { const w = gap(it.text); if (!kept.some((q) => Math.abs(q.at - it.at) < (q.w + w) / 2 + 2)) kept.push({ ...it, w }); }
           return kept;
         };
-        const colsUp = pick(colUp, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
-        const colAll = new Map([...colDown].map(([k, a]) => [k, a.map((q) => q[0])]));
-        const floor = new Map(), bin = (x) => Math.floor(x / 6);
-        for (let i = 0; i < seen.length; i += 3) { const b = bin(seen[i + 1]); floor.set(b, Math.max(floor.get(b) ?? -Infinity, seen[i + 2])); }
-        for (const [k, a] of colDown) {
-          const low = Math.max(...a.map((q) => q[1]));
-          colDown.set(k, a.filter((q) => q[1] >= low - 40 && q[1] >= floor.get(bin(q[0])) - 25).map((q) => q[0]));
-        }
-        const colsDown = pick(colDown, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
+        let colsUp = pick(colUp, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
+        let colsDown = pick(colDown, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
         const named = new Set([...colsUp, ...colsDown].map((it) => it.k));
         for (const it of pick(new Map([...colAll].filter(([k]) => !named.has(k))), (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k])) {
           if (!colsUp.some((q) => Math.abs(q.at - it.at) < (q.w + it.w) / 2 + 2)) colsUp.push(it);
         }
+        const all = [...colsUp, ...colsDown], ref = all.length ? all.reduce((a, b) => (b.n > a.n ? b : a)).k : 0;
+        const unwrap = (k) => { let d = (((k - ref) % cols) + cols) % cols; if (d >= cols / 2) d -= cols; return d; };
+        const monotone = (list, sign) => {
+          const sorted = [...list].sort((a, b) => a.at - b.at), dp = [], prev = [];
+          sorted.forEach((it, i) => {
+            dp[i] = it.n; prev[i] = -1;
+            for (let j = 0; j < i; j++) if (sign * unwrap(sorted[j].k) < sign * unwrap(it.k) && dp[j] + it.n > dp[i]) { dp[i] = dp[j] + it.n; prev[i] = j; }
+          });
+          const keep = [];
+          let i = dp.length ? dp.indexOf(Math.max(...dp)) : -1;
+          for (; i >= 0; i = prev[i]) keep.unshift(sorted[i]);
+          return { keep, total: dp.length ? Math.max(...dp) : 0 };
+        };
+        const dir = [1, -1].map((sg) => ({ sg, total: monotone(colsUp, sg).total + monotone(colsDown, sg).total })).sort((a, b) => b.total - a.total)[0].sg;
+        colsUp = monotone(colsUp, dir).keep;
+        colsDown = monotone(colsDown, dir).keep;
         const rowsKept = pick(rowAcc, () => 13, r.y + 8, r.y + r.h - 8, (k) => `${k}`);
+        const onRuler = (bx) => rulerBoxes.some((q) => bx.x0 < q.x1 && bx.x1 > q.x0 && bx.y0 < q.y1 && bx.y1 > q.y0);
         const put = (it, x, y, kind, edge) => {
-          const w = it.text.length * 7 + 8, bx = { x0: x - w / 2, x1: x + w / 2, y0: y - 7, y1: y + 7 };
-          if (blocked(bx)) return;
+          const w = it.text.length * 7 + 8, box = (yy) => ({ x0: x - w / 2, x1: x + w / 2, y0: yy - 7, y1: yy + 7 });
+          if (edge === "bottom" && onRuler(box(y))) y -= 18;
+          const bx = box(y);
+          if (blocked(bx) || onRuler(bx)) return;
           parts.push(`<div class="gl edge" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px">${it.text}</div>`);
           edgesOut.push({ slot: r.slot, kind, edge, text: it.text, x: +x.toFixed(1), y: +y.toFixed(1), n: it.n });
         };

@@ -47,46 +47,36 @@
 </svg>
 <!-- icons:end -->
 <header>
-  <strong>GazeForge Designer</strong>
+  <div class="brand"><strong>GazeForge</strong><span>Designer</span></div>
   <span id="status" class="status">loading</span>
   <span id="info" class="info"></span>
   <nav class="bar">
-    <button id="undo" disabled>undo</button><button id="redo" disabled>redo</button>
-    <span class="sep"></span>
-    <select id="layout" title="Layout (L)"><option value="single">single view</option><option value="side">side by side</option><option value="quad">quad</option></select>
-    <select id="mode" title="Render mode (M / Shift+M)"></select>
-    <select id="lod" title="Level of detail (, and .)"></select>
-    <button id="proj" title="Perspective / orthographic (O or 5)">persp</button>
-    <select id="named" title="Named view (1 front, Shift+1 back, 3 left, Shift+3 right, 7 top, 9 three-quarter)">
-      <option value="">view…</option><option value="front">front</option><option value="back">back</option><option value="left">left side</option><option value="right">right side</option>
-      <option value="top">top</option><option value="bottom">bottom</option><option value="threequarter">three-quarter</option>
-    </select>
-    <button id="frame" title="Frame the head (F)">frame</button>
-    <button id="shot" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout">PNG</button>
-    <button id="help-btn" title="Shortcuts (?)">?</button>
-    <span class="sep"></span>
-    <button id="p-new" title="New project (Ctrl+N)">new</button><button id="p-open" title="Open a project (Ctrl+O)">open</button>
-    <select id="p-recent" title="Recent projects"><option value="">recent…</option></select>
-    <button id="p-save" title="Save the project (Ctrl+S)">save</button><button id="p-saveas" title="Save the project as (Ctrl+Shift+S)">save as</button>
-    <span id="p-name" class="pname" title="saved">untitled</span>
+    <div class="grp"><button id="undo" class="ib" title="Undo (Ctrl+Z)" disabled><svg class="ico"><use href="#i-undo-2"/></svg></button><button id="redo" class="ib" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" disabled><svg class="ico"><use href="#i-redo-2"/></svg></button></div>
+    <div class="grp seg" id="layout"><button class="ib" title="One viewport (L cycles)" data-layout="single"><svg class="ico"><use href="#i-square"/></svg></button><button class="ib" title="Two viewports side by side (L cycles)" data-layout="side"><svg class="ico"><use href="#i-columns-2"/></svg></button><button class="ib" title="Four viewports (L cycles)" data-layout="quad"><svg class="ico"><use href="#i-layout-grid"/></svg></button></div>
+    <div class="grp"><select id="mode" title="Render mode of the active viewport (M / Shift+M)"></select><select id="lod" title="Level of detail (, coarser / . finer)"></select></div>
+    <div class="grp"><button id="frame" class="ib" title="Frame the head in the active viewport (F)"><svg class="ico"><use href="#i-focus"/></svg></button><button id="proj" class="ib wide" title="Perspective / orthographic (O or 5)"><svg class="ico"><use href="#i-box"/></svg><span>persp</span></button><button id="three" class="ib" title="Three-quarter view (9)"><svg class="ico"><use href="#i-rotate-3d"/></svg></button><button id="home" class="ib" title="Home view of the active viewport, framed (Home)"><svg class="ico"><use href="#i-house"/></svg></button></div>
+    <div class="grp"><button id="shot" class="ib" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout"><svg class="ico"><use href="#i-camera"/></svg></button><button id="theme-btn" class="ib" title="Dark / light interface (D)"><svg class="ico"><use href="#i-moon"/></svg></button><button id="help-btn" class="ib" title="Shortcuts (?)"><svg class="ico"><use href="#i-keyboard"/></svg></button></div>
+    <div class="grp project"><button id="p-new" class="ib" title="New project (Ctrl+N)"><svg class="ico"><use href="#i-file-plus"/></svg></button><button id="p-open" class="ib" title="Open a project (Ctrl+O)"><svg class="ico"><use href="#i-folder-open"/></svg></button><select id="p-recent" title="Recent projects"><option value="">recent…</option></select><button id="p-save" class="ib" title="Save the project (Ctrl+S)"><svg class="ico"><use href="#i-save"/></svg></button><button id="p-saveas" class="ib" title="Save the project as (Ctrl+Shift+S)"><svg class="ico"><use href="#i-save-all"/></svg></button><span id="p-name" class="pname" title="saved">untitled</span></div>
   </nav>
 </header>
 <main>
   <section id="view">
     <canvas id="gl"></canvas>
     <div id="vps"></div>
+    <div id="cubes"></div>
     <div class="overlay">
       <div class="row">
-        <label class="chip" title="Wireframe overlay (W)"><input type="checkbox" data-opt="wire"> wire</label>
-        <label class="chip" title="Hidden edges through the surface (X)"><input type="checkbox" data-opt="xray"> x-ray</label>
-        <label class="chip" title="Vertex points (P)"><input type="checkbox" data-opt="points"> points</label>
-        <label class="chip" title="Back-face highlight (B)"><input type="checkbox" data-opt="backHi"> back faces</label>
-        <label class="chip" title="UV seams (cyan) and open boundaries (orange) (E)"><input type="checkbox" data-opt="seams"> seams</label>
-        <label class="chip" title="Clip plane 1 (C); Alt+wheel moves it"><input type="checkbox" data-opt="clip.0.on"> clip</label>
-        <label class="chip" title="Face grid: cells fixed to the topology (T)"><input type="checkbox" data-opt="faceGrid"> face grid</label>
-        <label class="chip" title="The eye spheres while the face grid is on: the grid drawn over them, hidden, or plain">eyes <select data-opt="eyesGrid"><option value="grid">grid over</option><option value="hide">hidden</option><option value="plain">plain</option></select></label>
-        <label class="chip" title="Millimetre grid in the ortho views, a back plane in perspective (R)"><input type="checkbox" data-opt="normalGrid"> mm grid</label>
-        <label class="chip" title="Probe mode: a click shows the address of the surface point (Q); Alt+click probes in any mode"><input type="checkbox" id="probe-mode"> probe</label>
+        <label class="chip" title="Wireframe overlay (W)"><input type="checkbox" data-opt="wire"><svg class="ico"><use href="#i-vector-square"/></svg>wire</label>
+        <label class="chip" title="Hidden edges through the surface (X)"><input type="checkbox" data-opt="xray"><svg class="ico"><use href="#i-scan-eye"/></svg>x-ray</label>
+        <label class="chip" title="Vertex points (P)"><input type="checkbox" data-opt="points"><svg class="ico"><use href="#i-chart-scatter"/></svg>points</label>
+        <label class="chip" title="Back-face highlight (B)"><input type="checkbox" data-opt="backHi"><svg class="ico"><use href="#i-flip-horizontal-2"/></svg>back faces</label>
+        <label class="chip" title="UV seams (cyan) and open boundaries (orange) (E)"><input type="checkbox" data-opt="seams"><svg class="ico"><use href="#i-scissors-line-dashed"/></svg>seams</label>
+        <label class="chip" title="Clip plane 1 (C); Alt+wheel moves it"><input type="checkbox" data-opt="clip.0.on"><svg class="ico"><use href="#i-slice"/></svg>clip</label>
+        <span class="chipsep"></span>
+        <label class="chip" title="Face grid: cells fixed to the topology (T)"><input type="checkbox" data-opt="faceGrid"><svg class="ico"><use href="#i-grid-3x3"/></svg>face grid</label>
+        <label class="chip" title="The eye spheres while the face grid is on: the grid drawn over them, hidden, or plain"><svg class="ico"><use href="#i-eye"/></svg>eyes <select data-opt="eyesGrid"><option value="grid">grid over</option><option value="hide">hidden</option><option value="plain">plain</option></select></label>
+        <label class="chip" title="Millimetre grid in the ortho views, a back plane in perspective (R)"><input type="checkbox" data-opt="normalGrid"><svg class="ico"><use href="#i-ruler"/></svg>mm grid</label>
+        <label class="chip" title="Probe mode: a click shows the address of the surface point (Q); Alt+click probes in any mode"><input type="checkbox" id="probe-mode"><svg class="ico"><use href="#i-crosshair"/></svg>probe</label>
       </div>
       <div id="label" class="label"></div>
     </div>
