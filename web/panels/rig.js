@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const SHAPES = [
   "browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff", "cheekSquintLeft", "cheekSquintRight",
   "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft", "eyeLookDownRight", "eyeLookInLeft", "eyeLookInRight", "eyeLookOutLeft", "eyeLookOutRight",
@@ -7,14 +9,14 @@ const SHAPES = [
   "mouthRollUpper", "mouthShrugLower", "mouthShrugUpper", "mouthSmileLeft", "mouthSmileRight", "mouthStretchLeft", "mouthStretchRight",
   "mouthUpperUpLeft", "mouthUpperUpRight", "noseSneerLeft", "noseSneerRight",
 ];
-const GROUPS = [["brow", /^brow/], ["eye", /^eye/], ["cheek / nose", /^(cheek|nose)/], ["jaw", /^jaw/], ["mouth", /^mouth/]];
+const GROUPS = [["brow", /^brow/], ["eye", /^eye/], ["cheek_nose", /^(cheek|nose)/], ["jaw", /^jaw/], ["mouth", /^mouth/]];
 const PRESETS = {
   neutral: {},
   smile: { mouthSmileLeft: 1, mouthSmileRight: 1, cheekSquintLeft: 0.5, cheekSquintRight: 0.5, eyeSquintLeft: 0.3, eyeSquintRight: 0.3 },
   blink: { eyeBlinkLeft: 1, eyeBlinkRight: 1 },
   surprise: { jawOpen: 0.4, browInnerUp: 1, browOuterUpLeft: 1, browOuterUpRight: 1, eyeWideLeft: 1, eyeWideRight: 1 },
   frown: { mouthFrownLeft: 1, mouthFrownRight: 1, browDownLeft: 0.8, browDownRight: 0.8, mouthShrugLower: 0.4 },
-  "jaw open": { jawOpen: 1 },
+  jaw_open: { jawOpen: 1 },
 };
 const MANUAL = [["rx", "deg", 30], ["ry", "deg", 30], ["rz", "deg", 30], ["tx", "mm", 10], ["ty", "mm", 10], ["tz", "mm", 10]];
 
@@ -49,17 +51,17 @@ function mount(root, api) {
     rig: null, weights: Object.fromEntries(SHAPES.map((n) => [n, 0])), mode: "blend", overlay: true, joint: 0,
     manual: {}, busy: false, stale: true, timer: 0,
   };
-  const status = el("div", { class: "note" }, "face rig: not loaded");
+  const status = el("div", { class: "note" }, tr("rig.not_loaded"));
   const bar = el("div", { class: "row" });
-  const modeSel = el("select", { title: "how the expression is evaluated" });
-  for (const [v, t] of [["blend", "blend shapes"], ["joints", "joints"]]) modeSel.appendChild(el("option", { value: v }, t));
-  const overlayBox = el("input", { type: "checkbox", title: "joint overlay" });
+  const modeSel = el("select", { title: tr("rig.mode_title") });
+  for (const v of ["blend", "joints"]) modeSel.appendChild(el("option", { value: v }, tr(`rig.mode.${v}`)));
+  const overlayBox = el("input", { type: "checkbox", title: tr("rig.overlay_title") });
   overlayBox.checked = true;
-  const loadBtn = el("button", {}, "load rig");
-  bar.append(loadBtn, el("label", {}, " mode "), modeSel, el("label", {}, " joints "), overlayBox);
+  const loadBtn = el("button", {}, tr("rig.load"));
+  bar.append(loadBtn, el("label", {}, ` ${tr("rig.mode")} `), modeSel, el("label", {}, ` ${tr("rig.joints")} `), overlayBox);
   const presets = el("div", { class: "row" });
   for (const name of Object.keys(PRESETS)) {
-    const b = el("button", {}, name);
+    const b = el("button", {}, tr(`rig.preset.${name}`));
     b.addEventListener("click", () => applyPreset(name));
     presets.appendChild(b);
   }
@@ -67,7 +69,7 @@ function mount(root, api) {
   const inputs = {};
   for (const [title, re] of GROUPS) {
     const d = el("details");
-    d.appendChild(el("summary", {}, title));
+    d.appendChild(el("summary", {}, tr(`rig.group.${title}`)));
     for (const n of SHAPES.filter((s) => re.test(s))) {
       const row = el("div", { class: "row" });
       const lab = el("label", { style: "display:inline-block;min-width:11em" }, n);
@@ -87,7 +89,7 @@ function mount(root, api) {
     sliders.appendChild(d);
   }
   const jointBox = el("details");
-  jointBox.appendChild(el("summary", {}, "joint pose (joints mode)"));
+  jointBox.appendChild(el("summary", {}, tr("rig.joint_pose")));
   const jointSel = el("select");
   jointBox.appendChild(jointSel);
   const manualInputs = {};
@@ -100,13 +102,13 @@ function mount(root, api) {
       const j = S.joint, to = Number(r.value), was = from ?? manualValue(j, k);
       from = null;
       setManual(j, k, to);
-      if (to !== was) api.pushUndo({ label: `${jointName(j)} ${k} ${was} -> ${to} ${unit}`, undo: () => { setManual(j, k, was); syncInputs(); update(); }, redo: () => { setManual(j, k, to); syncInputs(); update(); } });
+      if (to !== was) api.pushUndo({ label: `${jointName(j)} ${tr(`rig.manual.${k}`)} ${was} -> ${to}`, undo: () => { setManual(j, k, was); syncInputs(); update(); }, redo: () => { setManual(j, k, to); syncInputs(); update(); } });
     });
     manualInputs[k] = r;
-    row.append(el("label", { style: "display:inline-block;min-width:4em" }, `${k} (${unit})`), r);
+    row.append(el("label", { style: "display:inline-block;min-width:4em" }, tr(`rig.manual.${k}`)), r);
     jointBox.appendChild(row);
   }
-  const clearJoint = el("button", {}, "reset joint");
+  const clearJoint = el("button", {}, tr("rig.reset_joint"));
   jointBox.appendChild(clearJoint);
   root.append(status, bar, presets, sliders, jointBox);
 
@@ -129,25 +131,25 @@ function mount(root, api) {
   function applyPreset(name) {
     const before = { ...S.weights };
     const after = Object.fromEntries(SHAPES.map((n) => [n, PRESETS[name][n] ?? 0]));
-    api.pushUndo({ label: `expression preset ${name}`, undo: () => setWeights(before), redo: () => setWeights(after) });
+    api.pushUndo({ label: tr("rig.undo_preset", { name: tr(`rig.preset.${name}`) }), undo: () => setWeights(before), redo: () => setWeights(after) });
     setWeights(after);
   }
   modeSel.addEventListener("change", () => {
     const was = S.mode, to = modeSel.value;
-    api.pushUndo({ label: `rig mode ${was} -> ${to}`, undo: () => { S.mode = was; syncInputs(); update(); }, redo: () => { S.mode = to; syncInputs(); update(); } });
+    api.pushUndo({ label: tr("rig.undo_mode", { from: tr(`rig.mode.${was}`), to: tr(`rig.mode.${to}`) }), undo: () => { S.mode = was; syncInputs(); update(); }, redo: () => { S.mode = to; syncInputs(); update(); } });
     S.mode = to;
     update();
   });
   overlayBox.addEventListener("change", () => {
     const to = overlayBox.checked;
-    api.pushUndo({ label: `${to ? "show" : "hide"} joint overlay`, undo: () => { S.overlay = !to; syncInputs(); update(); }, redo: () => { S.overlay = to; syncInputs(); update(); } });
+    api.pushUndo({ label: to ? tr("rig.undo_show_overlay") : tr("rig.undo_hide_overlay"), undo: () => { S.overlay = !to; syncInputs(); update(); }, redo: () => { S.overlay = to; syncInputs(); update(); } });
     S.overlay = to;
     update();
   });
   jointSel.addEventListener("change", () => { S.joint = Number(jointSel.value); syncInputs(); });
   clearJoint.addEventListener("click", () => {
     const j = S.joint, before = { ...(S.manual[j] || {}) };
-    api.pushUndo({ label: `reset joint ${jointName(j)}`, undo: () => { S.manual[j] = before; syncInputs(); update(); }, redo: () => { delete S.manual[j]; syncInputs(); update(); } });
+    api.pushUndo({ label: tr("rig.undo_reset_joint", { joint: jointName(j) }), undo: () => { S.manual[j] = before; syncInputs(); update(); }, redo: () => { delete S.manual[j]; syncInputs(); update(); } });
     delete S.manual[j];
     syncInputs();
     update();
@@ -159,7 +161,7 @@ function mount(root, api) {
     S.busy = true;
     S.wanted = true;
     S.stale = false;
-    status.textContent = "face rig: fitting ...";
+    status.textContent = tr("rig.fitting");
     const input = { ...api.character(), morphs: SHAPES.map((n) => (params.get("face_prefix") ?? "faceunits/") + n) };
     if (params.get("face_morphs")) input.morph_dir = params.get("face_morphs");
     if (params.get("eyes")) input.eyes = params.get("eyes");
@@ -180,13 +182,13 @@ function mount(root, api) {
       r.fit.forEach((f, k) => {
         const i = inputs[SHAPES[k]];
         if (!i) return;
-        i.label.title = `joints: p95 ${f.p95_mm.toFixed(2)} mm, max ${f.max_mm.toFixed(2)} mm, explained ${(100 * f.explained).toFixed(1)}%`;
+        i.label.title = tr("rig.fit_title", { p95: f.p95_mm.toFixed(2), max: f.max_mm.toFixed(2), pct: (100 * f.explained).toFixed(1) });
         i.label.textContent = SHAPES[k] + (f.poorly_expressed ? " *" : "");
       });
       const poor = r.fit.filter((f) => f.poorly_expressed).length;
-      status.textContent = `face rig: ${r.joints.length} joints, ${SHAPES.length} shapes (* = joints reproduce it poorly: ${poor}), fit ${Math.round(r.timing_ms.total)} ms`;
+      status.textContent = tr("rig.loaded", { joints: r.joints.length, shapes: SHAPES.length, poor, ms: Math.round(r.timing_ms.total) });
     } catch (e) {
-      status.textContent = `face rig: ${e.message ?? e}`;
+      status.textContent = tr("rig.error", { error: e.message ?? e });
     }
     S.busy = false;
     update();
@@ -266,7 +268,7 @@ function mount(root, api) {
     if (info && info.kind === "slider") {
       api.setPose("rig", null);
       api.setOverlay("rig-joints", null);
-      status.textContent = "face rig: the character changed; refitting after it settles";
+      status.textContent = tr("rig.changed");
       return;
     }
     clearTimeout(S.timer);

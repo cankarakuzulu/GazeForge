@@ -1,10 +1,12 @@
+import { tr } from "../i18n.js";
+
 const FIELDS = [
-  ["out mm", "offset_mm", 0, -15, 15, 0.1],
-  ["up mm", "offset_mm", 1, -15, 15, 0.1],
-  ["forward mm", "offset_mm", 2, -15, 15, 0.1],
-  ["pitch up deg", "rotation_deg", 0, -45, 45, 0.5],
-  ["yaw out deg", "rotation_deg", 1, -45, 45, 0.5],
-  ["roll deg", "rotation_deg", 2, -45, 45, 0.5],
+  ["out", "offset_mm", 0, -15, 15, 0.1],
+  ["up", "offset_mm", 1, -15, 15, 0.1],
+  ["forward", "offset_mm", 2, -15, 15, 0.1],
+  ["pitch", "rotation_deg", 0, -45, 45, 0.5],
+  ["yaw", "rotation_deg", 1, -45, 45, 0.5],
+  ["roll", "rotation_deg", 2, -45, 45, 0.5],
   ["scale", "scale", -1, 0.5, 1.5, 0.005],
 ];
 const FOLLOW = "makehuman-helper/1";
@@ -30,26 +32,26 @@ window.GF.registerPanel({
     const modelPicker = (s, rig) => {
       if (!inventory || !rig) return "";
       const current = s.model?.id || "";
-      const groups = inventory.families.map((f) => `<optgroup label="${f}">${inventory.models.filter((m) => m.family === f)
-        .map((m) => `<option value="${m.id}" ${m.id === current ? "selected" : ""}>${m.name || m.id}</option>`).join("")}</optgroup>`).join("");
+      const groups = inventory.families.map((f) => `<optgroup label="${tr(`eyes.family.${f}`, null, f)}">${inventory.models.filter((m) => m.family === f)
+        .map((m) => `<option value="${m.id}" ${m.id === current ? "selected" : ""}>${tr(`eyes.model.${m.id}`, null, m.name || m.id)}</option>`).join("")}</optgroup>`).join("");
       const radius = s.model?.radius_mm ?? 12;
-      return `<label class="eye-row" title="a premade eye: shaded sclera, iris and cornea, built at the eye rig's places">eye model
-          <select class="model"><option value="" ${current ? "" : "selected"}>${E.hasEyes() && !current ? "eyes file" : "none"}</option>${groups}</select></label>
-        ${current ? `<label class="eye-row" title="eyeball radius in mm; double click: back to 12">radius mm
+      return `<label class="eye-row" title="${tr("eyes.model_title")}">${tr("eyes.model")}
+          <select class="model"><option value="" ${current ? "" : "selected"}>${E.hasEyes() && !current ? tr("eyes.eyes_file") : tr("eyes.none")}</option>${groups}</select></label>
+        ${current ? `<label class="eye-row" title="${tr("eyes.radius_title")}">${tr("eyes.radius")}
           <input type="range" class="radius" min="5" max="20" step="0.1" value="${radius}"><output>${radius}</output></label>` : ""}`;
     };
     const render = () => {
       const s = spec(), rig = s.rig || E.rig();
-      if (!E.hasEyes() && !rig) { root.innerHTML = `<div class="note">open the page with an eyes file (&amp;eyes=), or use a catalog with an eye rig, to place eyeballs</div>`; return; }
-      const sides = linked ? [["both eyes", ["left", "right"]]] : [["left eye", ["left"]], ["right eye", ["right"]]];
+      if (!E.hasEyes() && !rig) { root.innerHTML = `<div class="note">${tr("eyes.no_eyes")}</div>`; return; }
+      const sides = linked ? [["both", ["left", "right"]]] : [["left", ["left"]], ["right", ["right"]]];
       root.innerHTML = `<div class="eyes">
         ${modelPicker(s, rig)}
-        <label title="move and scale each eye with its socket, the way MakeHuman moves its helper eyeball; the eyelid clearance uses the moved eyes">
-          <input type="checkbox" class="follow" ${s.follow === FOLLOW ? "checked" : ""} ${rig || s.follow === FOLLOW ? "" : "disabled"}> follow the sockets</label>
-        ${rig ? "" : `<div class="note">this catalog has no eye rig (store import-eyerig makes one)</div>`}
-        <label title="one set of sliders for both eyes; out and yaw mirror between the sides"><input type="checkbox" class="link" ${linked ? "checked" : ""}> link left and right</label>
-        ${sides.map(([title, which]) => `<div class="eye-side"><b>${title}</b>${FIELDS.map((f, i) => `
-          <label class="eye-row" title="${f[0]} relative to the socket; double click: back to 0">${f[0]}
+        <label title="${tr("eyes.follow_title")}">
+          <input type="checkbox" class="follow" ${s.follow === FOLLOW ? "checked" : ""} ${rig || s.follow === FOLLOW ? "" : "disabled"}> ${tr("eyes.follow")}</label>
+        ${rig ? "" : `<div class="note">${tr("eyes.no_rig")}</div>`}
+        <label title="${tr("eyes.link_title")}"><input type="checkbox" class="link" ${linked ? "checked" : ""}> ${tr("eyes.link")}</label>
+        ${sides.map(([title, which]) => `<div class="eye-side"><b>${tr(`eyes.side.${title}`)}</b>${FIELDS.map((f, i) => `
+          <label class="eye-row" title="${tr("eyes.field_title", { field: tr(`eyes.field.${f[0]}`) })}">${tr(`eyes.field.${f[0]}`)}
             <input type="range" data-i="${i}" data-sides="${which.join(",")}" min="${f[3]}" max="${f[4]}" step="${f[5]}" value="${read(s[which[0]], f)}">
             <output>${read(s[which[0]], f)}</output></label>`).join("")}</div>`).join("")}
       </div>`;
@@ -57,7 +59,7 @@ window.GF.registerPanel({
         const before = E.get(), after = { ...spec(), follow: e.target.checked ? FOLLOW : "none", rig: e.target.checked ? rig : s.rig };
         if (!after.rig) delete after.rig;
         E.set(after, "eyes-panel");
-        commit(`eyes ${e.target.checked ? "follow the sockets" : "stay where the eyes file puts them"}`, before, after);
+        commit(e.target.checked ? tr("eyes.undo_follow") : tr("eyes.undo_stay"), before, after);
       });
       root.querySelector(".link").addEventListener("change", (e) => { linked = e.target.checked; render(); });
       root.querySelector(".model")?.addEventListener("change", (e) => {
@@ -65,7 +67,7 @@ window.GF.registerPanel({
         if (e.target.value) { after.model = { id: e.target.value, radius_mm: after.model?.radius_mm ?? 12 }; after.rig = rig; }
         else delete after.model;
         E.set(after, "eyes-panel");
-        commit(e.target.value ? `eye model ${e.target.value}` : "no eye model", before, after);
+        commit(e.target.value ? tr("eyes.undo_model", { id: e.target.value }) : tr("eyes.undo_no_model"), before, after);
         render();
       });
       const radius = root.querySelector(".radius");
@@ -74,8 +76,8 @@ window.GF.registerPanel({
         const setRadius = (x) => { const next = spec(); next.model = { ...next.model, radius_mm: x }; E.set(next, "eyes-panel"); radius.nextElementSibling.textContent = x; };
         radius.addEventListener("pointerdown", () => { rBefore = E.get(); });
         radius.addEventListener("input", () => { if (!rBefore) rBefore = E.get(); setRadius(+radius.value); });
-        radius.addEventListener("change", () => { commit(`eye radius ${radius.value} mm`, rBefore, E.get()); rBefore = null; });
-        radius.addEventListener("dblclick", () => { const b = E.get(); radius.value = 12; setRadius(12); commit("eye radius back to 12 mm", b, E.get()); });
+        radius.addEventListener("change", () => { commit(tr("eyes.undo_radius", { mm: radius.value }), rBefore, E.get()); rBefore = null; });
+        radius.addEventListener("dblclick", () => { const b = E.get(); radius.value = 12; setRadius(12); commit(tr("eyes.undo_radius_back"), b, E.get()); });
       }
       let before = null;
       for (const el of root.querySelectorAll("input[type=range][data-i]")) {
@@ -89,8 +91,8 @@ window.GF.registerPanel({
         };
         el.addEventListener("pointerdown", () => { before = E.get(); });
         el.addEventListener("input", () => { if (!before) before = E.get(); apply(+el.value); });
-        el.addEventListener("change", () => { const after = E.get(); commit(`${which.length > 1 ? "eyes" : which[0]} ${f[0]} to ${el.value}`, before, after); before = null; });
-        el.addEventListener("dblclick", () => { const b = E.get(); el.value = f[1] === "scale" ? 1 : 0; const after = apply(+el.value); commit(`${which.length > 1 ? "eyes" : which[0]} ${f[0]} back`, b, after); });
+        el.addEventListener("change", () => { const after = E.get(); commit(tr("eyes.undo_field", { side: tr(`eyes.side.${which.length > 1 ? "both" : which[0]}`), field: tr(`eyes.field.${f[0]}`), value: el.value }), before, after); before = null; });
+        el.addEventListener("dblclick", () => { const b = E.get(); el.value = f[1] === "scale" ? 1 : 0; const after = apply(+el.value); commit(tr("eyes.undo_field_back", { side: tr(`eyes.side.${which.length > 1 ? "both" : which[0]}`), field: tr(`eyes.field.${f[0]}`) }), b, after); });
       }
     };
     render();

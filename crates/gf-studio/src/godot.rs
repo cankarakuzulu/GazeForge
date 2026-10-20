@@ -354,7 +354,7 @@ impl Host {
         let shared: Shared = Arc::new((
             Mutex::new(State {
                 status: Status::Starting,
-                detail: "starting Godot".into(),
+                detail: crate::i18n::tr("studio.godot.start_detail").into(),
                 info: Value::Null,
                 want: Default::default(),
                 head: None,
@@ -419,9 +419,9 @@ impl Host {
         let (s, d) = self.status();
         match s {
             Status::Ready => "Godot".into(),
-            Status::Starting => format!("Godot starting ({d})"),
-            Status::Failed => format!("Godot failed, native fallback: {d}"),
-            Status::Stopped => format!("Godot stopped, native fallback: {d}"),
+            Status::Starting => crate::i18n::trf("studio.godot.starting", &[("detail", &d)]),
+            Status::Failed => crate::i18n::trf("studio.godot.failed", &[("detail", &d)]),
+            Status::Stopped => crate::i18n::trf("studio.godot.stopped", &[("detail", &d)]),
         }
     }
 

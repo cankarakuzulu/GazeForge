@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const SHAPES = [
   "browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff", "cheekSquintLeft", "cheekSquintRight",
   "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft", "eyeLookDownRight", "eyeLookInLeft", "eyeLookInRight", "eyeLookOutLeft", "eyeLookOutRight",
@@ -52,41 +54,41 @@ function angles(q) {
 }
 
 export function validClip(c) {
-  if (!c || c.format !== "gazeforge.clip/1") return "not a gazeforge.clip/1 file";
-  if (!Array.isArray(c.names) || !Array.isArray(c.weights) || !Array.isArray(c.times) || !c.times.length) return "the clip has no names, weights or times";
-  if (c.weights.length !== c.times.length || c.weights.some((r) => r.length !== c.names.length)) return "weights do not match times x names";
+  if (!c || c.format !== "gazeforge.clip/1") return tr("timeline.bad_format");
+  if (!Array.isArray(c.names) || !Array.isArray(c.weights) || !Array.isArray(c.times) || !c.times.length) return tr("timeline.bad_empty");
+  if (c.weights.length !== c.times.length || c.weights.some((r) => r.length !== c.names.length)) return tr("timeline.bad_shape");
   return null;
 }
 
 function mount(root, api) {
   const params = new URLSearchParams(location.search);
   const S = { rig: null, clip: null, map: [], t: 0, playing: false, loop: true, speed: 1, applyHead: true, last: 0, raf: 0, busy: false, timer: 0, frames: [] };
-  const status = el("div", { class: "note" }, "timeline: no clip");
-  const rigNote = el("div", { class: "note" }, "deltas: not loaded");
-  const fileIn = el("input", { type: "file", accept: ".json,application/json", title: "load a .clip.json" });
-  const loadRig = el("button", {}, "load deltas");
+  const status = el("div", { class: "note" }, tr("timeline.no_clip"));
+  const rigNote = el("div", { class: "note" }, tr("timeline.deltas_none"));
+  const fileIn = el("input", { type: "file", accept: ".json,application/json", title: tr("timeline.file_title") });
+  const loadRig = el("button", {}, tr("timeline.load_deltas"));
   const row1 = el("div", { class: "row" });
   row1.append(loadRig, fileIn);
   const runRow = el("div", { class: "row" });
-  const src = el("input", { type: "text", placeholder: "video file, image folder or CSV", size: "28" });
-  const glb = el("input", { type: "text", placeholder: "character glb (optional)", size: "20" });
-  const outp = el("input", { type: "text", placeholder: "output prefix", size: "20" });
-  const runV = el("button", { title: "animation.from_video as a job" }, "capture");
-  const runC = el("button", { title: "animation.from_csv (experimental)" }, "import CSV");
+  const src = el("input", { type: "text", placeholder: tr("timeline.src_placeholder"), size: "28" });
+  const glb = el("input", { type: "text", placeholder: tr("timeline.glb_placeholder"), size: "20" });
+  const outp = el("input", { type: "text", placeholder: tr("timeline.out_placeholder"), size: "20" });
+  const runV = el("button", { title: tr("timeline.capture_title") }, tr("timeline.capture"));
+  const runC = el("button", { title: tr("timeline.csv_title") }, tr("timeline.csv"));
   runRow.append(src, glb, outp, runV, runC);
-  const tr = el("div", { class: "row" });
-  const play = el("button", {}, "play");
-  const loop = el("input", { type: "checkbox", title: "loop" });
+  const transport = el("div", { class: "row" });
+  const play = el("button", {}, tr("timeline.play"));
+  const loop = el("input", { type: "checkbox", title: tr("timeline.loop") });
   loop.checked = true;
-  const speed = el("select", { title: "speed" });
+  const speed = el("select", { title: tr("timeline.speed") });
   for (const s of SPEEDS) speed.appendChild(el("option", { value: String(s) }, `${s}x`));
   speed.value = "1";
-  const head = el("input", { type: "checkbox", title: "apply the head rotation" });
+  const head = el("input", { type: "checkbox", title: tr("timeline.head_title") });
   head.checked = true;
-  tr.append(play, el("label", {}, " loop "), loop, el("label", {}, " speed "), speed, el("label", {}, " head "), head);
+  transport.append(play, el("label", {}, ` ${tr("timeline.loop")} `), loop, el("label", {}, ` ${tr("timeline.speed")} `), speed, el("label", {}, ` ${tr("timeline.head")} `), head);
   const scrub = el("input", { type: "range", min: "0", max: "0", step: "1", value: "0", style: "width:100%" });
   const readout = el("div", { class: "note" }, "");
-  root.append(row1, rigNote, runRow, tr, scrub, readout, status);
+  root.append(row1, rigNote, runRow, transport, scrub, readout, status);
 
   function remap() {
     S.map = S.clip ? S.clip.names.map((n) => SHAPES.indexOf(n)) : [];
@@ -148,9 +150,9 @@ function mount(root, api) {
     const n = S.clip.times.length, fps = S.clip.fps || 30;
     const { i } = frameAt(S.t);
     scrub.value = String(i);
-    let text = `t ${S.t.toFixed(2)} / ${((n - 1) / fps).toFixed(2)} s, frame ${i + 1} / ${n}`;
+    let text = tr("timeline.readout", { t: S.t.toFixed(2), length: ((n - 1) / fps).toFixed(2), frame: i + 1, frames: n });
     if (!S.rig) {
-      readout.textContent = text + " (load deltas to see it on the head)";
+      readout.textContent = text + tr("timeline.frag.need_deltas");
       return;
     }
     const t0 = performance.now();
@@ -159,7 +161,7 @@ function mount(root, api) {
     api.poseExtraMesh?.("eyes", q && S.applyHead ? qmat(toDesigner(q)) : null, pivot());
     if (q) {
       const a = angles(q), c = pivot(), m = qmat(toDesigner(q));
-      text += `, head yaw ${a[0].toFixed(1)} pitch ${a[1].toFixed(1)} roll ${a[2].toFixed(1)} deg`;
+      text += tr("timeline.frag.head", { yaw: a[0].toFixed(1), pitch: a[1].toFixed(1), roll: a[2].toFixed(1) });
       const tip = [c[0] - 0.15 * m[1], c[1] - 0.15 * m[4], c[2] - 0.15 * m[7]];
       api.setOverlay("timeline-head", { lines: new Float32Array([...c, ...tip]), points: new Float32Array(c), color: [0.2, 0.75, 1.0] });
     }
@@ -187,57 +189,57 @@ function mount(root, api) {
 
   function setPlaying(on) {
     S.playing = !!on && !!S.clip;
-    play.textContent = S.playing ? "pause" : "play";
+    play.textContent = S.playing ? tr("timeline.pause") : tr("timeline.play");
     cancelAnimationFrame(S.raf);
     if (S.playing) { S.last = 0; S.raf = requestAnimationFrame(tick); }
   }
 
   function setClip(clip, label) {
     const bad = validClip(clip);
-    if (bad) { status.textContent = `timeline: ${bad}`; return false; }
+    if (bad) { status.textContent = tr("timeline.error", { error: bad }); return false; }
     const before = S.clip;
     const apply = (c) => {
       setPlaying(false);
       S.clip = c; S.t = 0; remap();
       scrub.max = c ? String(c.times.length - 1) : "0";
-      if (!c) { api.setPose("timeline", null); api.setOverlay("timeline-head", null); api.poseExtraMesh?.("eyes", null); api.requestRender(); status.textContent = "timeline: no clip"; return; }
+      if (!c) { api.setPose("timeline", null); api.setOverlay("timeline-head", null); api.poseExtraMesh?.("eyes", null); api.requestRender(); status.textContent = tr("timeline.no_clip"); return; }
       const unmapped = c.names.filter((n, k) => S.map[k] < 0).length;
-      status.textContent = `timeline: ${c.name ?? "clip"} (${label}), ${c.times.length} frames at ${c.fps} fps, ${c.names.length} channels${unmapped ? `, ${unmapped} not on this head` : ""}${c.head ? ", head rotation" : ""}${c.experimental ? ", EXPERIMENTAL source" : ""}`;
+      status.textContent = tr("timeline.clip", { name: c.name ?? tr("timeline.clip_default"), label, frames: c.times.length, fps: c.fps, channels: c.names.length }) + (unmapped ? tr("timeline.frag.unmapped", { n: unmapped }) : "") + (c.head ? tr("timeline.frag.head_rotation") : "") + (c.experimental ? tr("timeline.frag.experimental") : "");
       show();
     };
     apply(clip);
-    api.pushUndo({ label: `timeline: load ${clip.name ?? "clip"}`, undo: () => apply(before), redo: () => apply(clip) });
+    api.pushUndo({ label: tr("timeline.undo_load", { name: clip.name ?? tr("timeline.clip_default") }), undo: () => apply(before), redo: () => apply(clip) });
     return true;
   }
 
   async function loadDeltas() {
     if (S.busy) return;
     S.busy = true;
-    rigNote.textContent = "deltas: loading ...";
+    rigNote.textContent = tr("timeline.deltas_loading");
     const input = { ...api.character(), morphs: SHAPES.map((n) => (params.get("face_prefix") ?? "faceunits/") + n), rounds: 0 };
     if (params.get("face_morphs")) input.morph_dir = params.get("face_morphs");
     if (params.get("eyes")) input.eyes = params.get("eyes");
     try {
       const r = await api.call("rig.face", input);
       S.rig = { joints: r.joints, rest: decode(r.rest_f32_b64, Float32Array), offsets: r.blend.offsets, index: decode(r.blend.index_u32_b64, Uint32Array), delta: decode(r.blend.delta_f32_b64, Float32Array) };
-      rigNote.textContent = `deltas: ${SHAPES.length} shapes on ${r.vertices} vertices`;
+      rigNote.textContent = tr("timeline.deltas_loaded", { shapes: SHAPES.length, vertices: r.vertices });
       show();
     } catch (e) {
-      rigNote.textContent = `deltas: ${e.message ?? e}`;
+      rigNote.textContent = tr("timeline.deltas_error", { error: e.message ?? e });
     }
     S.busy = false;
   }
 
   async function run(kind) {
     const path = src.value.trim(), out = outp.value.trim();
-    if (!path || !out) { status.textContent = "timeline: give an input path and an output prefix"; return; }
+    if (!path || !out) { status.textContent = tr("timeline.need_paths"); return; }
     const input = { out, return_clip: true };
     if (glb.value.trim()) input.glb = glb.value.trim();
     else input.morphs = SHAPES;
     try {
       let result;
       if (kind === "csv") {
-        status.textContent = "timeline: importing CSV ...";
+        status.textContent = tr("timeline.importing");
         result = await api.call("animation.from_csv", { ...input, csv: path });
       } else {
         if (/\.(png|jpe?g|bmp|webp)$/i.test(path) || !/\.[a-z0-9]{2,4}$/i.test(path)) { input.frames = path; input.fps = 30; } else input.video = path;
@@ -245,14 +247,14 @@ function mount(root, api) {
         const job = await api.call("jobs.submit", { command: "animation.from_video", input });
         for (;;) {
           const rec = await api.call("jobs.status", { id: job.id, wait_s: 2 });
-          status.textContent = `timeline: capture ${rec.state} ...`;
+          status.textContent = tr("timeline.capturing", { state: tr(`job.state.${rec.state}`, null, rec.state) });
           if (rec.state === "done") { result = rec.result?.result; break; }
           if (rec.state === "failed" || rec.state === "cancelled") throw new Error(rec.result?.error?.message ?? rec.error ?? rec.state);
         }
       }
-      setClip(result.clip, kind === "csv" ? "CSV, experimental" : "capture");
+      setClip(result.clip, kind === "csv" ? tr("timeline.label_csv") : tr("timeline.label_capture"));
     } catch (e) {
-      status.textContent = `timeline: ${e.message ?? e}`;
+      status.textContent = tr("timeline.error", { error: e.message ?? e });
     }
   }
 
@@ -260,7 +262,7 @@ function mount(root, api) {
   fileIn.addEventListener("change", async () => {
     const f = fileIn.files?.[0];
     if (!f) return;
-    try { setClip(JSON.parse(await f.text()), f.name); } catch (e) { status.textContent = `timeline: ${e.message}`; }
+    try { setClip(JSON.parse(await f.text()), f.name); } catch (e) { status.textContent = tr("timeline.error", { error: e.message }); }
   });
   runV.addEventListener("click", () => run("video"));
   runC.addEventListener("click", () => run("csv"));
@@ -282,7 +284,7 @@ function mount(root, api) {
       if (st.clip && !validClip(st.clip)) {
         setPlaying(false);
         S.clip = st.clip; remap(); scrub.max = String(st.clip.times.length - 1);
-        status.textContent = `timeline: ${st.clip.name ?? "clip"} (restored), ${st.clip.times.length} frames`;
+        status.textContent = tr("timeline.restored", { name: st.clip.name ?? tr("timeline.clip_default"), frames: st.clip.times.length });
       }
       if (typeof st.speed === "number") { S.speed = st.speed; speed.value = String(st.speed); }
       if (typeof st.loop === "boolean") { S.loop = st.loop; loop.checked = st.loop; }

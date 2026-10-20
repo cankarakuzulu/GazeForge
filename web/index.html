@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GazeForge Designer</title>
+<title data-i18n="ui.doc_title"></title>
 <link rel="stylesheet" href="designer.css">
 </head>
 <body>
@@ -50,18 +50,18 @@
 </svg>
 <!-- icons:end -->
 <header>
-  <div class="brand"><strong>GazeForge</strong><span>Designer</span></div>
-  <span id="status" class="status">loading</span>
+  <div class="brand"><strong>GazeForge</strong><span data-i18n="ui.designer"></span></div>
+  <span id="status" class="status" data-i18n="ui.status"></span>
   <span id="info" class="info"></span>
   <nav class="bar">
-    <div class="grp"><button id="undo" class="ib" title="Undo (Ctrl+Z)" disabled><svg class="ico"><use href="#i-undo-2"/></svg></button><button id="redo" class="ib" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" disabled><svg class="ico"><use href="#i-redo-2"/></svg></button></div>
-    <div class="grp seg" id="layout"><button class="ib" title="One viewport (L cycles)" data-layout="single"><svg class="ico"><use href="#i-square"/></svg></button><button class="ib" title="Two viewports side by side (L cycles)" data-layout="side"><svg class="ico"><use href="#i-columns-2"/></svg></button><button class="ib" title="Four viewports (L cycles)" data-layout="quad"><svg class="ico"><use href="#i-layout-grid"/></svg></button></div>
-    <div class="grp"><select id="mode" title="Render mode of the active viewport (M / Shift+M)"></select><select id="lod" title="Level of detail (, coarser / . finer)"></select></div>
-    <div class="grp"><button id="frame" class="ib" title="Frame the head in the active viewport (F)"><svg class="ico"><use href="#i-focus"/></svg></button><button id="proj" class="ib wide" title="Perspective / orthographic (O or 5)"><svg class="ico"><use href="#i-box"/></svg><span>persp</span></button><button id="three" class="ib" title="Three-quarter view (9)"><svg class="ico"><use href="#i-rotate-3d"/></svg></button><button id="home" class="ib" title="Home view of the active viewport, framed (Home)"><svg class="ico"><use href="#i-house"/></svg></button></div>
-    <div class="grp"><button id="bad-btn" class="ib" title="Bad triangles: smallest angle under the limit of the Topology panel"><svg class="ico"><use href="#i-triangle-alert"/></svg></button><button id="improve-btn" class="ib" title="Improve the topology of the game base (Topology panel; runs a job)"><svg class="ico"><use href="#i-wand-sparkles"/></svg></button></div>
-    <div class="grp"><button id="tasks-btn" class="ib" title="Tasks: guided wizards, each step one registry command"><svg class="ico"><use href="#i-list-checks"/></svg></button></div>
-    <div class="grp"><button id="shot" class="ib" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout"><svg class="ico"><use href="#i-camera"/></svg></button><button id="theme-btn" class="ib" title="Dark / light interface (D)"><svg class="ico"><use href="#i-moon"/></svg></button><button id="help-btn" class="ib" title="Shortcuts (?)"><svg class="ico"><use href="#i-keyboard"/></svg></button></div>
-    <div class="grp project"><button id="p-new" class="ib" title="New project (Ctrl+N)"><svg class="ico"><use href="#i-file-plus"/></svg></button><button id="p-open" class="ib" title="Open a project (Ctrl+O)"><svg class="ico"><use href="#i-folder-open"/></svg></button><select id="p-recent" title="Recent projects"><option value="">recent…</option></select><button id="p-save" class="ib" title="Save the project (Ctrl+S)"><svg class="ico"><use href="#i-save"/></svg></button><button id="p-saveas" class="ib" title="Save the project as (Ctrl+Shift+S)"><svg class="ico"><use href="#i-save-all"/></svg></button><span id="p-name" class="pname" title="saved">untitled</span></div>
+    <div class="grp"><button id="undo" class="ib" data-i18n-title="ui.undo.title" disabled><svg class="ico"><use href="#i-undo-2"/></svg></button><button id="redo" class="ib" data-i18n-title="ui.redo.title" disabled><svg class="ico"><use href="#i-redo-2"/></svg></button></div>
+    <div class="grp seg" id="layout"><button class="ib" data-i18n-title="ui.single.title" data-layout="single"><svg class="ico"><use href="#i-square"/></svg></button><button class="ib" data-i18n-title="ui.side.title" data-layout="side"><svg class="ico"><use href="#i-columns-2"/></svg></button><button class="ib" data-i18n-title="ui.quad.title" data-layout="quad"><svg class="ico"><use href="#i-layout-grid"/></svg></button></div>
+    <div class="grp"><select id="mode" data-i18n-title="ui.mode.title"></select><select id="lod" data-i18n-title="ui.lod.title"></select></div>
+    <div class="grp"><button id="frame" class="ib" data-i18n-title="ui.frame.title"><svg class="ico"><use href="#i-focus"/></svg></button><button id="proj" class="ib wide" data-i18n-title="ui.proj.title"><svg class="ico"><use href="#i-box"/></svg><span data-i18n="ui.persp"></span></button><button id="three" class="ib" data-i18n-title="ui.three.title"><svg class="ico"><use href="#i-rotate-3d"/></svg></button><button id="home" class="ib" data-i18n-title="ui.home.title"><svg class="ico"><use href="#i-house"/></svg></button></div>
+    <div class="grp"><button id="bad-btn" class="ib" data-i18n-title="ui.bad-btn.title"><svg class="ico"><use href="#i-triangle-alert"/></svg></button><button id="improve-btn" class="ib" data-i18n-title="ui.improve-btn.title"><svg class="ico"><use href="#i-wand-sparkles"/></svg></button></div>
+    <div class="grp"><button id="tasks-btn" class="ib" data-i18n-title="ui.tasks-btn.title"><svg class="ico"><use href="#i-list-checks"/></svg></button></div>
+    <div class="grp"><button id="shot" class="ib" data-i18n-title="ui.shot.title"><svg class="ico"><use href="#i-camera"/></svg></button><button id="theme-btn" class="ib" data-i18n-title="ui.theme-btn.title"><svg class="ico"><use href="#i-moon"/></svg></button><button id="help-btn" class="ib" data-i18n-title="ui.help-btn.title"><svg class="ico"><use href="#i-keyboard"/></svg></button></div>
+    <div class="grp project"><button id="p-new" class="ib" data-i18n-title="ui.p-new.title"><svg class="ico"><use href="#i-file-plus"/></svg></button><button id="p-open" class="ib" data-i18n-title="ui.p-open.title"><svg class="ico"><use href="#i-folder-open"/></svg></button><select id="p-recent" data-i18n-title="ui.p-recent.title"><option value="" data-i18n="ui.option.recent"></option></select><button id="p-save" class="ib" data-i18n-title="ui.p-save.title"><svg class="ico"><use href="#i-save"/></svg></button><button id="p-saveas" class="ib" data-i18n-title="ui.p-saveas.title"><svg class="ico"><use href="#i-save-all"/></svg></button><span id="p-name" class="pname" data-i18n-title="ui.p-name.title" data-i18n="ui.p-name"></span></div>
   </nav>
 </header>
 <main>
@@ -71,17 +71,17 @@
     <div id="cubes"></div>
     <div class="overlay">
       <div class="row">
-        <label class="chip" title="Wireframe overlay (W)"><input type="checkbox" data-opt="wire"><svg class="ico"><use href="#i-vector-square"/></svg>wire</label>
-        <label class="chip" title="Hidden edges through the surface (X)"><input type="checkbox" data-opt="xray"><svg class="ico"><use href="#i-scan-eye"/></svg>x-ray</label>
-        <label class="chip" title="Vertex points (P)"><input type="checkbox" data-opt="points"><svg class="ico"><use href="#i-chart-scatter"/></svg>points</label>
-        <label class="chip" title="Back-face highlight (B)"><input type="checkbox" data-opt="backHi"><svg class="ico"><use href="#i-flip-horizontal-2"/></svg>back faces</label>
-        <label class="chip" title="UV seams (cyan) and open boundaries (orange) (E)"><input type="checkbox" data-opt="seams"><svg class="ico"><use href="#i-scissors-line-dashed"/></svg>seams</label>
-        <label class="chip" title="Clip plane 1 (C); Alt+wheel moves it"><input type="checkbox" data-opt="clip.0.on"><svg class="ico"><use href="#i-slice"/></svg>clip</label>
+        <label class="chip" data-i18n-title="ui.wireframe_overlay_w.title"><input type="checkbox" data-opt="wire"><svg class="ico"><use href="#i-vector-square"/></svg><span data-i18n="ui.wire"></span></label>
+        <label class="chip" data-i18n-title="ui.hidden_edges_through_the_surface_x.title"><input type="checkbox" data-opt="xray"><svg class="ico"><use href="#i-scan-eye"/></svg><span data-i18n="ui.x_ray"></span></label>
+        <label class="chip" data-i18n-title="ui.vertex_points_p.title"><input type="checkbox" data-opt="points"><svg class="ico"><use href="#i-chart-scatter"/></svg><span data-i18n="ui.points"></span></label>
+        <label class="chip" data-i18n-title="ui.back_face_highlight_b.title"><input type="checkbox" data-opt="backHi"><svg class="ico"><use href="#i-flip-horizontal-2"/></svg><span data-i18n="ui.back_faces"></span></label>
+        <label class="chip" data-i18n-title="ui.uv_seams_cyan_and_open_boundaries_orange.title"><input type="checkbox" data-opt="seams"><svg class="ico"><use href="#i-scissors-line-dashed"/></svg><span data-i18n="ui.seams"></span></label>
+        <label class="chip" data-i18n-title="ui.clip_plane_1_c_alt_wheel_moves_it.title"><input type="checkbox" data-opt="clip.0.on"><svg class="ico"><use href="#i-slice"/></svg><span data-i18n="ui.clip"></span></label>
         <span class="chipsep"></span>
-        <label class="chip" title="Face grid: cells fixed to the topology (T)"><input type="checkbox" data-opt="faceGrid"><svg class="ico"><use href="#i-grid-3x3"/></svg>face grid</label>
-        <label class="chip" title="The eye spheres while the face grid is on: the grid drawn over them, hidden, or plain"><svg class="ico"><use href="#i-eye"/></svg>eyes <select data-opt="eyesGrid"><option value="grid">grid over</option><option value="hide">hidden</option><option value="plain">plain</option></select></label>
-        <label class="chip" title="Millimetre grid in the ortho views, a back plane in perspective (R)"><input type="checkbox" data-opt="normalGrid"><svg class="ico"><use href="#i-ruler"/></svg>mm grid</label>
-        <label class="chip" title="Probe mode: a click shows the address of the surface point (Q); Alt+click probes in any mode"><input type="checkbox" id="probe-mode"><svg class="ico"><use href="#i-crosshair"/></svg>probe</label>
+        <label class="chip" data-i18n-title="ui.face_grid_cells_fixed_to_the_topology_t.title"><input type="checkbox" data-opt="faceGrid"><svg class="ico"><use href="#i-grid-3x3"/></svg><span data-i18n="ui.face_grid"></span></label>
+        <label class="chip" data-i18n-title="ui.the_eye_spheres_while_the_face_grid_is_o.title"><svg class="ico"><use href="#i-eye"/></svg><span data-i18n="ui.eyes"></span> <select data-opt="eyesGrid"><option value="grid" data-i18n="ui.option.grid"></option><option value="hide" data-i18n="ui.option.hide"></option><option value="plain" data-i18n="ui.option.plain"></option></select></label>
+        <label class="chip" data-i18n-title="ui.millimetre_grid_in_the_ortho_views_a_bac.title"><input type="checkbox" data-opt="normalGrid"><svg class="ico"><use href="#i-ruler"/></svg><span data-i18n="ui.mm_grid"></span></label>
+        <label class="chip" data-i18n-title="ui.probe_mode_a_click_shows_the_address_of_.title"><input type="checkbox" id="probe-mode"><svg class="ico"><use href="#i-crosshair"/></svg><span data-i18n="ui.probe"></span></label>
       </div>
       <div id="label" class="label"></div>
     </div>
@@ -90,107 +90,107 @@
       <code id="addr-line"></code>
       <div id="addr-note" class="note"></div>
       <div class="buttons">
-        <button id="addr-copy" class="small" title="Copy the address line">copy</button>
-        <button id="addr-pin" class="small" title="Pin this point (the Pins panel lists it)">pin</button>
-        <input id="goto" type="text" placeholder="go to: M12.3, dense 485123, game v10234 or a GF@ line (J)">
-        <button id="goto-btn" class="small">go</button>
-        <button id="addr-close" class="small" title="Close">×</button>
+        <button id="addr-copy" class="small" data-i18n-title="ui.addr-copy.title" data-i18n="ui.addr-copy"></button>
+        <button id="addr-pin" class="small" data-i18n-title="ui.addr-pin.title" data-i18n="ui.addr-pin"></button>
+        <input id="goto" type="text" data-i18n-placeholder="ui.goto.placeholder">
+        <button id="goto-btn" class="small" data-i18n="ui.goto-btn"></button>
+        <button id="addr-close" class="small" data-i18n-title="ui.addr-close.title">×</button>
       </div>
     </div>
   </section>
   <aside>
     <div class="tabs">
-      <button data-tab="shape" class="on">Shape</button><button data-tab="view">View</button><button data-tab="scene">Scene</button><button data-tab="history">History</button><button data-tab="panels">Panels</button><button data-tab="project">Project</button>
+      <button data-tab="shape" class="on" data-i18n="ui.shape"></button><button data-tab="view" data-i18n="ui.view"></button><button data-tab="scene" data-i18n="ui.scene"></button><button data-tab="history" data-i18n="ui.history"></button><button data-tab="panels" data-i18n="ui.panels"></button><button data-tab="project" data-i18n="ui.project"></button>
     </div>
     <div id="tab-shape" class="tab on">
       <div class="tools">
-        <input id="search" type="search" placeholder="search targets">
-        <select id="category"><option value="">all categories</option></select>
-        <button id="reset">reset</button>
+        <input id="search" type="search" data-i18n-placeholder="ui.search.placeholder">
+        <select id="category"><option value="" data-i18n="ui.option.all_categories"></option></select>
+        <button id="reset" data-i18n="ui.reset"></button>
       </div>
-      <details id="macros" open><summary>Macros (head only)</summary><div id="macro-list"></div></details>
+      <details id="macros" open><summary data-i18n="ui.macros_head_only"></summary><div id="macro-list"></div></details>
       <div id="list"></div>
       <div class="save">
-        <input id="out" type="text" placeholder="path of the spec file to save">
-        <button id="save">save spec</button>
+        <input id="out" type="text" data-i18n-placeholder="ui.out.placeholder">
+        <button id="save" data-i18n="ui.save"></button>
         <div id="saved"></div>
       </div>
     </div>
     <div id="tab-view" class="tab">
-      <h3>Render</h3>
-      <label class="line"><input type="checkbox" id="link"> same mode and level in every viewport</label>
-      <label class="line">wire width <input type="range" min="0.5" max="4" step="0.25" data-opt="wireW"><span class="val"></span></label>
-      <label class="line"><input type="checkbox" data-opt="wireFade"> fade the wire where triangles are only a few pixels tall</label>
-      <label class="line">point size <input type="range" min="1" max="10" step="1" data-opt="pointSize"><span class="val"></span></label>
-      <label class="line">anisotropic tangents <select data-opt="aniso" data-num><option value="0">horizontal rings</option><option value="1">vertical lines</option></select></label>
-      <label class="line">quality range <input type="range" min="5" max="60" step="1" data-opt="heat.quality"><span class="val"></span></label>
-      <label class="line">displacement range <input type="range" min="0.1" max="20" step="0.1" data-opt="heat.displacement"><span class="val"></span></label>
-      <label class="line">curvature range <input type="range" min="5" max="300" step="1" data-opt="heat.curvature"><span class="val"></span></label>
-      <label class="line">displacement reference <select id="ref"><option value="start">the starting character</option><option value="neutral">the neutral base</option><option value="snapshot">a snapshot</option></select><button id="ref-now" class="small">snapshot now</button></label>
-      <p class="note">Quality colours the smallest angle of each triangle (red at 0°, blue at the range). Displacement is signed along the normal (red outward). Curvature is the mean curvature of each triangle from its vertex normals (red convex, blue concave).</p>
-      <h3>Camera (active viewport)</h3>
-      <label class="line">field of view <input id="fov" type="range" min="10" max="90" step="1"><span id="fov-val" class="val"></span></label>
-      <div class="buttons"><button id="frame-sel" title="Shift+F">frame selection</button><button id="shot-layout" title="Shift+K">PNG of the layout</button></div>
-      <h3>Lighting</h3>
-      <label class="line">preset <select id="preset"></select></label>
-      <label class="line"><input type="checkbox" data-opt="follow"> lights follow the camera</label>
-      <label class="line"><input type="checkbox" data-opt="lightGizmo"> light gizmo</label>
-      <label class="line">exposure (EV) <input type="range" min="-3" max="3" step="0.05" data-opt="exposure"><span class="val"></span></label>
-      <label class="line">ambient <input type="range" min="0" max="1.5" step="0.01" data-opt="ambient"><span class="val"></span></label>
-      <label class="line">ground share <input type="range" min="0" max="1" step="0.01" data-opt="ground"><span class="val"></span></label>
+      <h3 data-i18n="ui.render"></h3>
+      <label class="line"><input type="checkbox" id="link"> <span data-i18n="ui.same_mode_and_level_in_every_viewport"></span></label>
+      <label class="line"><span data-i18n="ui.wire_width"></span> <input type="range" min="0.5" max="4" step="0.25" data-opt="wireW"><span class="val"></span></label>
+      <label class="line"><input type="checkbox" data-opt="wireFade"> <span data-i18n="ui.fade_the_wire_where_triangles_are_only_a"></span></label>
+      <label class="line"><span data-i18n="ui.point_size"></span> <input type="range" min="1" max="10" step="1" data-opt="pointSize"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.anisotropic_tangents"></span> <select data-opt="aniso" data-num><option value="0" data-i18n="ui.option.0"></option><option value="1" data-i18n="ui.option.1"></option></select></label>
+      <label class="line"><span data-i18n="ui.quality_range"></span> <input type="range" min="5" max="60" step="1" data-opt="heat.quality"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.displacement_range"></span> <input type="range" min="0.1" max="20" step="0.1" data-opt="heat.displacement"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.curvature_range"></span> <input type="range" min="5" max="300" step="1" data-opt="heat.curvature"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.displacement_reference"></span> <select id="ref"><option value="start" data-i18n="ui.option.start"></option><option value="neutral" data-i18n="ui.option.neutral"></option><option value="snapshot" data-i18n="ui.option.snapshot"></option></select><button id="ref-now" class="small" data-i18n="ui.ref-now"></button></label>
+      <p class="note" data-i18n="ui.quality_colours_the_smallest_angle_of_ea"></p>
+      <h3 data-i18n="ui.camera_active_viewport"></h3>
+      <label class="line"><span data-i18n="ui.field_of_view"></span> <input id="fov" type="range" min="10" max="90" step="1"><span id="fov-val" class="val"></span></label>
+      <div class="buttons"><button id="frame-sel" data-i18n-title="ui.frame-sel.title" data-i18n="ui.frame-sel"></button><button id="shot-layout" data-i18n-title="ui.shot-layout.title" data-i18n="ui.shot-layout"></button></div>
+      <h3 data-i18n="ui.lighting"></h3>
+      <label class="line"><span data-i18n="ui.preset"></span> <select id="preset"></select></label>
+      <label class="line"><input type="checkbox" data-opt="follow"> <span data-i18n="ui.lights_follow_the_camera"></span></label>
+      <label class="line"><input type="checkbox" data-opt="lightGizmo"> <span data-i18n="ui.light_gizmo"></span></label>
+      <label class="line"><span data-i18n="ui.exposure_ev"></span> <input type="range" min="-3" max="3" step="0.05" data-opt="exposure"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.ambient"></span> <input type="range" min="0" max="1.5" step="0.01" data-opt="ambient"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.ground_share"></span> <input type="range" min="0" max="1" step="0.01" data-opt="ground"><span class="val"></span></label>
       <div id="lights"></div>
     </div>
     <div id="tab-scene" class="tab">
-      <h3>Visibility</h3>
+      <h3 data-i18n="ui.visibility"></h3>
       <div id="visibility"></div>
-      <div class="buttons"><button id="show-all" title="Alt+H">show everything</button></div>
-      <h3>Regions</h3>
-      <p class="note">Each vertex belongs to the category of the target that moves it most relative to that target's own largest move (at least 35 % of it); targets that move more than a fifth of the head (scales, whole-head shapes) do not define regions. Everything else is the rest of the head.</p>
+      <div class="buttons"><button id="show-all" data-i18n-title="ui.show-all.title" data-i18n="ui.show-all"></button></div>
+      <h3 data-i18n="ui.regions"></h3>
+      <p class="note" data-i18n="ui.each_vertex_belongs_to_the_category_of_t"></p>
       <div id="regions"></div>
-      <h3>Hide box</h3>
-      <label class="line"><input type="checkbox" data-opt="box.on"> hide everything inside the box</label>
-      <label class="line">x from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.0"><span class="val"></span></label>
-      <label class="line">x to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.0"><span class="val"></span></label>
-      <label class="line">y from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.1"><span class="val"></span></label>
-      <label class="line">y to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.1"><span class="val"></span></label>
-      <label class="line">z from <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.2"><span class="val"></span></label>
-      <label class="line">z to <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.2"><span class="val"></span></label>
-      <h3>Clipping</h3>
-      <label class="line"><input type="checkbox" data-opt="caps"> fill the section caps</label>
-      <label class="line"><input type="checkbox" data-opt="planeGizmo"> plane gizmo</label>
+      <h3 data-i18n="ui.hide_box"></h3>
+      <label class="line"><input type="checkbox" data-opt="box.on"> <span data-i18n="ui.hide_everything_inside_the_box"></span></label>
+      <label class="line"><span data-i18n="ui.x_from"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.0"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.x_to"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.0"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.y_from"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.1"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.y_to"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.1"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.z_from"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.lo.2"><span class="val"></span></label>
+      <label class="line"><span data-i18n="ui.z_to"></span> <input type="range" min="0" max="1" step="0.01" data-opt="box.hi.2"><span class="val"></span></label>
+      <h3 data-i18n="ui.clipping"></h3>
+      <label class="line"><input type="checkbox" data-opt="caps"> <span data-i18n="ui.fill_the_section_caps"></span></label>
+      <label class="line"><input type="checkbox" data-opt="planeGizmo"> <span data-i18n="ui.plane_gizmo"></span></label>
       <div id="clips"></div>
-      <p class="note">Inside a cut, back faces are orange and the section cap is hatched blue-grey. A slab keeps the band between two parallel planes.</p>
+      <p class="note" data-i18n="ui.inside_a_cut_back_faces_are_orange_and_t"></p>
     </div>
     <div id="tab-history" class="tab">
-      <p class="note">Every slider, macro, reset, visibility and panel edit; camera moves are not recorded. Click an entry to go back to it.</p>
+      <p class="note" data-i18n="ui.every_slider_macro_reset_visibility_and_"></p>
       <ol id="history"></ol>
     </div>
     <div id="tab-panels" class="tab"><div id="panels"></div></div>
     <div id="tab-project" class="tab">
-      <h3>Project</h3>
+      <h3 data-i18n="ui.project"></h3>
       <div id="p-info" class="note"></div>
-      <h3>Characters</h3>
+      <h3 data-i18n="ui.characters"></h3>
       <ol id="p-chars" class="plist"></ol>
-      <h3>Notes</h3>
-      <textarea id="p-notes" rows="6" placeholder="notes saved with the project"></textarea>
-      <div class="buttons"><button id="p-export" title="One .gfproj.zip with the project and its character blobs (not the shared base)">export portable</button></div>
+      <h3 data-i18n="ui.notes"></h3>
+      <textarea id="p-notes" rows="6" data-i18n-placeholder="ui.p-notes.placeholder"></textarea>
+      <div class="buttons"><button id="p-export" data-i18n-title="ui.p-export.title" data-i18n="ui.p-export"></button></div>
       <div id="p-status" class="note"></div>
-      <p class="note">Saving writes the project file (characters with their revision history, panel settings, the viewer state and these notes); the shared base is referenced by its sha256. Every settle and every 60 s an autosave goes to a recovery slot, offered when the project is opened after a session ended without saving. Undo history belongs to the session and is not saved.</p>
+      <p class="note" data-i18n="ui.saving_writes_the_project_file_character"></p>
     </div>
   </aside>
 </main>
 <div id="wizard" class="wizard hidden">
   <div class="wz-box">
-    <div class="wz-head"><button class="wz-home small" title="All tasks">tasks</button><b class="wz-title">Tasks</b><button class="wz-peek small" title="Look at the viewport: the task shrinks to this bar until you click it again">look</button><button class="wz-close small" title="Close (the run stays in the project and can be resumed)">×</button></div>
+    <div class="wz-head"><button class="wz-home small" data-i18n-title="ui.wz-home.title" data-i18n="ui.wz-home"></button><b class="wz-title" data-i18n="ui.wz-title"></b><button class="wz-peek small" data-i18n-title="ui.wz-peek.title" data-i18n="ui.wz-peek"></button><button class="wz-close small" data-i18n-title="ui.wz-close.title">×</button></div>
     <div class="wz-main"><nav class="wz-steps"></nav><div class="wz-body"></div></div>
-    <div class="wz-foot"><span class="wz-status"></span><button class="wz-back">back</button><button class="wz-cancel hidden" title="Cancel the running job of this step">cancel</button><button class="wz-run">run</button><button class="wz-next">next</button></div>
+    <div class="wz-foot"><span class="wz-status"></span><button class="wz-back" data-i18n="ui.wz-back"></button><button class="wz-cancel hidden" data-i18n-title="ui.wz-cancel.title" data-i18n="ui.wz-cancel"></button><button class="wz-run" data-i18n="ui.wz-run"></button><button class="wz-next" data-i18n="ui.wz-next"></button></div>
   </div>
 </div>
 <div id="help" class="help hidden">
   <div class="card">
-    <h2>Designer shortcuts</h2>
+    <h2 data-i18n="ui.designer_shortcuts"></h2>
     <table id="help-list"></table>
-    <p class="note">Esc or a click outside closes this. Settings (modes, lights, layout) are remembered in this browser.</p>
+    <p class="note" data-i18n="ui.esc_or_a_click_outside_closes_this_setti"></p>
   </div>
 </div>
 <div id="p-dialog" class="help hidden">
@@ -199,18 +199,18 @@
     <p id="p-dlg-note" class="note"></p>
     <input id="p-dlg-name" type="text" class="wide">
     <ul id="p-dlg-list" class="plist"></ul>
-    <div class="buttons"><button id="p-dlg-ok">OK</button><button id="p-dlg-cancel">cancel</button></div>
+    <div class="buttons"><button id="p-dlg-ok" data-i18n="ui.p-dlg-ok"></button><button id="p-dlg-cancel" data-i18n="ui.p-dlg-cancel"></button></div>
   </div>
 </div>
 <div id="p-relink" class="help hidden">
   <div class="card">
-    <h2>Relink resources</h2>
+    <h2 data-i18n="ui.relink_resources"></h2>
     <p id="p-relink-note" class="note"></p>
     <div id="p-relink-rows"></div>
-    <div class="buttons"><button id="p-relink-ok">retry</button><button id="p-relink-cancel">cancel</button></div>
+    <div class="buttons"><button id="p-relink-ok" data-i18n="ui.p-relink-ok"></button><button id="p-relink-cancel" data-i18n="ui.p-relink-cancel"></button></div>
   </div>
 </div>
-<div id="p-recover" class="recover hidden"><span id="p-recover-text"></span><button id="p-restore">restore</button><button id="p-discard">discard</button></div>
+<div id="p-recover" class="recover hidden"><span id="p-recover-text"></span><button id="p-restore" data-i18n="ui.p-restore"></button><button id="p-discard" data-i18n="ui.p-discard"></button></div>
 <script type="module" src="designer.js"></script>
 </body>
 </html>

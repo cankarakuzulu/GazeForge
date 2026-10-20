@@ -2,24 +2,11 @@ use std::f64::consts::PI;
 
 pub const DEG: f64 = PI / 180.0;
 
-pub const MODES: [(&str, &str); 12] = [
-    ("clay", "clay"),
-    ("flat", "flat"),
-    ("gouraud", "Gouraud"),
-    ("blinn", "Blinn-Phong"),
-    ("aniso", "anisotropic (Kajiya-Kay)"),
-    ("matcap", "matcap"),
-    ("normals", "normals"),
-    ("hidden", "hidden line"),
-    ("quality", "triangle quality (min angle)"),
-    ("displacement", "displacement from reference (mm)"),
-    ("curvature", "mean curvature (1/m)"),
-    ("uv", "UV checker"),
-];
+pub const MODES: [&str; 12] = ["clay", "flat", "gouraud", "blinn", "aniso", "matcap", "normals", "hidden", "quality", "displacement", "curvature", "uv"];
 pub const DISPLACEMENT: usize = 9;
 
 pub fn mode_index(name: &str) -> Option<usize> {
-    MODES.iter().position(|(id, _)| *id == name)
+    MODES.iter().position(|id| *id == name)
 }
 
 pub const NAMED_VIEWS: [(&str, f64, f64); 7] = [

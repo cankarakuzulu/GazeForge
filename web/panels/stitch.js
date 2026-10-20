@@ -1,11 +1,13 @@
+import { tr } from '../i18n.js';
+
 const KEY = 'gf.stitch.v1';
 const CONTROLS = [
-  { id: 'blend_mm', label: 'Blend width (mm)', min: 0, max: 300, step: 5, value: 60 },
-  { id: 'neck_offset_mm', label: 'Neck height offset (mm)', min: -60, max: 60, step: 1, value: 0 },
-  { id: 'head_scale', label: 'Head scale', min: 0.8, max: 1.25, step: 0.01, value: 1 },
-  { id: 'body_scale', label: 'Body scale', min: 0.8, max: 1.25, step: 0.01, value: 1 },
-  { id: 'smooth', label: 'Seam smoothing (passes)', min: 0, max: 20, step: 1, value: 0 },
-  { id: 'tangent', label: 'Tangent match', min: 0, max: 1, step: 0.05, value: 0.5 },
+  { id: 'blend_mm', min: 0, max: 300, step: 5, value: 60 },
+  { id: 'neck_offset_mm', min: -60, max: 60, step: 1, value: 0 },
+  { id: 'head_scale', min: 0.8, max: 1.25, step: 0.01, value: 1 },
+  { id: 'body_scale', min: 0.8, max: 1.25, step: 0.01, value: 1 },
+  { id: 'smooth', min: 0, max: 20, step: 1, value: 0 },
+  { id: 'tangent', min: 0, max: 1, step: 0.05, value: 0.5 },
 ];
 const BODY_COLOR = [0.78, 0.74, 0.70];
 const FAIL_COLOR = [0.86, 0.22, 0.18];
@@ -64,16 +66,16 @@ function mount(root, api) {
   let stale = false;
   let wanted = false;
 
-  const store = el('input', { type: 'text', placeholder: 'store directory (default: the designer store)', value: state.store });
-  const body = el('input', { type: 'text', placeholder: 'body pack directory (body.import)', value: state.body });
+  const store = el('input', { type: 'text', placeholder: tr('stitch.store_placeholder'), value: state.store });
+  const body = el('input', { type: 'text', placeholder: tr('stitch.body_placeholder'), value: state.body });
   const show = el('input', { type: 'checkbox' });
   show.checked = state.show;
   const seam = el('input', { type: 'checkbox' });
   seam.checked = state.seam;
   const auto = el('input', { type: 'checkbox' });
   auto.checked = state.auto;
-  const status = el('div', { class: 'gf-stitch-status', text: 'not stitched' });
-  const go = el('button', { type: 'button', text: 'Stitch' });
+  const status = el('div', { class: 'gf-stitch-status', text: tr('stitch.not_stitched') });
+  const go = el('button', { type: 'button', text: tr('stitch.go') });
   const sliders = {};
   const rows = CONTROLS.map((c) => {
     const input = el('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: state.values[c.id] });
@@ -84,10 +86,10 @@ function mount(root, api) {
       const to = Number(input.value);
       if (from === to) return;
       setValue(c.id, to);
-      api.pushUndo({ label: `${c.label} ${from} -> ${to}`, undo: () => setValue(c.id, from), redo: () => setValue(c.id, to) });
+      api.pushUndo({ label: `${tr(`stitch.control.${c.id}`)} ${from} -> ${to}`, undo: () => setValue(c.id, from), redo: () => setValue(c.id, to) });
     });
     sliders[c.id] = { input, out };
-    return el('label', { class: 'gf-stitch-row' }, [el('span', { text: c.label }), input, out]);
+    return el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr(`stitch.control.${c.id}`) }), input, out]);
   });
 
   function setValue(id, v) {
@@ -110,7 +112,7 @@ function mount(root, api) {
   function draw() {
     const visible = last && state.show && !stale;
     if (!visible) api.setExtraMesh('stitch-body', null);
-    else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? 'body (stitched)' : 'body (stitch FAILED its gates)' });
+    else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
     if (!last || !state.seam || stale) api.setOverlay('stitch-seam', null);
     else api.setOverlay('stitch-seam', { lines: last.lines, color: last.pass ? [1.0, 0.35, 0.2] : [1.0, 0.0, 0.0] });
     api.setPose('stitch-head', visible && last.head && last.headScale !== 1 ? last.head : null);
@@ -121,10 +123,10 @@ function mount(root, api) {
     const g = r.gates || {};
     const n = (g.normals && g.normals.seam_dihedral_deg) || {};
     const lines = [
-      `${pass ? 'PASS' : 'FAIL: this stitch does not pass its gates and is drawn in red'} - ${r.body.mode} body, ${r.body.vertices} vertices, ${r.body.seam_points} seam points`,
-      `gap ${(g.watertight.max_gap_m * 1000).toFixed(4)} mm, open seam edges ${g.topology.open_seam_edges}`,
-      `seam angle max ${(n.max || 0).toFixed(1)} deg, mean ${(n.mean || 0).toFixed(1)}`,
-      `band flips ${g.band.flips}, folds ${g.band.folded_edges}; inside ${g.interpenetration.body_vertices_inside_head}/${g.interpenetration.head_vertices_inside_body}`,
+      `${pass ? tr('stitch.pass') : tr('stitch.fail')} - ${tr('stitch.body_line', { mode: r.body.mode, vertices: r.body.vertices, seams: r.body.seam_points })}`,
+      tr('stitch.gap_line', { mm: (g.watertight.max_gap_m * 1000).toFixed(4), open: g.topology.open_seam_edges }),
+      tr('stitch.angle_line', { max: (n.max || 0).toFixed(1), mean: (n.mean || 0).toFixed(1) }),
+      tr('stitch.band_line', { flips: g.band.flips, folds: g.band.folded_edges, body: g.interpenetration.body_vertices_inside_head, head: g.interpenetration.head_vertices_inside_body }),
     ].concat((g.failed || []).map((f) => `- ${f}`));
     status.textContent = lines.join('\n');
     status.dataset.pass = pass ? 'yes' : 'no';
@@ -149,7 +151,7 @@ function mount(root, api) {
     const character = api.character();
     const storePath = state.store || character.store;
     if (!state.body || !storePath) {
-      status.textContent = 'set the body pack';
+      status.textContent = tr('stitch.need_body');
       status.dataset.pass = '';
       return;
     }
@@ -159,7 +161,7 @@ function mount(root, api) {
     }
     wanted = true;
     busy = true;
-    status.textContent = 'stitching...';
+    status.textContent = tr('stitch.stitching');
     status.dataset.pass = '';
     try {
       const input = Object.assign({ store: storePath, character, body: state.body, return_mesh: true }, state.values);
@@ -181,7 +183,7 @@ function mount(root, api) {
     } catch (e) {
       last = null;
       draw();
-      status.textContent = `stitch failed: ${e && e.message ? e.message : e}`;
+      status.textContent = tr('stitch.failed', { error: e && e.message ? e.message : e });
       status.dataset.pass = 'no';
     } finally {
       busy = false;
@@ -198,13 +200,13 @@ function mount(root, api) {
     const to = show.checked;
     persist();
     draw();
-    api.pushUndo({ label: to ? 'show body' : 'hide body', undo: () => { show.checked = !to; persist(); draw(); }, redo: () => { show.checked = to; persist(); draw(); } });
+    api.pushUndo({ label: to ? tr('stitch.undo_show_body') : tr('stitch.undo_hide_body'), undo: () => { show.checked = !to; persist(); draw(); }, redo: () => { show.checked = to; persist(); draw(); } });
   });
   seam.addEventListener('change', () => {
     const to = seam.checked;
     persist();
     draw();
-    api.pushUndo({ label: to ? 'show seam' : 'hide seam', undo: () => { seam.checked = !to; persist(); draw(); }, redo: () => { seam.checked = to; persist(); draw(); } });
+    api.pushUndo({ label: to ? tr('stitch.undo_show_seam') : tr('stitch.undo_hide_seam'), undo: () => { seam.checked = !to; persist(); draw(); }, redo: () => { seam.checked = to; persist(); draw(); } });
   });
   auto.addEventListener('change', persist);
   api.onCharacterChange((c, info) => {
@@ -214,7 +216,7 @@ function mount(root, api) {
         stale = true;
         draw();
         status.dataset.pass = 'stale';
-        status.textContent = `the character changed: ${state.auto ? 're-stitching after it settles' : 'press Stitch again'}`;
+        status.textContent = state.auto ? tr('stitch.changed_auto') : tr('stitch.changed');
       }
       return;
     }
@@ -223,17 +225,17 @@ function mount(root, api) {
       stale = true;
       draw();
       status.dataset.pass = 'stale';
-      status.textContent = 'the character changed: press Stitch again';
+      status.textContent = tr('stitch.changed');
     }
   });
 
   root.appendChild(el('div', { class: 'gf-stitch' }, [
-    el('label', { class: 'gf-stitch-row' }, [el('span', { text: 'Store' }), store]),
-    el('label', { class: 'gf-stitch-row' }, [el('span', { text: 'Body pack' }), body]),
+    el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('stitch.store') }), store]),
+    el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('stitch.body_pack') }), body]),
     ...rows,
-    el('label', { class: 'gf-stitch-row' }, [show, el('span', { text: 'Show body' })]),
-    el('label', { class: 'gf-stitch-row' }, [seam, el('span', { text: 'Seam overlay' })]),
-    el('label', { class: 'gf-stitch-row' }, [auto, el('span', { text: 'Re-stitch after every change' })]),
+    el('label', { class: 'gf-stitch-row' }, [show, el('span', { text: tr('stitch.show_body') })]),
+    el('label', { class: 'gf-stitch-row' }, [seam, el('span', { text: tr('stitch.seam_overlay') })]),
+    el('label', { class: 'gf-stitch-row' }, [auto, el('span', { text: tr('stitch.auto') })]),
     go,
     status,
   ]));
@@ -265,7 +267,7 @@ function mount(root, api) {
       stale = false;
       wanted = !!s.stitched;
       draw();
-      status.textContent = 'not stitched';
+      status.textContent = tr('stitch.not_stitched');
       status.dataset.pass = '';
       if (s.stitched && state.body) stitch();
     },

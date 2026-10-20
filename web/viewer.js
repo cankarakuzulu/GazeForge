@@ -1,29 +1,30 @@
+import { tr } from "./i18n.js";
 const TW = 2048;
 const DEG = Math.PI / 180;
 
 export const MODES = [
-  { id: "clay", label: "clay" },
-  { id: "flat", label: "flat" },
-  { id: "gouraud", label: "Gouraud" },
-  { id: "blinn", label: "Blinn-Phong" },
-  { id: "aniso", label: "anisotropic (Kajiya-Kay)" },
-  { id: "matcap", label: "matcap" },
-  { id: "normals", label: "normals" },
-  { id: "hidden", label: "hidden line" },
-  { id: "quality", label: "triangle quality (min angle)" },
-  { id: "displacement", label: "displacement from reference (mm)" },
-  { id: "curvature", label: "mean curvature (1/m)" },
-  { id: "uv", label: "UV checker" },
+  { id: "clay" },
+  { id: "flat" },
+  { id: "gouraud" },
+  { id: "blinn" },
+  { id: "aniso" },
+  { id: "matcap" },
+  { id: "normals" },
+  { id: "hidden" },
+  { id: "quality" },
+  { id: "displacement" },
+  { id: "curvature" },
+  { id: "uv" },
 ];
 export const MODE_INDEX = Object.fromEntries(MODES.map((m, i) => [m.id, i]));
 const LIT_MODES = new Set([0, 1, 3, 4]);
 
 export const LIGHT_PRESETS = {
-  studio: { label: "studio three-point", ambient: 0.16, ground: 0.4, lights: [{ az: -40, el: 30, i: 1.0, k: 5600 }, { az: 50, el: 10, i: 0.35, k: 6500 }, { az: 160, el: 35, i: 0.8, k: 7500 }] },
-  flat: { label: "flat", ambient: 0.9, ground: 1.0, lights: [] },
-  rim: { label: "rim", ambient: 0.06, ground: 0.4, lights: [{ az: 150, el: 20, i: 1.1, k: 7000 }, { az: -150, el: 20, i: 1.1, k: 7000 }, { az: 0, el: 10, i: 0.15, k: 5000 }] },
-  top: { label: "top", ambient: 0.1, ground: 0.3, lights: [{ az: 0, el: 85, i: 1.2, k: 5500 }] },
-  key: { label: "single key", ambient: 0.08, ground: 0.4, lights: [{ az: -35, el: 25, i: 1.2, k: 5200 }] },
+  studio: { ambient: 0.16, ground: 0.4, lights: [{ az: -40, el: 30, i: 1.0, k: 5600 }, { az: 50, el: 10, i: 0.35, k: 6500 }, { az: 160, el: 35, i: 0.8, k: 7500 }] },
+  flat: { ambient: 0.9, ground: 1.0, lights: [] },
+  rim: { ambient: 0.06, ground: 0.4, lights: [{ az: 150, el: 20, i: 1.1, k: 7000 }, { az: -150, el: 20, i: 1.1, k: 7000 }, { az: 0, el: 10, i: 0.15, k: 5000 }] },
+  top: { ambient: 0.1, ground: 0.3, lights: [{ az: 0, el: 85, i: 1.2, k: 5500 }] },
+  key: { ambient: 0.08, ground: 0.4, lights: [{ az: -35, el: 25, i: 1.2, k: 5200 }] },
 };
 export const MAX_LIGHTS = 4;
 export const LAYOUTS = { single: [0], side: [0, 2], quad: [1, 2, 3, 0] };
@@ -587,7 +588,7 @@ export class Viewer {
   }
 
   setHead(n, indices, uvs) {
-    const m = { id: "head", label: "head", kind: "head", n, visible: true, color: [0.80, 0.74, 0.68], pos: this.tex("f3", n), nrm: this.tex("f3", n), ref: null, region: null, lods: [], cpuPos: null };
+    const m = { id: "head", label: tr("mesh.head"), kind: "head", n, visible: true, color: [0.80, 0.74, 0.68], pos: this.tex("f3", n), nrm: this.tex("f3", n), ref: null, region: null, lods: [], cpuPos: null };
     m.lods.push(this.makeLod(indices, uvs));
     this.meshes.set("head", m);
     return m;
@@ -869,7 +870,7 @@ export class Viewer {
         const name = (a) => "xyz"[a.k];
         labels.push({ x: r.x + r.w - 92, y: r.y + r.h - 30, text: `${name(ax.s)} → · ${name(ax.u)} ↑ · mm`, cls: "axis" });
       } else {
-        labels.push({ x: r.x + r.w - 160, y: r.y + r.h - 30, text: "mm grid: an axis-aligned ortho view", cls: "axis" });
+        labels.push({ x: r.x + r.w - 160, y: r.y + r.h - 30, text: tr("viewer.mm_grid_hint"), cls: "axis" });
       }
       if (groups.minor.length) this.drawLines(M, groups.minor, tone(0.16), gl.LINES);
       if (groups.major.length) this.drawLines(M, groups.major, tone(0.42), gl.LINES);
@@ -890,7 +891,7 @@ export class Viewer {
       }
     }
     this.drawLines(M, out, tone(0.3), gl.LINES);
-    labels.push({ x: r.x + r.w - 150, y: r.y + r.h - 30, text: `back plane ⟂ ${"xyz"[k]} · 10 mm`, cls: "axis" });
+    labels.push({ x: r.x + r.w - 150, y: r.y + r.h - 30, text: tr("viewer.back_plane", { axis: "xyz"[k] }), cls: "axis" });
   }
 
   project(M, r, p) {
@@ -1403,7 +1404,7 @@ export class Viewer {
       el.style.left = `${r.x}px`; el.style.top = `${r.y}px`; el.style.width = `${r.w}px`; el.style.height = `${r.h}px`;
       const cam = this.cams[r.cam], st = this.vp[r.slot], head = this.meshes.get("head");
       const lod = head && head.lods.length > 1 ? ` · LOD${st.lod}` : "";
-      el.innerHTML = `<span>${cam.name} · ${cam.ortho ? "ortho" : "persp"} · ${MODES[st.mode].label}${lod}</span>`;
+      el.innerHTML = `<span>${tr(`view.${cam.name}`, null, cam.name)} · ${cam.ortho ? tr("view.ortho") : tr("ui.persp")} · ${tr(`mode.${MODES[st.mode].id}`)}${lod}</span>`;
       this.labels.appendChild(el);
     }
   }

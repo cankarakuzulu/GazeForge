@@ -2,6 +2,7 @@ mod app;
 mod cube;
 mod godot;
 mod hud;
+mod i18n;
 mod icon_data;
 mod icons;
 mod input;

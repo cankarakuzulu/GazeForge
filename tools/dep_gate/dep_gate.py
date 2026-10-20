@@ -1,6 +1,6 @@
 """Structural gates for the workspace layering.
 
-Usage: dep_gate.py [edges|clippy|wasm|front-doors|all] [--root DIR] [--cargo PATH] [--target-dir DIR]
+Usage: dep_gate.py [edges|clippy|wasm|front-doors|ui-text|all] [--root DIR] [--cargo PATH] [--target-dir DIR]
 
 edges        every dependency edge between workspace crates (normal, dev and build) must be on ALLOWED.
 clippy       cargo clippy on the pure crates (PURE) with -D warnings; their clippy.toml bans fs, thread,
@@ -8,6 +8,8 @@ clippy       cargo clippy on the pure crates (PURE) with -D warnings; their clip
 wasm         the pure maths crate builds for wasm32-unknown-unknown with no features.
 front-doors  copy the workspace without its front doors (FRONT_DOORS) into a temporary directory and
              build the domain, format and api crates there.
+ui-text      tools/i18n/check.py: every user-facing string of both clients comes from web/locales (its own
+             docstring lists what it refuses and what it cannot see).
 
 Prints one JSON object; exit code 0 only when every selected gate passes.
 
@@ -126,7 +128,16 @@ def gate_front_doors(args):
             "kept": [p["name"] for p in members], "command": " ".join(cmd[1:]), "errors": errors_of(err)}
 
 
-GATES = {"edges": gate_edges, "clippy": gate_clippy, "wasm": gate_wasm, "front-doors": gate_front_doors}
+def gate_ui_text(args):
+    code, out, err = run([sys.executable, os.path.join(args["root"], "tools", "i18n", "check.py")], args["root"])
+    try:
+        r = json.loads(out)
+    except ValueError:
+        return {"pass": False, "errors": errors_of(err or out)}
+    return {"pass": code == 0 and r.get("ok") is True, "keys": r.get("keys"), "counts": r.get("counts"), "first": r.get("first", [])[:8]}
+
+
+GATES = {"edges": gate_edges, "clippy": gate_clippy, "wasm": gate_wasm, "front-doors": gate_front_doors, "ui-text": gate_ui_text}
 
 
 def main(argv):

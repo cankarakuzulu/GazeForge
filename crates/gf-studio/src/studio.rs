@@ -8,6 +8,7 @@ use eframe::wgpu;
 
 use crate::cube::{self, Cube, Element};
 use crate::godot;
+use crate::i18n::{tr, tr_or, trf};
 use crate::icons;
 use crate::input::{self, ShapeInput};
 use crate::keymap::{self, Keymap};
@@ -66,7 +67,7 @@ impl UiState {
             macro_file: a.macro_file.unwrap_or_default(),
             eyes: a.eyes.unwrap_or_default(),
             game: String::new(),
-            status: "open a store".into(),
+            status: tr("studio.status.open").into(),
             texture: None,
             texture_generation: 0,
             drag: None,
@@ -129,7 +130,7 @@ impl Studio<'_> {
         let opt = |s: &String| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
         let (spec, mac, eyes, game) = (opt(&self.s.spec), opt(&self.s.macro_file), opt(&self.s.eyes), opt(&self.s.game));
         self.world.request_load(self.s.store.trim(), spec.as_deref(), mac.as_deref(), eyes.as_deref(), game.as_deref());
-        self.s.status = "loading".into();
+        self.s.status = tr("studio.status.loading").into();
     }
 
     fn save(&mut self) {
@@ -141,7 +142,7 @@ impl Studio<'_> {
         };
         self.s.save_path = path.clone();
         self.s.status = match self.world.save(&path) {
-            Ok(()) => format!("saving {path}"),
+            Ok(()) => trf("studio.saving", &[("path", &path)]),
             Err(e) => e,
         };
     }
@@ -168,7 +169,7 @@ impl Studio<'_> {
     }
 
     fn screenshot(&mut self, layout: bool) -> String {
-        let Some(c) = self.renderer.composite.as_ref() else { return "nothing rendered yet".into() };
+        let Some(c) = self.renderer.composite.as_ref() else { return tr("studio.nothing_rendered").into() };
         let (x, y, w, h) = if layout {
             (0, 0, c.w, c.h)
         } else {
@@ -178,8 +179,8 @@ impl Studio<'_> {
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
         let path = PathBuf::from(format!("gazeforge-studio-{stamp}.png"));
         match self.renderer.read_rgba(self.gfx.device, self.gfx.queue, x, y, w, h).and_then(|px| write_png(&path, w, h, &px)) {
-            Ok(()) => format!("saved {}", path.display()),
-            Err(e) => format!("screenshot failed: {e}"),
+            Ok(()) => trf("studio.saved", &[("path", &path.display())]),
+            Err(e) => trf("studio.screenshot_failed", &[("error", &e)]),
         }
     }
 
@@ -222,7 +223,7 @@ impl Studio<'_> {
         if std::mem::take(&mut self.s.flip_theme) {
             let light = ctx.theme() != egui::Theme::Light;
             ctx.set_theme(if light { egui::ThemePreference::Light } else { egui::ThemePreference::Dark });
-            self.s.status = format!("{} interface", if light { "light" } else { "dark" });
+            self.s.status = if light { tr("designer.theme_light") } else { tr("designer.theme_dark") }.into();
         }
         let show_bad = self.world.state.opts.bad;
         self.world.with_topo(|t, w| t.sync(w, show_bad));
@@ -247,7 +248,11 @@ impl Studio<'_> {
         }
     }
 
-    fn tip(&self, what: &str, id: &str) -> String {
+    fn keymap_source(&self) -> String {
+        if self.s.keymap.source == "defaults" { tr("studio.keys_defaults").to_string() } else { self.s.keymap.source.clone() }
+    }
+
+    pub fn tip(&self, what: &str, id: &str) -> String {
         let keys = self.s.keymap.describe(id);
         if keys.is_empty() { what.to_string() } else { format!("{what} ({keys})") }
     }
@@ -256,8 +261,8 @@ impl Studio<'_> {
         ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            for (l, icon, what) in [(Layout::Single, "square", "One viewport"), (Layout::Side, "columns-2", "Two viewports side by side"), (Layout::Quad, "layout-grid", "Four viewports")] {
-                let tip = self.tip(what, "layout").replace(&format!("({})", self.s.keymap.describe("layout")), &format!("({} cycles)", self.s.keymap.describe("layout")));
+            for (l, icon, what) in [(Layout::Single, "square", tr("studio.layout.single")), (Layout::Side, "columns-2", tr("studio.layout.side")), (Layout::Quad, "layout-grid", tr("studio.layout.quad"))] {
+                let tip = trf("studio.layout.tip", &[("what", &what), ("keys", &self.s.keymap.describe("layout"))]);
                 if icons::button(ui, icon, self.world.state.layout == l, &tip).clicked() {
                     self.world.state.layout = l;
                     self.world.state.active = self.world.state.active.min(l.slots().len() - 1);
@@ -267,10 +272,10 @@ impl Studio<'_> {
             ui.spacing_mut().item_spacing.x = 6.0;
             let slot = self.world.state.active.min(self.world.slot_count() - 1);
             let mut mode = self.world.state.vp[slot].mode;
-            let mode_tip = format!("Render mode of the active viewport ({} / {})", self.s.keymap.describe("mode_next"), self.s.keymap.describe("mode_prev"));
-            egui::ComboBox::from_id_salt("mode").width(170.0).selected_text(MODES[mode].1).show_ui(ui, |ui| {
-                for (i, (_, label)) in MODES.iter().enumerate() {
-                    ui.selectable_value(&mut mode, i, *label);
+            let mode_tip = trf("studio.mode_tip", &[("next", &self.s.keymap.describe("mode_next")), ("prev", &self.s.keymap.describe("mode_prev"))]);
+            egui::ComboBox::from_id_salt("mode").width(170.0).selected_text(tr(&format!("mode.{}", MODES[mode]))).show_ui(ui, |ui| {
+                for (i, id) in MODES.iter().enumerate() {
+                    ui.selectable_value(&mut mode, i, tr(&format!("mode.{id}")));
                 }
             }).response.on_hover_text(mode_tip);
             if mode != self.world.state.vp[slot].mode {
@@ -279,7 +284,7 @@ impl Studio<'_> {
             let lods = self.world.lods();
             let mut lod = self.world.state.vp[slot].lod.min(lods - 1);
             let label = |i: usize, w: &World| w.session.as_ref().map_or(format!("LOD{i}"), |s| s.head.lods[i].label.clone());
-            let lod_tip = format!("Level of detail ({} coarser, {} finer)", self.s.keymap.describe("lod_coarser"), self.s.keymap.describe("lod_finer"));
+            let lod_tip = trf("studio.lod_tip", &[("coarser", &self.s.keymap.describe("lod_coarser")), ("finer", &self.s.keymap.describe("lod_finer"))]);
             egui::ComboBox::from_id_salt("lod").width(90.0).selected_text(label(lod, self.world)).show_ui(ui, |ui| {
                 for i in 0..lods {
                     ui.selectable_value(&mut lod, i, label(i, self.world));
@@ -288,10 +293,10 @@ impl Studio<'_> {
             self.world.state.vp[slot].lod = lod;
             let mut godot_on = self.renderer.sources[slot].name() == "godot";
             let was = godot_on;
-            egui::ComboBox::from_id_salt("renderer").width(130.0).selected_text(if godot_on { "Godot renderer" } else { "GazeForge renderer" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut godot_on, false, "GazeForge renderer");
-                ui.selectable_value(&mut godot_on, true, "Godot renderer");
-            }).response.on_hover_text("Renderer of the active viewport");
+            egui::ComboBox::from_id_salt("renderer").width(130.0).selected_text(if godot_on { tr("studio.renderer.godot") } else { tr("studio.renderer.native") }).show_ui(ui, |ui| {
+                ui.selectable_value(&mut godot_on, false, tr("studio.renderer.native"));
+                ui.selectable_value(&mut godot_on, true, tr("studio.renderer.godot"));
+            }).response.on_hover_text(tr("studio.renderer.tip"));
             if godot_on != was {
                 self.set_godot(slot, godot_on);
             }
@@ -299,10 +304,10 @@ impl Studio<'_> {
             ui.spacing_mut().item_spacing.x = 2.0;
             let ortho = self.world.state.cams[self.world.state.active_cam_index()].ortho;
             let view_buttons = [
-                ("frame", "focus", false, "Frame the head in the active viewport"),
-                ("ortho", "box", ortho, "Orthographic (lit) or perspective"),
-                ("view_three_quarter", "rotate-3d", false, "Three-quarter view"),
-                ("view_home", "house", false, "Home view of the active viewport, framed"),
+                ("frame", "focus", false, tr("action.frame")),
+                ("ortho", "box", ortho, tr("action.ortho")),
+                ("view_three_quarter", "rotate-3d", false, tr("action.view_three_quarter")),
+                ("view_home", "house", false, tr("action.view_home")),
             ];
             for (id, icon, on, what) in view_buttons {
                 if icons::button(ui, icon, on, &self.tip(what, id)).clicked() {
@@ -312,15 +317,15 @@ impl Studio<'_> {
             group_gap(ui);
             let o = &self.world.state.opts;
             let toggles = [
-                ("wire", "vector-square", o.wire, "Wireframe overlay"),
-                ("xray", "scan-eye", o.xray, "Hidden edges through the surface (with the wireframe)"),
-                ("points", "chart-scatter", o.points, "Vertex points"),
-                ("eyes", "eye", o.eyes, "Eye meshes"),
-                ("back_faces", "flip-horizontal-2", o.back_hi, "Back-face highlight"),
-                ("seams", "scissors-line-dashed", o.seams, "UV seams and open boundaries"),
-                ("light_gizmo", "lightbulb", o.light_gizmo, "Light direction gizmo"),
-                ("clip", "slice", o.clip[0].on, "Clip plane 1 (Alt+wheel moves it)"),
-                ("bad_triangles", "triangle-alert", o.bad, "Bad triangles: smallest angle under the Topology limit"),
+                ("wire", "vector-square", o.wire, tr("action.wire")),
+                ("xray", "scan-eye", o.xray, tr("action.xray")),
+                ("points", "chart-scatter", o.points, tr("action.points")),
+                ("eyes", "eye", o.eyes, tr("action.eyes")),
+                ("back_faces", "flip-horizontal-2", o.back_hi, tr("action.back_faces")),
+                ("seams", "scissors-line-dashed", o.seams, tr("action.seams")),
+                ("light_gizmo", "lightbulb", o.light_gizmo, tr("action.light_gizmo")),
+                ("clip", "slice", o.clip[0].on, tr("action.clip")),
+                ("bad_triangles", "triangle-alert", o.bad, tr("action.bad_triangles")),
             ];
             for (id, icon, on, what) in toggles {
                 if icons::button(ui, icon, on, &self.tip(what, id)).clicked() {
@@ -331,11 +336,11 @@ impl Studio<'_> {
             if o.clip[0].on {
                 ui.allocate_ui(egui::vec2(CLIP_SLIDER_WIDTH, 26.0), |ui| {
                     ui.spacing_mut().slider_width = CLIP_SLIDER_WIDTH - 110.0;
-                    ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).text("offset m").fixed_decimals(3));
+                    ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).text(tr("studio.clip_offset")).fixed_decimals(3));
                 });
             }
             group_gap(ui);
-            for (id, icon, what) in [("screenshot", "camera", "Save the active viewport as PNG"), ("screenshot_layout", "images", "Save the whole layout as PNG")] {
+            for (id, icon, what) in [("screenshot", "camera", tr("action.screenshot")), ("screenshot_layout", "images", tr("action.screenshot_layout"))] {
                 if icons::button(ui, icon, false, &self.tip(what, id)).clicked() {
                     self.act(id);
                 }
@@ -353,12 +358,12 @@ impl Studio<'_> {
         let light = ui.ctx().theme() == egui::Theme::Light;
         let dark = self.world.state.opts.dark;
         let buttons = [
-            ("help", "keyboard", self.s.show_help, self.tip("Keys and mouse", "help")),
-            ("tasks", "list-checks", self.s.wizards.open, "Tasks: guided wizards, each step one registry command".to_string()),
+            ("help", "keyboard", self.s.show_help, self.tip(tr("studio.keys_title"), "help")),
+            ("tasks", "list-checks", self.s.wizards.open, tr("ui.tasks-btn.title").to_string()),
             ("interface_theme", if light { "sun" } else { "moon" }, false,
-             self.tip(if light { "Light interface: switch to dark" } else { "Dark interface: switch to light" }, "interface_theme")),
-            ("theme", "sun-moon", !dark, self.tip(if dark { "Dark viewport: switch to light" } else { "Light viewport: switch to dark" }, "theme")),
-            ("hud", "gauge", self.world.hud.on, self.tip("Timings overlay", "hud")),
+             self.tip(if light { tr("studio.tip.light_ui") } else { tr("studio.tip.dark_ui") }, "interface_theme")),
+            ("theme", "sun-moon", !dark, self.tip(if dark { tr("studio.tip.dark_view") } else { tr("studio.tip.light_view") }, "theme")),
+            ("hud", "gauge", self.world.hud.on, self.tip(tr("action.hud"), "hud")),
         ];
         for (id, icon, on, tip) in buttons {
             if icons::button(ui, icon, on, &tip).clicked() {
@@ -374,7 +379,7 @@ impl Studio<'_> {
                 ui.label(egui::RichText::new(b).color(ui.visuals().warn_fg_color));
                 ui.separator();
             }
-            let stale = self.world.session.is_some() && (self.s.status == "open a store" || self.s.status == "loading");
+            let stale = self.world.session.is_some() && (self.s.status == tr("studio.status.open") || self.s.status == tr("studio.status.loading"));
             if !stale {
                 ui.label(&self.s.status);
             }
@@ -387,7 +392,7 @@ impl Studio<'_> {
                 ui.label(egui::RichText::new(l).weak());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(format!("viewport {:.2} ms · frame {:.1} ms", self.s.render_ms, self.s.frame_ms)).weak().monospace());
+                ui.label(egui::RichText::new(trf("studio.timing", &[("viewport", &format!("{:.2}", self.s.render_ms)), ("frame", &format!("{:.1}", self.s.frame_ms))])).weak().monospace());
             });
         });
     }
@@ -395,31 +400,31 @@ impl Studio<'_> {
     fn side(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         let loaded = self.world.session.is_some();
-        egui::CollapsingHeader::new(egui::RichText::new("Store").strong()).id_salt("store").default_open(!loaded).show(ui, |ui| {
+        egui::CollapsingHeader::new(egui::RichText::new(tr("store.title")).strong()).id_salt("store").default_open(!loaded).show(ui, |ui| {
             egui::Grid::new("store_fields").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                 for (label, value, hint) in [
-                    ("store", &mut self.s.store, "store folder"),
-                    ("spec", &mut self.s.spec, "optional .gfchar.json"),
-                    ("macro", &mut self.s.macro_file, "optional macro definition"),
-                    ("eyes", &mut self.s.eyes, "optional eyes file"),
-                    ("game", &mut self.s.game, "optional game base sha256:..."),
+                    ("store", &mut self.s.store, tr("studio.field.store_hint")),
+                    ("spec", &mut self.s.spec, tr("studio.field.spec_hint")),
+                    ("macro", &mut self.s.macro_file, tr("studio.field.macro_hint")),
+                    ("eyes", &mut self.s.eyes, tr("studio.field.eyes_hint")),
+                    ("game", &mut self.s.game, tr("studio.field.game_hint")),
                 ] {
-                    ui.label(label);
+                    ui.label(tr(&format!("studio.field.{label}")));
                     ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(f32::INFINITY));
                     ui.end_row();
                 }
             });
             ui.horizontal(|ui| {
-                let load = ui.add_enabled(self.world.loading.is_none(), egui::Button::new("load")).on_hover_text("Load the store (and the optional files) into the studio");
+                let load = ui.add_enabled(self.world.loading.is_none(), egui::Button::new(tr("studio.load"))).on_hover_text(tr("studio.load_tip"));
                 if load.clicked() {
                     self.load();
                 }
             });
         });
-        egui::CollapsingHeader::new("Diagnostics").id_salt("diag").default_open(false).show(ui, |ui| {
-            ui.checkbox(&mut self.world.hud.on, "timings overlay");
-            ui.label(format!("shape input: {}", self.s.input.name()));
-            ui.label(format!("keys: {}", self.s.keymap.source));
+        egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
+            ui.checkbox(&mut self.world.hud.on, tr("action.hud"));
+            ui.label(trf("studio.shape_input", &[("name", &tr_or(&format!("studio.input.{}", self.s.input.name()), self.s.input.name()))]));
+            ui.label(trf("studio.keys_source", &[("source", &self.keymap_source())]));
             for p in &self.s.keymap.problems {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
@@ -429,18 +434,18 @@ impl Studio<'_> {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&s.character.name).strong());
-                ui.label(egui::RichText::new(format!("{} vertices · {} targets", s.head.n, s.targets)).weak());
+                ui.label(egui::RichText::new(trf("studio.counts", &[("vertices", &s.head.n), ("targets", &s.targets)])).weak());
             });
             if let Some(st) = &s.settled {
-                ui.label(egui::RichText::new(format!("settled {} in {:.0} ms", st.placement, st.ms)).weak());
+                ui.label(egui::RichText::new(trf("studio.settled", &[("placement", &st.placement), ("ms", &format!("{:.0}", st.ms))])).weak());
             }
         }
         if self.world.shape.is_some() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let h = self.world.shape.as_ref().map_or((0, 0), |s| (s.history.done.len(), s.history.undone.len()));
-                let undo_tip = self.tip("Undo the last shape change", "undo");
-                let redo_tip = self.tip("Redo", "redo");
+                let undo_tip = self.tip(tr("action.undo"), "undo");
+                let redo_tip = self.tip(tr("action.redo"), "redo");
                 if ui.add_enabled_ui(h.0 > 0, |ui| icons::button(ui, "undo-2", false, &undo_tip)).inner.clicked() {
                     self.s.status = self.world.undo(false).unwrap_or_default();
                 }
@@ -448,8 +453,8 @@ impl Studio<'_> {
                     self.s.status = self.world.undo(true).unwrap_or_default();
                 }
                 ui.add_space(6.0);
-                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text("save as .gfchar.json").desired_width(ui.available_width() - 34.0));
-                let save_tip = self.tip("Save the character spec", "save_spec");
+                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text(tr("studio.save_hint")).desired_width(ui.available_width() - 34.0));
+                let save_tip = self.tip(tr("action.save_spec"), "save_spec");
                 if icons::button(ui, "save", false, &save_tip).clicked() {
                     self.save();
                 }
@@ -467,20 +472,20 @@ impl Studio<'_> {
 
     fn keys_window(&mut self, ctx: &egui::Context) {
         let mut open = self.s.show_help;
-        egui::Window::new("Keys and mouse").open(&mut open).collapsible(false).resizable(true).default_width(460.0).default_height(560.0).show(ctx, |ui| {
+        egui::Window::new(tr("studio.keys_title")).id(egui::Id::new("keys_window")).open(&mut open).collapsible(false).resizable(true).default_width(460.0).default_height(560.0).show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("keys").num_columns(2).striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
-                    for (id, what, _) in keymap::ACTIONS {
+                    for (id, _) in keymap::ACTIONS {
                         let keys = self.s.keymap.describe(id);
                         ui.label(egui::RichText::new(if keys.is_empty() { "-".into() } else { keys }).monospace());
-                        ui.label(*what);
+                        ui.label(tr(&format!("action.{id}")));
                         ui.end_row();
                     }
                 });
                 ui.separator();
-                ui.label("Mouse: left drag orbits; right, middle or Shift drag pans; the wheel zooms; Alt+wheel moves clip plane 1; a double-click sets the orbit pivot.");
-                ui.label("View cube (top right of each viewport): click a face, edge or corner to look from there, drag it to orbit; the buttons under it give the home and three-quarter views.");
-                ui.label(format!("Key map: {} (gazeforge-studio --write-keymap FILE writes the defaults to edit).", self.s.keymap.source));
+                ui.label(tr("studio.help.mouse"));
+                ui.label(tr("studio.help.cube"));
+                ui.label(trf("studio.help.keymap", &[("source", &self.keymap_source())]));
             });
         });
         self.s.show_help = open;
@@ -537,9 +542,9 @@ impl Studio<'_> {
                 Some((_, hit)) => {
                     self.world.state.cams[r.cam].set(|g| g.target = hit, false);
                     self.world.state.pivot_flash = 0.8;
-                    self.s.status = format!("pivot at {:.1}, {:.1}, {:.1} mm", hit[0] * 1000.0, hit[1] * 1000.0, hit[2] * 1000.0);
+                    self.s.status = trf("designer.pivot", &[("mesh", &tr("mesh.head")), ("point", &format!("{:.1}, {:.1}, {:.1}", hit[0] * 1000.0, hit[1] * 1000.0, hit[2] * 1000.0))]);
                 }
-                None => self.s.status = "no surface under the cursor".into(),
+                None => self.s.status = tr("designer.no_surface").into(),
             }
         }
     }
@@ -590,7 +595,7 @@ impl Studio<'_> {
                 render::Source::External(e) => format!(" · {}", e.status().unwrap_or_else(|| e.name().to_string())),
             };
             let active = rects.len() > 1 && r.slot == self.world.state.active;
-            let caption = format!("{} · {} · {}{lod}{src}", cam.name, if cam.ortho { "ortho" } else { "persp" }, MODES[st.mode].1);
+            let caption = format!("{} · {} · {}{lod}{src}", tr_or(&format!("view.{}", cam.name), &cam.name), if cam.ortho { tr("view.ortho") } else { tr("ui.persp") }, tr(&format!("mode.{}", MODES[st.mode])));
             let galley = painter.layout_no_wrap(caption, egui::FontId::proportional(13.0), if active { egui::Color32::from_rgb(120, 170, 250) } else { text_col });
             let at = min + egui::vec2(8.0, 6.0);
             painter.rect_filled(egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(6.0, 2.0)), 4.0, if dark { egui::Color32::from_black_alpha(110) } else { egui::Color32::from_white_alpha(150) });
@@ -647,7 +652,7 @@ impl Studio<'_> {
         } else {
             let (yaw, pitch) = cube::yaw_pitch(e.dir());
             self.world.state.view_dir(&e.name(), yaw, pitch, false);
-            self.s.status = format!("{} view", e.name());
+            self.s.status = trf("studio.view_status", &[("view", &e.name())]);
         }
         self.world.state.pivot_flash = 0.4;
     }
@@ -681,14 +686,14 @@ impl Studio<'_> {
             }
             for (r, which, tip_id) in [(spot.home, "view_home", "view_home"), (spot.three, "view_three_quarter", "view_three_quarter")] {
                 let b = ui.interact(r, id.with(which), egui::Sense::click());
-                let tip = if which == "view_home" { self.tip("Home view, framed", tip_id) } else { self.tip("Three-quarter view", tip_id) };
+                let tip = if which == "view_home" { self.tip(tr("action.view_home"), tip_id) } else { self.tip(tr("action.view_three_quarter"), tip_id) };
                 if b.clicked() {
                     self.world.state.active = spot.slot;
                     self.act(which);
                 }
                 b.on_hover_text(tip);
             }
-            resp.on_hover_text("Click a face, edge or corner to look from there; drag to orbit");
+            resp.on_hover_text(tr("studio.cube_tip"));
         }
         self.s.cubes = spots;
     }

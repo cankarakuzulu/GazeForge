@@ -6,6 +6,7 @@ use gf_api::Ctx;
 use gf_geom::topology::min_angle;
 use serde_json::{Value, json};
 
+use crate::i18n::{tr, tr_or, trf};
 use crate::icons;
 use crate::session::{Head, Lod, run_settle, vertex_normals};
 use crate::studio::Studio;
@@ -211,7 +212,7 @@ impl TopologyUi {
 
     pub fn start(&mut self, store: &str, game: &str) -> Result<String, String> {
         if self.job.is_some() {
-            return Err("an improve is already running".into());
+            return Err(tr("topology.already_running").into());
         }
         let mut input = json!({"store": store, "game": game});
         if !self.shapes_dir.trim().is_empty() {
@@ -227,7 +228,7 @@ impl TopologyUi {
         self.record = None;
         self.error = None;
         self.polled = None;
-        Ok(format!("improving the topology (job {id})"))
+        Ok(trf("topology.started", &[("id", &id)]))
     }
 
     pub fn poll(&mut self) -> Option<String> {
@@ -249,11 +250,11 @@ impl TopologyUi {
             self.job = None;
             if state != "done" {
                 let r = self.record.as_ref().expect("set above");
-                let message = r.pointer("/result/error/message").or(r.pointer("/error/message")).and_then(Value::as_str).unwrap_or("the job failed");
+                let message = r.pointer("/result/error/message").or(r.pointer("/error/message")).and_then(Value::as_str).unwrap_or(tr("topology.job_failed"));
                 self.error = Some(message.to_string());
-                return Some(format!("topology improve {state}: {message}"));
+                return Some(trf("topology.job_ended_with", &[("state", &tr_or(&format!("job.state.{state}"), &state)), ("message", &message)]));
             }
-            return Some(format!("topology improved: new game base {}", self.result().and_then(|r| r["game"].as_str()).map(short).unwrap_or_default()));
+            return Some(trf("topology.improved", &[("game", &self.result().and_then(|r| r["game"].as_str()).map(short).unwrap_or_default())]));
         }
         None
     }
@@ -275,21 +276,21 @@ impl TopologyUi {
     }
 
     pub fn compare(&mut self, world: &mut World, after: bool) -> Result<String, String> {
-        let s = world.session.as_ref().ok_or("nothing is loaded")?;
+        let s = world.session.as_ref().ok_or(tr("studio.nothing_loaded"))?;
         if !after {
             self.swap(world, false);
-            return Ok("triangulation: before".into());
+            return Ok(tr("topology.tri_before").into());
         }
-        let game = self.result().and_then(|r| r["game"].as_str()).ok_or("run an improve first")?.to_string();
+        let game = self.result().and_then(|r| r["game"].as_str()).ok_or(tr("topology.run_first"))?.to_string();
         if s.game != self.job_source {
-            return Err(format!("that improve was of another game base ({}); run an improve on this one", short(&self.job_source)));
+            return Err(trf("topology.other_base", &[("game", &short(&self.job_source))]));
         }
         if self.after.is_some() && self.after_game == game {
             self.swap(world, true);
-            return Ok("triangulation: after".into());
+            return Ok(tr("topology.tri_after").into());
         }
         if self.after_rx.is_some() {
-            return Ok("loading the improved triangulation".into());
+            return Ok(tr("topology.loading_after").into());
         }
         let (store, pack, catalog) = (s.store.clone(), s.pack.clone(), s.catalog.clone());
         let settle = s.settle_input(&s.character, true);
@@ -299,7 +300,7 @@ impl TopologyUi {
             let _ = tx.send(look_of(&store, &pack, &catalog, &game, settle));
         });
         self.after_rx = Some(rx);
-        Ok("loading the improved triangulation".into())
+        Ok(tr("topology.loading_after").into())
     }
 
     pub fn wait_after(&mut self, world: &mut World, seconds: f64) -> Result<(), String> {
@@ -357,49 +358,48 @@ impl TopologyUi {
 impl Studio<'_> {
     pub fn topology_panel(&mut self, ui: &mut egui::Ui) {
         let loaded = self.world.session.is_some();
-        egui::CollapsingHeader::new("Topology").id_salt("topology").default_open(false).show(ui, |ui| {
+        egui::CollapsingHeader::new(tr("panel.topology")).id_salt("topology").default_open(false).show(ui, |ui| {
             if !loaded {
-                ui.label(egui::RichText::new("load a store first").weak());
+                ui.label(egui::RichText::new(tr("studio.load_first")).weak());
                 return;
             }
             let o = &mut self.world.state.opts;
             ui.horizontal(|ui| {
-                ui.checkbox(&mut o.bad, "show bad triangles").on_hover_text(format!("Triangles whose smallest angle is under the limit, in magenta ({})", self.s.keymap.describe("bad_triangles")));
-                ui.add(egui::Slider::new(&mut self.world.topo.below_deg, 2.0..=30.0).suffix(" deg").fixed_decimals(0)).on_hover_text("the smallest-angle limit");
+                ui.checkbox(&mut o.bad, tr("topology.show")).on_hover_text(trf("topology.show_tip", &[("keys", &self.s.keymap.describe("bad_triangles"))]));
+                ui.add(egui::Slider::new(&mut self.world.topo.below_deg, 2.0..=30.0).suffix(format!(" {}", tr("unit.deg"))).fixed_decimals(0)).on_hover_text(tr("topology.limit_tip"));
             });
             let t = &self.world.topo;
             if let Some(n) = t.bad_counts.first() {
-                let on = if t.showing_after { "the improved base" } else { "the loaded base" };
-                ui.label(egui::RichText::new(format!("{n} triangles under {:.0} deg on this character, settled on {on} (LOD0)", t.below_deg)).weak());
+                ui.label(egui::RichText::new(if t.showing_after { trf("topology.after_count", &[("count", n), ("below", &format!("{:.0}", t.below_deg))]) } else { trf("topology.count", &[("count", n), ("below", &format!("{:.0}", t.below_deg))]) }).weak());
             }
             match &t.info {
                 None => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(egui::RichText::new("measuring the base").weak());
+                        ui.label(egui::RichText::new(tr("topology.measuring")).weak());
                     });
                 }
                 Some(Err(e)) => {
                     ui.colored_label(ui.visuals().error_fg_color, e);
                 }
                 Some(Ok(v)) => {
-                    ui.label(format!("base {} at rest: {} under 5 deg, {} under 10 deg, p1 {} deg", short(v["game"].as_str().unwrap_or("")), stat(v, "/rest/below_5"), stat(v, "/rest/below_10"), stat(v, "/rest/min_angle_p1")));
+                    ui.label(trf("topology.base", &[("game", &short(v["game"].as_str().unwrap_or(""))), ("below5", &stat(v, "/rest/below_5")), ("below10", &stat(v, "/rest/below_10")), ("p1", &stat(v, "/rest/min_angle_p1"))]));
                     if let Some(from) = v.pointer("/topology/from").and_then(Value::as_str) {
-                        ui.label(egui::RichText::new(format!("improved from {}: {} flips", short(from), stat(v, "/topology/flips"))).weak());
+                        ui.label(egui::RichText::new(trf("topology.improved_from", &[("from", &short(from)), ("flips", &stat(v, "/topology/flips"))])).weak());
                     }
                 }
             }
             ui.horizontal(|ui| {
                 let running = self.world.topo.running();
-                let tip = format!("Re-cut the triangles of this game base by edge flips over the same vertices, scored over the shape range, and store the result as a new game base ({})", self.s.keymap.describe("topology_improve"));
+                let tip = self.tip(tr("topology.improve_title"), "topology_improve");
                 if ui.add_enabled_ui(!running, |ui| icons::button(ui, "wand-sparkles", running, &tip)).inner.clicked() {
                     self.act("topology_improve");
                 }
-                ui.label(if running { "improving" } else { "improve" });
+                ui.label(if running { tr("topology.improving") } else { tr("topology.improve") });
             });
             ui.horizontal(|ui| {
-                ui.label("extra shapes").on_hover_text("Optional: a dense base folder whose shape keys are scored too (its manifest.json and shape_NAME.npy files); the result depends on the shapes scored");
-                ui.add_enabled(!self.world.topo.running(), egui::TextEdit::singleline(&mut self.world.topo.shapes_dir).hint_text("dense base folder (optional)").desired_width(180.0));
+                ui.label(tr("topology.shapes")).on_hover_text(tr("topology.shapes_title"));
+                ui.add_enabled(!self.world.topo.running(), egui::TextEdit::singleline(&mut self.world.topo.shapes_dir).hint_text(tr("topology.shapes_placeholder")).desired_width(180.0));
             });
             let t = &self.world.topo;
             if let Some(r) = &t.record
@@ -421,35 +421,35 @@ impl Studio<'_> {
                 let l = &r["levels"][0];
                 egui::Grid::new("topology_numbers").num_columns(3).striped(true).spacing([10.0, 2.0]).show(ui, |ui| {
                     ui.label(egui::RichText::new("LOD0").strong());
-                    ui.label("before");
-                    ui.label("after");
+                    ui.label(tr("topology.before"));
+                    ui.label(tr("topology.after"));
                     ui.end_row();
                     for (label, path) in [
-                        ("rest under 5 deg", "/rest/{}/below_5"),
-                        ("rest under 10 deg", "/rest/{}/below_10"),
-                        ("rest smallest p1", "/rest/{}/min_angle_p1"),
-                        ("range under 5 deg", "/shape_range/{}/below_5"),
-                        ("range under 10 deg", "/shape_range/{}/below_10"),
-                        ("range smallest p1", "/shape_range/{}/min_angle_p1"),
-                        ("range turned over", "/shape_range/{}/turned"),
+                        ("rest_5", "/rest/{}/below_5"),
+                        ("rest_10", "/rest/{}/below_10"),
+                        ("rest_p1", "/rest/{}/min_angle_p1"),
+                        ("range_5", "/shape_range/{}/below_5"),
+                        ("range_10", "/shape_range/{}/below_10"),
+                        ("range_p1", "/shape_range/{}/min_angle_p1"),
+                        ("range_turned", "/shape_range/{}/turned"),
                     ] {
-                        ui.label(label);
+                        ui.label(tr(&format!("topology.row.{label}")));
                         ui.label(stat(l, &path.replace("{}", "before")));
                         ui.label(stat(l, &path.replace("{}", "after")));
                         ui.end_row();
                     }
                 });
-                ui.label(egui::RichText::new(format!("{} flips over {} scored shapes; new base {}", stat(l, "/flips"), stat(&r, "/shape_set/total"), short(r["game"].as_str().unwrap_or("")))).weak());
+                ui.label(egui::RichText::new(trf("topology.result", &[("flips", &stat(l, "/flips")), ("shapes", &stat(&r, "/shape_set/total")), ("game", &short(r["game"].as_str().unwrap_or("")))])).weak());
                 ui.horizontal(|ui| {
-                    ui.label("triangulation");
+                    ui.label(tr("topology.triangulation"));
                     let mut after = self.world.topo.showing_after;
-                    ui.selectable_value(&mut after, false, "before");
-                    ui.selectable_value(&mut after, true, "after");
+                    ui.selectable_value(&mut after, false, tr("topology.before"));
+                    ui.selectable_value(&mut after, true, tr("topology.after"));
                     if after != self.world.topo.showing_after {
                         self.act(if after { "topology_after" } else { "topology_before" });
                     }
                 });
-                if ui.button("design on the improved base").on_hover_text("Reload the studio on the new game base (the character keeps its weights; saving it names the new base)").clicked() {
+                if ui.button(tr("topology.use")).on_hover_text(tr("topology.use_studio_title")).clicked() {
                     self.act("topology_use");
                 }
             }
@@ -459,7 +459,7 @@ impl Studio<'_> {
     pub fn topology_act(&mut self, id: &str) -> Option<String> {
         Some(match id {
             "topology_improve" => {
-                let Some(s) = self.world.session.as_ref() else { return Some("load a store first".into()) };
+                let Some(s) = self.world.session.as_ref() else { return Some(tr("studio.load_first").into()) };
                 let (store, game) = (s.store.clone(), s.game.clone());
                 self.world.topo.start(&store, &game).unwrap_or_else(|e| e)
             }
@@ -469,9 +469,9 @@ impl Studio<'_> {
                     self.s.game = g.clone();
                     self.world.topo.reset();
                     self.load();
-                    format!("loading the improved base {}", short(&g))
+                    trf("topology.loading_base", &[("game", &short(&g))])
                 }
-                None => "run an improve first".into(),
+                None => tr("topology.run_first").into(),
             },
             _ => return None,
         })

@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const bytes = (b64) => {
   const s = atob(b64);
   const u = new Uint8Array(s.length);
@@ -9,9 +11,9 @@ const short = (r) => (r ? String(r).slice(0, 17) : "");
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const BAD = "#ff1f9e";
 const ROWS = [
-  ["rest under 5 deg", "rest", "below_5"], ["rest under 10 deg", "rest", "below_10"], ["rest smallest p1", "rest", "min_angle_p1"],
-  ["range under 5 deg", "shape_range", "below_5"], ["range under 10 deg", "shape_range", "below_10"], ["range smallest p1", "shape_range", "min_angle_p1"],
-  ["range turned over", "shape_range", "turned"],
+  ["rest_5", "rest", "below_5"], ["rest_10", "rest", "below_10"], ["rest_p1", "rest", "min_angle_p1"],
+  ["range_5", "shape_range", "below_5"], ["range_10", "shape_range", "below_10"], ["range_p1", "shape_range", "min_angle_p1"],
+  ["range_turned", "shape_range", "turned"],
 ];
 
 function minAngle(P, a, b, c) {
@@ -44,19 +46,19 @@ window.GF.registerPanel({
   order: 15,
   mount(root, api) {
     root.innerHTML = `<div class="topology">
-      <label class="line"><input type="checkbox" class="show"> show bad triangles</label>
-      <label class="line">smallest angle under <input type="range" class="below" min="2" max="30" step="1" value="10"> <span class="below-v">10</span> deg</label>
+      <label class="line"><input type="checkbox" class="show"> ${tr("topology.show")}</label>
+      <label class="line">${tr("topology.below")} <input type="range" class="below" min="2" max="30" step="1" value="10"> <span class="below-v">10</span> ${tr("unit.deg")}</label>
       <div class="note count"></div>
-      <div class="note base">measuring the base…</div>
-      <label class="line" title="Optional: a dense base folder whose shape keys are scored too (its manifest.json and shape_NAME.npy files); the result depends on the shapes scored">extra shapes <input type="text" class="shapes" placeholder="dense base folder (optional)"></label>
-      <div class="line"><button class="ib wide improve" title="Re-cut the triangles of this game base by edge flips over the same vertices, scored over the shape range, and store the result as a new game base (a job)"><svg class="ico"><use href="#i-wand-sparkles"/></svg><span>improve</span></button></div>
+      <div class="note base">${tr("topology.measuring")}</div>
+      <label class="line" title="${tr("topology.shapes_title")}">${tr("topology.shapes")} <input type="text" class="shapes" placeholder="${tr("topology.shapes_placeholder")}"></label>
+      <div class="line"><button class="ib wide improve" title="${tr("topology.improve_title")}"><svg class="ico"><use href="#i-wand-sparkles"/></svg><span>${tr("topology.improve")}</span></button></div>
       <progress class="prog hidden" max="1" value="0"></progress>
       <div class="note msg"></div>
-      <table class="nums hidden"><thead><tr><th>LOD0</th><th>before</th><th>after</th></tr></thead><tbody></tbody></table>
+      <table class="nums hidden"><thead><tr><th>LOD0</th><th>${tr("topology.before")}</th><th>${tr("topology.after")}</th></tr></thead><tbody></tbody></table>
       <div class="note res"></div>
-      <label class="line hidden after-row"><input type="checkbox" class="after"> improved base beside the head (settled on it)</label>
+      <label class="line hidden after-row"><input type="checkbox" class="after"> ${tr("topology.after_show")}</label>
       <div class="note after-count"></div>
-      <button class="use hidden" title="Reload the designer on the new game base; saving the character names it">design on the improved base</button></div>`;
+      <button class="use hidden" title="${tr("topology.use_title")}">${tr("topology.use")}</button></div>`;
     const $ = (s) => root.querySelector(s);
     const c0 = api.character();
     const st = { tris: null, positions: null, below: 10, show: false, job: null, result: null, after: null, afterOn: false };
@@ -65,12 +67,12 @@ window.GF.registerPanel({
     const draw = () => {
       if (st.tris && st.positions) {
         const b = badLines(st.positions, st.tris, st.below);
-        $(".count").textContent = `${b.count} triangles under ${st.below} deg on this character, settled on the loaded base (LOD0)`;
+        $(".count").textContent = tr("topology.count", { count: b.count, below: st.below });
         api.setOverlay("topology-bad", st.show ? { lines: b.lines, color: BAD } : null);
       }
       if (st.after && st.afterOn) {
         const b = badLines(st.after.positions, st.after.tris, st.below, st.after.dx);
-        $(".after-count").textContent = `${b.count} triangles under ${st.below} deg on the improved base, beside the head`;
+        $(".after-count").textContent = tr("topology.after_count", { count: b.count, below: st.below });
         api.setOverlay("topology-after-bad", st.show ? { lines: b.lines, color: BAD } : null);
       } else {
         $(".after-count").textContent = "";
@@ -82,15 +84,15 @@ window.GF.registerPanel({
     const setShow = (on) => { st.show = on; draw(); };
     const toggleShow = (on) => {
       setShow(on);
-      api.pushUndo({ label: `${on ? "show" : "hide"} the bad triangles`, undo: () => setShow(!on), redo: () => setShow(on) });
+      api.pushUndo({ label: on ? tr("topology.undo_show") : tr("topology.undo_hide"), undo: () => setShow(!on), redo: () => setShow(on) });
     };
 
     api.call("topology.inspect", { store: c0.store, game: c0.game })
       .then((r) => {
         st.tris = new Uint32Array(bytes(r.triangles_u32_b64));
         const t = r.topology;
-        $(".base").innerHTML = `base ${esc(short(r.game))} at rest: ${fmt(r.rest.below_5)} under 5 deg, ${fmt(r.rest.below_10)} under 10 deg, p1 ${fmt(r.rest.min_angle_p1)} deg`
-          + (t ? `<br>improved from ${esc(short(t.from))}: ${fmt(t.flips)} flips` : "");
+        $(".base").innerHTML = esc(tr("topology.base", { game: short(r.game), below5: fmt(r.rest.below_5), below10: fmt(r.rest.below_10), p1: fmt(r.rest.min_angle_p1) }))
+          + (t ? `<br>${esc(tr("topology.improved_from", { from: short(t.from), flips: fmt(t.flips) }))}` : "");
         draw();
       })
       .catch((e) => { $(".base").textContent = `topology.inspect: ${e.message}`; });
@@ -103,10 +105,10 @@ window.GF.registerPanel({
 
     const table = (r) => {
       const l = r.levels[0];
-      $(".nums tbody").innerHTML = ROWS.map(([label, group, key]) => `<tr><td>${label}</td><td>${fmt(l[group].before[key])}</td><td>${fmt(l[group].after[key])}</td></tr>`).join("");
+      $(".nums tbody").innerHTML = ROWS.map(([label, group, key]) => `<tr><td>${tr(`topology.row.${label}`)}</td><td>${fmt(l[group].before[key])}</td><td>${fmt(l[group].after[key])}</td></tr>`).join("");
       $(".nums").classList.remove("hidden");
-      $(".res").textContent = `${l.flips} flips over ${r.shape_set.total} scored shapes; new base ${short(r.game)}`
-        + (r.levels.length > 1 ? `; levels of detail ${r.levels.slice(1).map((x) => `${x.level} ${x.rest.before.below_10} -> ${x.rest.after.below_10} under 10 deg`).join(", ")}` : "");
+      $(".res").textContent = tr("topology.result", { flips: l.flips, shapes: r.shape_set.total, game: short(r.game) })
+        + (r.levels.length > 1 ? tr("topology.lods", { list: r.levels.slice(1).map((x) => tr("topology.lod_row", { level: x.level, before: x.rest.before.below_10, after: x.rest.after.below_10 })).join(", ") }) : "");
       $(".after-row").classList.remove("hidden");
       $(".use").classList.remove("hidden");
     };
@@ -118,7 +120,7 @@ window.GF.registerPanel({
       improveBtn?.classList.add("on");
       prog.classList.remove("hidden");
       prog.value = 0;
-      msg.textContent = "submitting";
+      msg.textContent = tr("topology.submitting");
       try {
         const input = { store: c0.store, game: c0.game }, shapes = $(".shapes").value.trim();
         if (shapes) input.dense = shapes;
@@ -128,14 +130,14 @@ window.GF.registerPanel({
           const r = await api.call("jobs.status", { id: st.job, wait_s: 0.5 });
           const p = r.progress || {};
           prog.value = p.total ? p.done / p.total : 0;
-          msg.textContent = `${r.state}${p.stage ? `: ${p.stage} ${p.done}/${p.total}` : ""}${p.message ? ` - ${p.message}` : ""}`;
+          msg.textContent = `${tr(`job.state.${r.state}`, null, r.state)}${p.stage ? `: ${p.stage} ${p.done}/${p.total}` : ""}${p.message ? ` - ${p.message}` : ""}`;
           if (r.state === "done") { st.result = r.result.result; break; }
-          if (r.state === "failed" || r.state === "cancelled") throw new Error(r.result?.error?.message || r.error?.message || `the job ${r.state}`);
+          if (r.state === "failed" || r.state === "cancelled") throw new Error(r.result?.error?.message || r.error?.message || tr("topology.job_ended", { state: r.state }));
         }
-        msg.textContent = `done: new game base ${short(st.result.game)}`;
+        msg.textContent = tr("topology.done", { game: short(st.result.game) });
         table(st.result);
       } catch (e) {
-        msg.textContent = `improve failed: ${e.message}`;
+        msg.textContent = tr("topology.failed", { error: e.message });
       } finally {
         st.job = null;
         btn.disabled = false;
@@ -161,7 +163,7 @@ window.GF.registerPanel({
       const shifted = new Float32Array(P);
       for (let i = 0; i < shifted.length; i += 3) shifted[i] += dx;
       st.after = { tris, positions: P, dx, game };
-      api.setExtraMesh("topology-after", { positions: shifted, indices: tris, label: `improved base ${short(game)}` });
+      api.setExtraMesh("topology-after", { positions: shifted, indices: tris, label: tr("topology.mesh_label", { game: short(game) }) });
       draw();
     };
 
@@ -170,7 +172,7 @@ window.GF.registerPanel({
     $(".below").addEventListener("input", (e) => { st.below = Number(e.target.value); $(".below-v").textContent = st.below; draw(); });
     $(".improve").addEventListener("click", improve);
     improveBtn?.addEventListener("click", improve);
-    $(".after").addEventListener("change", (e) => showAfter(e.target.checked).catch((err) => { $(".msg").textContent = `the improved base: ${err.message}`; }));
+    $(".after").addEventListener("change", (e) => showAfter(e.target.checked).catch((err) => { $(".msg").textContent = tr("topology.after_failed", { error: err.message }); }));
     $(".use").addEventListener("click", () => {
       if (!st.result) return;
       const q = new URLSearchParams(location.search);
