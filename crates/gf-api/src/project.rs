@@ -48,6 +48,12 @@ fn root(ctx: &Ctx, input: &Value) -> PathBuf {
     }
 }
 
+pub fn device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
+}
+
 pub fn check_name(name: &str, allow_untitled: bool) -> Result<(), ApiError> {
     let ok = (1..=64).contains(&name.len())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.'))
@@ -58,10 +64,7 @@ pub fn check_name(name: &str, allow_untitled: bool) -> Result<(), ApiError> {
             "project name {name:?}: use 1 to 64 letters, digits, spaces, '_', '-' or '.', not starting with '.', ' ' or '-' and not ending with '.' or ' '"
         )));
     }
-    let stem = name.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
-    let device = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
-        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit());
-    if device {
+    if device_name(name) {
         return Err(ApiError::invalid(format!("project name {name:?} is a reserved device name on some systems")));
     }
     if !allow_untitled && name.eq_ignore_ascii_case(UNTITLED) {
@@ -79,7 +82,11 @@ pub fn recovery_path(root: &Path, name: &str) -> PathBuf {
 }
 
 pub fn now_utc() -> String {
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    utc(SystemTime::now())
+}
+
+pub fn utc(time: SystemTime) -> String {
+    let d = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let z = days + 719_468;

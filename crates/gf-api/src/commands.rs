@@ -11,7 +11,8 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, grid, jobs, photo, photo_fit, photo_gate, project, registry};
+use crate::tasks::api;
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -116,11 +117,56 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "designer.scene",
         kind: Kind::Query,
-        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes of an optional eyes file (centre, radius, side, gaze and mesh).",
-        limits: "A level with a vertex outside the finest level drops that triangle and counts it; eyes are the file's spheres, not a placed eye mesh.",
+        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes (centre, radius, side, gaze and mesh) of an eye model (eyeballs with a model, with UVs and parts) or of an optional eyes file.",
+        limits: "A level with a vertex outside the finest level drops that triangle and counts it; the eyes are at their rest place, before the character moves them (designer.settle reports each eye's transform).",
         input: designer::scene_input,
         output: designer::scene_output,
         run: designer::scene,
+    },
+    CommandDef {
+        name: "designer.eyes",
+        kind: Kind::Query,
+        summary: "Only the eyes of designer.scene: an eye model's eyes (eyeballs with a model) or an eyes file's, at their rest place, for a client that changes the model without reloading the scene.",
+        limits: "The same eyes and format as designer.scene's eyes; no levels of detail.",
+        input: designer::scene_input,
+        output: designer::eyes_output,
+        run: designer::eyes,
+    },
+    CommandDef {
+        name: "eyes.generate",
+        kind: Kind::Mutation,
+        summary: "Write an eyes file for a catalog's base head: a procedural eyeball (sclera, a cornea cap at the limbus, a recessed iris and a pupil, as separate parts with UVs) centred on each of MakeHuman's helper eyeballs as the catalog's eye rig places them, 12 mm in radius by default.",
+        limits: "Overwrites the file at out. The eyes are placed for the base head; a character's eyeballs field moves them for the character. helper_radius uses MakeHuman's helper radius (about 15.75 mm).",
+        input: eyes::generate_input,
+        output: eyes::generate_output,
+        run: eyes::generate,
+    },
+    CommandDef {
+        name: "eyes.inventory",
+        kind: Kind::Query,
+        summary: "The eye inventory: premade eye models (proportions, iris colours and pattern, sclera tint and veins, cornea index of refraction), grouped by family, and the default model.",
+        limits: "A character takes a model through eyeballs.model ({id, radius_mm}); the settle and the export then build that model's eyes at the eye rig's places instead of reading an eyes file.",
+        input: eyes::inventory_input,
+        output: eyes::inventory_output,
+        run: eyes::inventory,
+    },
+    CommandDef {
+        name: "eyes.look",
+        kind: Kind::Query,
+        summary: "How one eye model is shaded, part by part (sclera, cornea, iris, pupil): base colour, roughness, transmission and index of refraction, blending, and the iris and sclera textures as RGBA pixels - the same values the glb export writes as materials.",
+        limits: "Textures are procedural (seeded per model) at 1024x256 (iris) and 512x256 (sclera); textures false returns only their sizes.",
+        input: eyes::look_input,
+        output: eyes::look_output,
+        run: eyes::look_command,
+    },
+    CommandDef {
+        name: "eyes.textures",
+        kind: Kind::Mutation,
+        summary: "Write the procedural textures of eye models as PNG: the iris (radial fibres, crypts, collarette, pupillary ruff, limbal ring, an optional heterochromia sector) and the sclera (tint and veins), laid out on the UVs of the eyeball's iris and sclera parts.",
+        limits: "Overwrites <id>.iris.png and <id>.sclera.png in out. Deterministic per model (seeded).",
+        input: eyes::textures_input,
+        output: eyes::textures_output,
+        run: eyes::textures,
     },
     CommandDef {
         name: "grid.chart",
@@ -193,6 +239,15 @@ pub static REGISTRY: &[CommandDef] = &[
         input: status_input,
         output: job_output,
         run: jobs::cancel,
+    },
+    CommandDef {
+        name: "jobs.list",
+        kind: Kind::Query,
+        summary: "The jobs in the jobs folder, newest first: id, command, state, submitted / started / finished times (ms since the epoch), progress while it runs, and the error or ok of a finished one.",
+        limits: "Lists one jobs folder (GAZEFORGE_JOBS, else <temp>/gazeforge-jobs); jobs are never deleted by the server.",
+        input: jobs_list_input,
+        output: jobs_list_output,
+        run: jobs::list,
     },
     CommandDef {
         name: "debug.slow",
@@ -410,6 +465,204 @@ pub static REGISTRY: &[CommandDef] = &[
         output: anim::output,
         run: anim::from_csv,
     },
+    CommandDef {
+        name: "store.import_pack",
+        kind: Kind::Job,
+        summary: "Import a dense base directory into a store as a pack (argv `store import-pack`); optional macro base sliders and pin height.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. The pack is content-addressed: the same directory gives the same reference.",
+        input: api::import_pack_input,
+        output: api::argv_output,
+        run: api::import_pack,
+    },
+    CommandDef {
+        name: "store.import_catalog",
+        kind: Kind::Job,
+        summary: "Import a directory of sparse targets on a pack's dense topology into a store as a catalog (argv `store import-catalog`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::import_catalog_input,
+        output: api::argv_output,
+        run: api::import_catalog,
+    },
+    CommandDef {
+        name: "store.import_game",
+        kind: Kind::Job,
+        summary: "Import a game base directory (made by base.build) for a pack into a store (argv `store import-game`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::import_game_input,
+        output: api::argv_output,
+        run: api::import_game,
+    },
+    CommandDef {
+        name: "store.import_eyerig",
+        kind: Kind::Job,
+        summary: "Import MakeHuman's helper eyeballs and their per-target deltas for a catalog into a store as an eye rig (argv `store import-eyerig`), so eyeballs can follow the character.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. A registration worse than 2 mm (median) is refused.",
+        input: api::import_eyerig_input,
+        output: api::argv_output,
+        run: api::import_eyerig,
+    },
+    CommandDef {
+        name: "base.build",
+        kind: Kind::Job,
+        summary: "Build a game base from a dense base: decimate to a target vertex count with angle limits, carry shapes, and optional nested levels of detail (argv `build-base`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. Takes minutes at the full dense size.",
+        input: api::build_input,
+        output: api::argv_output,
+        run: api::build,
+    },
+    CommandDef {
+        name: "export.obj",
+        kind: Kind::Job,
+        summary: "Place dense positions on a game base with a placement and write the game mesh as an .obj (argv `export-obj`).",
+        limits: "Fields are the argv options with _ for -; a field the chosen placement does not read is refused. The result is the argv command's JSON.",
+        input: api::obj_input,
+        output: api::argv_output,
+        run: api::export_obj,
+    },
+    CommandDef {
+        name: "export.glb",
+        kind: Kind::Job,
+        summary: "Export a character spec as a glb: the game mesh with its levels of detail, morph targets, eyes, and optionally the face rig, eyelid fitting and a body (argv `export-glb`).",
+        limits: "Fields are the argv options with _ for -; a field the spec's placement does not read is refused, and the lids_* fields need lids auto. The result is the argv command's JSON.",
+        input: api::glb_input,
+        output: api::argv_output,
+        run: api::export_glb,
+    },
+    CommandDef {
+        name: "lids.collide",
+        kind: Kind::Job,
+        summary: "Push dense eyelid vertices out of the eyeballs (argv `collide-lids`); the area inside the eyes before and after.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::collide_input,
+        output: api::argv_output,
+        run: api::collide,
+    },
+    CommandDef {
+        name: "macro.weights",
+        kind: Kind::Query,
+        summary: "The target weights a set of macro sliders produces under a macro definition (argv `macro weights`).",
+        limits: "Fields are the argv options with _ for -; sliders may be a JSON object. The result is the argv command's JSON.",
+        input: api::weights_input,
+        output: api::argv_output,
+        run: api::weights,
+    },
+    CommandDef {
+        name: "macro.labels",
+        kind: Kind::Query,
+        summary: "Label slider values with the macro definition's key values for one slider and write the table as .npy (argv `macro labels`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::labels_input,
+        output: api::argv_output,
+        run: api::labels,
+    },
+    CommandDef {
+        name: "gates.shell",
+        kind: Kind::Job,
+        summary: "Shell gates between two dense surfaces: folds, inner surfaces and roughness (argv `gates shell`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::shell_input,
+        output: api::argv_output,
+        run: api::shell,
+    },
+    CommandDef {
+        name: "gates.game",
+        kind: Kind::Job,
+        summary: "Game mesh gates on an exported .obj: triangle quality, UV health, census and seams (argv `gates game`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::game_input,
+        output: api::argv_output,
+        run: api::game,
+    },
+    CommandDef {
+        name: "gates.path",
+        kind: Kind::Job,
+        summary: "Continuity gate: walk a dense change in steps through a placement and refuse forward jumps of game vertices (argv `gates path`).",
+        limits: "Fields are the argv options with _ for -; plant adds a deliberate jump to prove the gate. A failing gate is the error gate_failed with the full report in details.",
+        input: api::path_input,
+        output: api::argv_output,
+        run: api::path,
+    },
+    CommandDef {
+        name: "gates.facing",
+        kind: Kind::Job,
+        summary: "Facing gate on a glb: no triangle faces against its vertex normals in the neutral and, with states all, in each morph state (argv `gates facing`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::facing_input,
+        output: api::argv_output,
+        run: api::facing,
+    },
+    CommandDef {
+        name: "gates.lids",
+        kind: Kind::Job,
+        summary: "Eyelid gate on a glb: no vertex inside an eyeball beyond the tolerance in the neutral and, with states all (the default), in each morph state (argv `gates lids`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::lids_input,
+        output: api::argv_output,
+        run: api::lids,
+    },
+    CommandDef {
+        name: "gates.rig",
+        kind: Kind::Job,
+        summary: "Face rig gate on a glb: the skin binds exactly at rest with sound weights, and each joint pose folds no more triangles (and, with eyes, puts no more lid vertices inside an eye) than the blend shape of the same name (argv `gates rig`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::rig_input,
+        output: api::argv_output,
+        run: api::rig,
+    },
+    CommandDef {
+        name: "wizards.list",
+        kind: Kind::Query,
+        summary: "The GUI wizards: guided tasks whose every step is one registry command (id, title, group, summary, step count).",
+        limits: "Developer wizards are listed only with developer true. A wizard adds no capability: each step runs the same command the CLI, HTTP and MCP run.",
+        input: wizards::list_input,
+        output: wizards::list_output,
+        run: wizards::list,
+    },
+    CommandDef {
+        name: "wizards.get",
+        kind: Kind::Query,
+        summary: "One wizard's definition: its steps, each with its command, kind, input schema, the fields a form shows (common or advanced, widget hints, bindings to run values and earlier steps) and what the step shows when it ends.",
+        limits: "Bindings: $run.NAME (a value given to wizards.start), $STEP.input.FIELD, $STEP.result.PATH, =TEXT (a literal).",
+        input: wizards::get_input,
+        output: wizards::get_output,
+        run: wizards::get,
+    },
+    CommandDef {
+        name: "wizards.start",
+        kind: Kind::Mutation,
+        summary: "Start a wizard run: a folder ROOT/runs/PROJECT/WIZARD-N holding steps/STEP per step (its input, its result or job) and the files the steps write ($dir); returns the run's state.",
+        limits: "Runs are resumable: wizards.state reads them back at any time; nothing is deleted.",
+        input: wizards::start_input,
+        output: wizards::run_output,
+        run: wizards::start,
+    },
+    CommandDef {
+        name: "wizards.state",
+        kind: Kind::Query,
+        summary: "A wizard run's state: per step open, running, done, failed or stale, the proposed input (bindings resolved), the input given, the result or error and the job id; a finished job's result is collected here.",
+        limits: "A step's state is read from its folder; editing an earlier step marks the later ones stale until they run again.",
+        input: wizards::state_input,
+        output: wizards::run_output,
+        run: wizards::state,
+    },
+    CommandDef {
+        name: "wizards.runs",
+        kind: Kind::Query,
+        summary: "A project's wizard runs, newest first: run id, wizard, start time and each step's state, so a client can resume one with wizards.state.",
+        limits: "Only runs whose run record reads are listed; a run of a wizard that no longer exists is skipped.",
+        input: wizards::runs_input,
+        output: wizards::runs_output,
+        run: wizards::runs,
+    },
+    CommandDef {
+        name: "wizards.step",
+        kind: Kind::Mutation,
+        summary: "Run one wizard step: its fields (hidden and bound fields not given take their bound values) are checked against the step command's schema and the command runs, or is submitted as a job; later steps that ran are marked stale.",
+        limits: "Steps run in order: a step needs every earlier non-optional step done. A job step returns at once; wizards.state collects its result.",
+        input: wizards::step_input,
+        output: wizards::run_output,
+        run: wizards::step,
+    },
 ];
 
 pub fn obj(properties: Value, required: &[&str]) -> Value {
@@ -540,9 +793,18 @@ fn status_input() -> Value {
     obj(json!({"id": {"type": "string", "minLength": 1}, "wait_s": {"type": "number", "minimum": 0, "maximum": 600}}), &["id"])
 }
 
+fn jobs_list_input() -> Value {
+    obj(json!({"limit": {"type": "integer", "minimum": 1, "description": "at most this many, newest first (default 50)"}}), &[])
+}
+
+fn jobs_list_output() -> Value {
+    shape(json!({"jobs_dir": {"type": "string"}, "total": {"type": "integer"}, "jobs": {"type": "array"}}))
+}
+
 fn job_output() -> Value {
     shape(json!({"id": {"type": "string"}, "command": {"type": "string"}, "state": {"type": "string"},
-                 "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]}}))
+                 "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]},
+                 "progress": {"type": "object", "description": "the latest stage, done, total and message the command reported; absent until it reports"}}))
 }
 
 fn slow_input() -> Value {
@@ -594,21 +856,33 @@ fn manifests<T: serde::de::DeserializeOwned>(store: &Store, kind: &str) -> Resul
         .collect()
 }
 
+fn imported(store: &Store, kind: &str, reference: &str) -> Value {
+    let path = store.root.join(kind).join(format!("{}.json", reference.trim_start_matches("sha256:")));
+    std::fs::metadata(path).and_then(|m| m.modified()).map_or(Value::Null, |t| json!(project::utc(t)))
+}
+
 fn store_list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let store = open_store(input)?;
     let packs: Vec<Value> = manifests::<PackManifest>(&store, "packs")?
         .into_iter()
-        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some()}))
+        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some(), "imported": imported(&store, "packs", &r)}))
         .collect();
     let catalogs: Vec<Value> = manifests::<CatalogManifest>(&store, "catalogs")?
         .into_iter()
-        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len()}))
+        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len(), "imported": imported(&store, "catalogs", &r)}))
         .collect();
     let games: Vec<Value> = manifests::<GameManifest>(&store, "game")?
         .into_iter()
-        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len()}))
+        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len(), "imported": imported(&store, "game", &r)}))
         .collect();
-    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games}))
+    let eyerigs: Vec<Value> = match store.root.join("eyerigs").is_dir() {
+        true => manifests::<Value>(&store, "eyerigs")?
+            .into_iter()
+            .map(|(r, m)| json!({"eyerig": r, "catalog": m["catalog"], "format": m["format"], "usable": m["format"] == gf_core::eyerig::FORMAT, "imported": imported(&store, "eyerigs", &r)}))
+            .collect(),
+        false => Vec::new(),
+    };
+    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games, "eyerigs": eyerigs}))
 }
 
 fn load_catalog(store: &Store, reference: &str) -> Result<CatalogManifest, ApiError> {

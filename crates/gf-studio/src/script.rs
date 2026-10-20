@@ -398,7 +398,7 @@ impl Offscreen {
 
     pub fn step(&mut self, step: &Value, out: &Path) -> Result<Value, String> {
         let op = step.get("op").and_then(Value::as_str).ok_or("each step needs op")?;
-        if op.starts_with("ui") || op.starts_with("cube_") {
+        if op.starts_with("ui") || op.starts_with("cube_") || op == "wizard" {
             return self.ui_step(op, step, out);
         }
         if op.starts_with("godot_") || (op == "source" && step.get("kind").and_then(Value::as_str) == Some("godot")) {

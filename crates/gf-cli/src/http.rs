@@ -49,8 +49,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             }
         }
     }
-    if length > MAX_BODY {
-        return Err(format!("body of {length} bytes is over the {MAX_BODY}-byte limit"));
+    let limit = if method == "POST" && path.split('?').next() == Some("/v1/upload") { gf_api::wizards::UPLOAD_LIMIT } else { MAX_BODY };
+    if length > limit {
+        return Err(format!("body of {length} bytes is over the {limit}-byte limit"));
     }
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
@@ -77,6 +78,8 @@ fn content_type(name: &str) -> Option<&'static str> {
         "css" => "text/css; charset=utf-8",
         "wasm" => "application/wasm",
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "glb" => "model/gltf-binary",
         "json" => "application/json",
         _ => return None,
     })
@@ -141,6 +144,19 @@ fn blob(path: &str, hex: &str) -> Served {
     }
 }
 
+fn wizard_file(ctx: &Ctx, path: &str) -> Served {
+    let (Some(run), Some(file)) = (query(path, "run"), query(path, "path")) else {
+        return not_found("GET /v1/wizard-file?run=<run id>&path=<a file of that run>".into());
+    };
+    match gf_api::wizards::run_file(ctx, &run, &file) {
+        Ok(p) => match (content_type(&p.display().to_string().to_ascii_lowercase()).filter(|k| k.starts_with("image/") || *k == "model/gltf-binary" || *k == "application/json"), std::fs::read(&p)) {
+            (Some(kind), Ok(body)) => Served { status: 200, content_type: kind, body, immutable: false },
+            _ => not_found(format!("{file}: not a file type this route serves")),
+        },
+        Err(e) => not_found(e.message),
+    }
+}
+
 fn serve_route(ctx: &Ctx, web: &Path, request: &Request) -> Served {
     let path = request.path.split('?').next().unwrap_or("");
     let allowed = loopback(&request.host) && request.origin.as_deref().is_none_or(loopback);
@@ -150,6 +166,9 @@ fn serve_route(ctx: &Ctx, web: &Path, request: &Request) -> Served {
         }
         if let Some(rest) = path.strip_prefix("/designer/") {
             return static_file(web, rest);
+        }
+        if path == "/v1/wizard-file" {
+            return wizard_file(ctx, &request.path);
         }
         if let Some(hex) = path.strip_prefix("/v1/blob/") {
             return blob(&request.path, hex);
@@ -167,11 +186,17 @@ fn route(ctx: &Ctx, request: &Request) -> Value {
     match (request.method.as_str(), path.strip_prefix("/v1/")) {
         ("GET", Some("commands")) => gf_api::call(ctx, "commands.list", &json!({})),
         ("GET", Some(rest)) if rest.starts_with("jobs/") => gf_api::call(ctx, "jobs.status", &json!({"id": &rest[5..]})),
+        ("POST", Some("upload")) => {
+            let (Some(run), Some(name)) = (query(&request.path, "run"), query(&request.path, "name")) else {
+                return gf_api::envelope("upload", Err(ApiError::invalid("POST /v1/upload?run=<run id>&name=<file name> with the file as the body")));
+            };
+            gf_api::envelope("upload", gf_api::wizards::upload(ctx, &run, &name, &request.body).map(|p| json!({"path": p.display().to_string(), "bytes": request.body.len()})))
+        }
         ("POST", Some(name)) if !name.is_empty() && !name.contains('/') => {
             let input = if request.body.iter().all(u8::is_ascii_whitespace) {
                 Ok(json!({}))
             } else {
-                serde_json::from_slice::<Value>(&request.body).map_err(|e| ApiError::invalid(format!("the body is not JSON: {e}")))
+                std::str::from_utf8(&request.body).map_err(|e| e.to_string()).and_then(gf_api::exactjson::text).map_err(|e| ApiError::invalid(format!("the body is not JSON: {e}")))
             };
             match input {
                 Ok(input) => gf_api::call(ctx, name, &input),

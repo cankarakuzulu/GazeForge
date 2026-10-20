@@ -23,6 +23,8 @@ struct U {
   box_min: vec4<f32>,
   box_max: vec4<f32>,
   col: vec4<f32>,
+  mat_col: vec4<f32>,
+  mat: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -33,6 +35,8 @@ struct U {
 @group(1) @binding(4) var<storage, read> uvs: array<f32>;
 @group(1) @binding(5) var<storage, read> eflag: array<u32>;
 @group(1) @binding(6) var<storage, read> verts: array<u32>;
+@group(2) @binding(0) var mat_tex: texture_2d<f32>;
+@group(2) @binding(1) var mat_samp: sampler;
 
 fn ival(x: f32) -> i32 { return i32(floor(x + 0.5)); }
 fn p3(i: u32) -> vec3<f32> { return vec3<f32>(pos[i * 3u], pos[i * 3u + 1u], pos[i * 3u + 2u]); }
@@ -75,6 +79,19 @@ fn shade(model: i32, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>) -> vec3<f32>
     }
   }
   return c;
+}
+
+fn glints(n: vec3<f32>, v: vec3<f32>, rough: f32) -> vec3<f32> {
+  let sh = 2.0 / max(rough * rough, 1e-4);
+  var s = vec3<f32>(0.0);
+  let count = ival(u.o0.z);
+  for (var i = 0; i < 4; i++) {
+    if (i >= count) { break; }
+    let l = u.light_dir[i].xyz;
+    let h = normalize(l + v);
+    s += u.light_col[i].xyz * pow(max(dot(n, h), 0.0), sh) * step(0.0, dot(n, l));
+  }
+  return s * (sh + 2.0) / 8.0;
 }
 
 fn clipped(p: vec3<f32>, skip: i32) -> bool {
@@ -209,6 +226,7 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
   } else if (mode == 2) {
     o.gcol = shade(2, normalize(vn), view_dir(p), u.base_col.xyz);
   }
+  if (u.mat.x > 0.5 && u.o3.z > 0.5) { o.uv = vec2<f32>(uvs[c * 2u], uvs[c * 2u + 1u]); }
   if (u.o3.w > 0.5) { o.eflags = eflag[t]; }
   o.clip = u.mvp * vec4<f32>(p, 1.0);
   return o;
@@ -216,6 +234,7 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
 
 @fragment
 fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32> {
+  let texel = textureSample(mat_tex, mat_samp, i.uv);
   let fw = fwidth(i.bary);
   if (clipped(i.vp, -1)) { discard; }
   let d = i.bary / max(fw, vec3<f32>(1e-6));
@@ -232,11 +251,20 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
   var n = normalize(i.vn);
   if (!front) { n = -n; }
   let v = view_dir(i.vp);
+  if (u.mat.x > 0.5 && u.mat.z > 0.5) {
+    if (!front) { discard; }
+    let fr = 0.04 + 0.96 * pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 5.0);
+    let s = (glints(n, v, u.mat.y) + hemi(reflect(-v, n))) * fr * exp2(u.o2.z);
+    return vec4<f32>(min(s, vec3<f32>(1.0)), clamp(u.mat_col.w * (1.0 - fr) + fr, 0.0, 1.0));
+  }
   let hl = 0.55 + 0.45 * abs(dot(n, v));
   let mode = ival(u.o0.x);
   let planes = ival(u.o4.x);
   let heat = u.o2.w;
-  let base = u.base_col.xyz;
+  var base = u.base_col.xyz;
+  if (u.mat.x > 0.5) {
+    base = u.mat_col.xyz * select(vec3<f32>(1.0), pow(texel.xyz, vec3<f32>(2.2)), u.mat.w > 0.5);
+  }
   var c = vec3<f32>(0.0);
   var lit = true;
   if (!front && planes > 0) {
@@ -251,9 +279,9 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
   } else if (mode == 2) {
     c = i.gcol;
   } else if (mode == 3) {
-    c = shade(2, n, v, base);
+    c = shade(select(2, 1, u.mat.x > 0.5), n, v, base);
   } else if (mode == 4) {
-    c = shade(3, n, v, base);
+    c = shade(select(3, 1, u.mat.x > 0.5), n, v, base);
   } else if (mode == 5) {
     c = matcap(n);
     lit = false;
@@ -276,6 +304,7 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
     c = select(vec3<f32>(0.55), checker(i.uv), u.o3.z > 0.5) * hl;
     lit = false;
   }
+  if (lit && u.mat.x > 0.5) { c += glints(n, v, u.mat.y) * 0.04; }
   if (lit) { c = pow(max(c * exp2(u.o2.z), vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)); }
   if (u.o2.x > 0.5 && !front && planes == 0) { c = mix(c, vec3<f32>(0.92, 0.10, 0.16), 0.65); }
   if (u.o2.y > 0.5 && u.o3.w > 0.5) {

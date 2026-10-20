@@ -32,7 +32,7 @@ fn set_eye_field(a: &mut EyeAdjust, f: usize, x: f64) {
 }
 
 fn no_eyeballs() -> EyeballSpec {
-    EyeballSpec { follow: er::FOLLOW_NONE.into(), rig: None, left: EyeAdjust::default(), right: EyeAdjust::default() }
+    EyeballSpec { follow: er::FOLLOW_NONE.into(), rig: None, model: None, left: EyeAdjust::default(), right: EyeAdjust::default() }
 }
 
 pub trait ShapeInput {
@@ -168,6 +168,36 @@ impl SliderPanel {
         let live = shape.live.eyeballs.clone().unwrap_or_else(no_eyeballs);
         let start = shape.start.eyeballs.clone().unwrap_or_else(no_eyeballs);
         let rig = live.rig.clone().or_else(|| shape.eyerig.clone());
+        if let Some(rig) = &rig {
+            let models = gf_core::eye_inventory::models();
+            let current = live.model.as_ref().map(|m| m.id.clone());
+            let shown = current.as_ref().and_then(|id| models.iter().find(|m| &m.id == id)).map_or("eyes file / none".to_string(), |m| m.name.clone());
+            let mut picked = current.clone();
+            egui::ComboBox::from_label("eye model").selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut picked, None, "eyes file / none");
+                let mut family = String::new();
+                for m in &models {
+                    if m.family != family {
+                        family = m.family.clone();
+                        ui.label(egui::RichText::new(&family).weak());
+                    }
+                    ui.selectable_value(&mut picked, Some(m.id.clone()), &m.name);
+                }
+            });
+            if picked != current {
+                let radius_mm = live.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
+                let s = EyeballSpec { model: picked.clone().map(|id| er::EyeModelChoice { id, radius_mm }), rig: Some(rig.clone()), ..live.clone() };
+                out.push(ShapeEvent::Preview(vec![Edit::Eyes(Some(s))]));
+                out.push(ShapeEvent::Commit(picked.map_or("no eye model".into(), |id| format!("eye model {id}"))));
+            }
+            if let Some(m) = &live.model {
+                let start_r = start.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
+                let with = |x: f64| vec![Edit::Eyes(Some(EyeballSpec { model: Some(er::EyeModelChoice { id: m.id.clone(), radius_mm: x }), ..live.clone() }))];
+                let spec = RowSpec { label: "eye radius mm", value: m.radius_mm, start: start_r, range: 5.0..=20.0, ends: None, hover: "eyeball radius in mm\nright click: back to the start value".into() };
+                slider_row(ui, spec, with, with(start_r), out);
+            }
+            ui.separator();
+        }
         let mut follow = live.follows();
         let toggle = ui
             .add_enabled(rig.is_some() || follow, egui::Checkbox::new(&mut follow, "follow the sockets"))

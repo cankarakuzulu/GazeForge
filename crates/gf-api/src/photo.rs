@@ -223,6 +223,22 @@ pub(crate) fn load_base(input: &Value) -> Result<Base, ApiError> {
     Ok(Base { store, dense, quads, tip })
 }
 
+pub(crate) fn ensure_base_landmarks(input: &Value, run: &Path, base: &Base) -> Result<(), ApiError> {
+    if run.join("base_landmarks.json").is_file() {
+        return Ok(());
+    }
+    let p = &base.dense.positions;
+    let normals = gates::vertex_normals(p, &base.quads);
+    dio::write_points(&run.join("base_positions.npy"), p).map_err(ApiError::internal)?;
+    dio::write_points(&run.join("base_normals.npy"), &normals).map_err(ApiError::internal)?;
+    worker(input, "photo_worker.py", "base", json!({}), run)?;
+    write_json(&run.join("base_landmarks.detected"), &json!({"by": "photo_worker.py base"}))
+}
+
+pub(crate) fn landmarks_detected(run: &Path) -> bool {
+    run.join("base_landmarks.detected").is_file()
+}
+
 pub(crate) fn landmark_vertices(run: &Path) -> Result<BTreeMap<usize, usize>, ApiError> {
     let v = read_json(&run.join("base_landmarks.json"))?;
     let map = v["vertices"].as_object().ok_or_else(|| ApiError::internal("base_landmarks.json has no vertices"))?;
@@ -263,14 +279,10 @@ pub fn register(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 return Err(ApiError::invalid(format!("{table} has no vertices object")));
             }
             write_json(&dest, &body)?;
+            let _ = std::fs::remove_file(run.join("base_landmarks.detected"));
         }
     }
-    if !run.join("base_landmarks.json").is_file() {
-        let normals = gates::vertex_normals(p, &base.quads);
-        dio::write_points(&run.join("base_positions.npy"), p).map_err(ApiError::internal)?;
-        dio::write_points(&run.join("base_normals.npy"), &normals).map_err(ApiError::internal)?;
-        worker(input, "photo_worker.py", "base", json!({}), &run)?;
-    }
+    ensure_base_landmarks(input, &run, &base)?;
     let base_lm = landmark_vertices(&run)?;
     let shell_lm = read_json(&run.join("shell_landmarks.json"))?;
     let mut src = Vec::new();
@@ -1117,6 +1129,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let out = f();
         let seconds = t0.elapsed().as_secs_f64();
         stages.push(json!({"stage": name, "seconds": seconds, "ok": out.is_ok()}));
+        crate::jobs::progress("stages", stages.len() as u64, 8, &format!("finished {name}"));
         let _ = log(stages);
         out.map_err(|e| {
             let mut details = if e.details.is_object() { e.details.clone() } else { json!({"detail": e.details.clone()}) };

@@ -157,6 +157,36 @@ pub fn evaluate_with_base(store: &Store, spec: &Spec, macro_source: Option<&Macr
     evaluate_traced(store, spec, macro_source).map(|(dense, base, report, _)| (dense, base, report))
 }
 
+pub const MODEL_GAZE: [f64; 3] = [0.0, -1.0, 0.0];
+
+pub fn model_eyes(store: &Store, spec: &Spec) -> Result<Option<Vec<Eye>>, String> {
+    match spec.eyeballs.as_ref() {
+        Some(eb) => model_eyes_for(store, &spec.base.catalog, eb),
+        None => Ok(None),
+    }
+}
+
+pub fn model_eyes_for(store: &Store, catalog: &str, eb: &gf_core::eyerig::EyeballSpec) -> Result<Option<Vec<Eye>>, String> {
+    let eb = eb.canonical();
+    let Some(choice) = eb.model.as_ref() else { return Ok(None) };
+    let rig_ref = eb.rig.as_deref().ok_or("eyeballs.model needs eyeballs.rig")?;
+    let rig = store.load_eyerig(rig_ref)?;
+    if rig.catalog != catalog {
+        return Err(format!("eye rig {rig_ref} belongs to catalog {}, not {catalog}", rig.catalog));
+    }
+    let model = gf_core::eye_inventory::model(&choice.id).ok_or_else(|| format!("eye model {:?} is not in the inventory", choice.id))?;
+    let shape = gf_geom::eyeball::EyeballShape { radius_mm: choice.radius_mm, ..model.shape };
+    let mesh = shape.mesh()?;
+    let mut eyes = Vec::new();
+    for helper in [&rig.helpers.left, &rig.helpers.right] {
+        let n = helper.len().max(1) as f64;
+        let centre = [0, 1, 2].map(|k| helper.iter().map(|p| p[k]).sum::<f64>() / n);
+        let placed = mesh.placed(centre, MODEL_GAZE)?;
+        eyes.push(gf_geom::lids::eye_from_mesh(centre, choice.radius_mm / 1000.0, MODEL_GAZE, &placed)?);
+    }
+    Ok(Some(eyes))
+}
+
 pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>) -> Result<(Vec<Eye>, Option<Vec<PlacedEye>>), String> {
     let spec = spec.canonical();
     let Some(eb) = spec.eyeballs.as_ref() else {

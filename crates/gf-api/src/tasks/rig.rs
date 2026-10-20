@@ -7,8 +7,8 @@ use gf_geom::lids;
 use gf_io::gltf;
 use serde_json::{Value, json};
 
-use crate::mesh_cmds::{from_gltf, lid_settings, verdict};
-use crate::{Options, need, only};
+use super::mesh::{from_gltf, lid_settings, verdict};
+use super::{Options, need, only};
 
 fn frame(p: Point) -> Point {
     [p[0], p[2], -p[1]]

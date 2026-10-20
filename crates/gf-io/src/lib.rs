@@ -4,6 +4,7 @@ pub mod dense;
 pub mod game_base;
 pub mod gltf;
 pub mod obj;
+pub mod png;
 pub mod store;
 
 use std::collections::BTreeSet;

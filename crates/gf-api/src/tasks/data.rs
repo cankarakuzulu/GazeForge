@@ -10,13 +10,13 @@ use gf_io::dense;
 use gf_io::store::Store;
 use serde_json::{Value, json};
 
-use crate::{Options, need, number, only};
+use super::{Options, need, number, only};
 
-const IMPORT_PACK_KEYS: &[&str] = &["store", "dense", "macro-base", "pin-top"];
-const IMPORT_CATALOG_KEYS: &[&str] = &["store", "targets", "pack"];
-const IMPORT_EYERIG_KEYS: &[&str] = &["store", "catalog", "makehuman", "macro"];
-const IMPORT_GAME_KEYS: &[&str] = &["store", "base", "pack"];
-const CREATE_KEYS: &[&str] = &[
+pub const IMPORT_PACK_KEYS: &[&str] = &["store", "dense", "macro-base", "pin-top"];
+pub const IMPORT_CATALOG_KEYS: &[&str] = &["store", "targets", "pack"];
+pub const IMPORT_EYERIG_KEYS: &[&str] = &["store", "catalog", "makehuman", "macro"];
+pub const IMPORT_GAME_KEYS: &[&str] = &["store", "base", "pack"];
+pub const CREATE_KEYS: &[&str] = &[
     "store",
     "pack",
     "catalog",
@@ -32,10 +32,10 @@ const CREATE_KEYS: &[&str] = &[
     "quantum-mm",
     "out",
 ];
-const VALIDATE_KEYS: &[&str] = &["store", "spec", "macro"];
-const EVALUATE_KEYS: &[&str] = &["store", "spec", "macro", "out", "precision"];
-const WEIGHTS_KEYS: &[&str] = &["macro", "targets", "sliders", "mode", "floor"];
-const LABELS_KEYS: &[&str] = &["macro", "slider", "values", "out", "mode"];
+pub const VALIDATE_KEYS: &[&str] = &["store", "spec", "macro"];
+pub const EVALUATE_KEYS: &[&str] = &["store", "spec", "macro", "out", "precision"];
+pub const WEIGHTS_KEYS: &[&str] = &["macro", "targets", "sliders", "mode", "floor"];
+pub const LABELS_KEYS: &[&str] = &["macro", "slider", "values", "out", "mode"];
 
 pub fn run(group: &str, verb: &str, opts: &Options) -> Result<Value, String> {
     match (group, verb) {

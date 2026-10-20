@@ -961,10 +961,12 @@ pub fn from_video(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     args[k] = v.clone();
                 }
             }
+            crate::jobs::progress("track", 0, 1, "face landmarker over the frames");
             let r = photo::worker(input, "anim_worker.py", "track", args, &run)?;
             PathBuf::from(r["take"].as_str().unwrap_or_default())
         }
     };
+    crate::jobs::progress("process", 0, 1, "calibrate, smooth, retarget");
     let take = read_take(&take_path)?;
     let mut p = process(&take, input, doc.as_ref())?;
     p.report["take"] = json!(take_path.display().to_string());

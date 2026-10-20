@@ -729,10 +729,13 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let same = std::fs::canonicalize(table).ok().zip(std::fs::canonicalize(&dest).ok()).is_some_and(|(a, b)| a == b);
         if !same {
             write_json(&dest, &read_json(Path::new(table))?)?;
+            let _ = std::fs::remove_file(run.join("base_landmarks.detected"));
         }
     }
-    let lm = photo::landmark_vertices(&run)?;
     let base = photo::load_base(input)?;
+    photo::ensure_base_landmarks(input, &run, &base)?;
+    let table_source = if photo::landmarks_detected(&run) { "detected" } else if opt(input, "base_landmarks").is_some() { "given" } else { "run" };
+    let lm = photo::landmark_vertices(&run)?;
     let p = &base.dense.positions;
     let tris = &base.dense.triangles;
     let tip = base.tip;
@@ -992,7 +995,8 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "term_weights": {"landmarks": wl, "outline": wo, "prior": wprior, "symmetry": wsym, "ridge": ridge, "rounds": rounds, "pose_prior_deg": pose_sigma, "sparsity": sparsity, "extra_landmark_weight": extra_lm},
         "samples": {"prior": prior_rows.len(), "symmetry_pairs": sym_pairs.len()},
         "shell_gate": shell, "rounds": log, "term_scales": scales, "load_seconds": load_seconds, "seconds": started.elapsed().as_secs_f64(),
-        "fitted": run.join("fitted_dense.npy").display().to_string()
+        "fitted": run.join("fitted_dense.npy").display().to_string(),
+        "base_landmarks": {"source": table_source, "warning": (table_source == "detected").then_some("detected by the landmarker on a render of the eyeless base: several mm off at the lids and the chin; a table detected on the base with eyes (base_landmarks) fits better")}
     });
     if let Some(st) = &surface {
         report["shell"] = shell_report(st, &x);
@@ -1061,6 +1065,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let mut stages: Vec<Value> = Vec::new();
     let mut step = |name: &str, out: Result<Value, ApiError>, t0: Instant| -> Result<Value, ApiError> {
         stages.push(json!({"stage": name, "seconds": t0.elapsed().as_secs_f64(), "ok": out.is_ok()}));
+        crate::jobs::progress("stages", stages.len() as u64, 6, &format!("finished {name}"));
         let _ = write_json(&run.join("stages.json"), &json!({"stages": stages}));
         out.map_err(|e| {
             let mut details = if e.details.is_object() { e.details.clone() } else { json!({"detail": e.details.clone()}) };

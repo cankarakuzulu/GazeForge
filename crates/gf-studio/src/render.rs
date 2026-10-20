@@ -7,7 +7,8 @@ use crate::viewer::{self, Camera, Matrices, Rect, SlotState, V3, ViewerState, ad
 pub const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SAMPLES: u32 = 4;
-const UFLOATS: usize = 152;
+const UFLOATS: usize = 160;
+const LIT_MODES: [usize; 4] = [0, 1, 3, 4];
 const USTRIDE: u64 = 768;
 const USLOTS: u64 = 256;
 
@@ -114,6 +115,17 @@ struct GpuEyes {
     bind: wgpu::BindGroup,
     pos: wgpu::Buffer,
     nrm: wgpu::Buffer,
+    key: u64,
+    model: Option<String>,
+    parts: Vec<(u32, u32, String)>,
+}
+
+struct GpuLook {
+    part: String,
+    bind: Option<wgpu::BindGroup>,
+    colour: [f32; 4],
+    roughness: f32,
+    glass: bool,
 }
 
 struct SlotTarget {
@@ -151,6 +163,7 @@ enum LinePipe {
 enum Draw {
     Mesh(MeshPipe, u32, usize),
     Eyes(u32),
+    EyePart(u32, usize, bool),
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
 }
@@ -170,7 +183,12 @@ pub struct FrameStats {
 
 pub struct Renderer {
     g1: wgpu::BindGroupLayout,
+    g2: wgpu::BindGroupLayout,
     mesh: [wgpu::RenderPipeline; 4],
+    glass: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    white: Option<wgpu::BindGroup>,
+    looks: std::collections::HashMap<String, Vec<GpuLook>>,
     point: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     cap: wgpu::RenderPipeline,
@@ -212,6 +230,46 @@ fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+fn material_bind(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, width: usize, height: usize, rgba: &[u8]) -> wgpu::BindGroup {
+    let levels = (width.max(height) as f64).log2().floor() as u32 + 1;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("material"),
+        size: wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+        mip_level_count: levels,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let (mut w, mut h, mut level) = (width, height, rgba.to_vec());
+    for mip in 0..levels {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: mip, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &level,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+            wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        );
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0u8; nw * nh * 4];
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..4 {
+                    let at = |xx: usize, yy: usize| level[((yy.min(h - 1)) * w + xx.min(w - 1)) * 4 + c] as u32;
+                    next[(y * nw + x) * 4 + c] = ((at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1) + 2) / 4) as u8;
+                }
+            }
+        }
+        (w, h, level) = (nw, nh, next);
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("material"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) }],
+    })
+}
+
 impl Renderer {
     pub fn new(device: &wgpu::Device) -> Renderer {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("view.wgsl"), source: wgpu::ShaderSource::Wgsl(include_str!("view.wgsl").into()) });
@@ -225,7 +283,20 @@ impl Renderer {
             }],
         });
         let g1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mesh"), entries: &(0..7).map(storage_entry).collect::<Vec<_>>() });
-        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("mesh"), bind_group_layouts: &[Some(&g0), Some(&g1)], immediate_size: 0 });
+        let g2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
+        });
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("mesh"), bind_group_layouts: &[Some(&g0), Some(&g1), Some(&g2)], immediate_size: 0 });
+        let point_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("points"), bind_group_layouts: &[Some(&g0), Some(&g1)], immediate_size: 0 });
         let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("lines"), bind_group_layouts: &[Some(&g0)], immediate_size: 0 });
         let face = |compare, pass_op| wgpu::StencilFaceState { compare, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op };
         let ds = |write: bool, compare: wgpu::CompareFunction, stencil: wgpu::StencilState, bias: wgpu::DepthBiasState| {
@@ -237,6 +308,8 @@ impl Renderer {
         let target = |blend: Option<wgpu::BlendState>, write_mask| [Some(wgpu::ColorTargetState { format: COLOR, blend, write_mask })];
         let gl_alpha = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add };
         let blend = Some(wgpu::BlendState { color: gl_alpha, alpha: gl_alpha });
+        let premultiplied = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add };
+        let over = Some(wgpu::BlendState { color: premultiplied, alpha: premultiplied });
         let make = |label: &str, layout: &wgpu::PipelineLayout, vs: &str, fs: &str, topology, buffers: &[wgpu::VertexBufferLayout], depth, targets: &[Option<wgpu::ColorTargetState>]| {
             let mut desc = wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -271,7 +344,17 @@ impl Renderer {
             ),
             make("mesh xray", &mesh_layout, "vs_mesh", "fs_mesh", tri, &[], ds(false, wgpu::CompareFunction::Greater, no_stencil.clone(), no_bias), &target(blend, all)),
         ];
-        let point = make("points", &mesh_layout, "vs_point", "fs_point", tri, &[], ds(true, wgpu::CompareFunction::LessEqual, no_stencil.clone(), no_bias), &target(None, all));
+        let glass = make("mesh glass", &mesh_layout, "vs_mesh", "fs_mesh", tri, &[], ds(false, wgpu::CompareFunction::LessEqual, no_stencil.clone(), no_bias), &target(over, all));
+        let point = make("points", &point_layout, "vs_point", "fs_point", tri, &[], ds(true, wgpu::CompareFunction::LessEqual, no_stencil.clone(), no_bias), &target(None, all));
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         let vb = [wgpu::VertexBufferLayout { array_stride: 12, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x3] }];
         let lines = make("lines", &line_layout, "vs_line", "fs_line", wgpu::PrimitiveTopology::LineList, &vb, ds(false, wgpu::CompareFunction::Always, no_stencil.clone(), no_bias), &target(None, all));
         let cap = make(
@@ -294,7 +377,12 @@ impl Renderer {
         let line_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("lines"), size: line_cap, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         Renderer {
             g1,
+            g2,
             mesh,
+            glass,
+            sampler,
+            white: None,
+            looks: std::collections::HashMap::new(),
             point,
             lines,
             cap,
@@ -327,7 +415,55 @@ impl Renderer {
         }
     }
 
+    fn make_eyes(&self, device: &wgpu::Device, e: &crate::session::EyeMesh) -> GpuEyes {
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let buf = |label: &str, bytes: Vec<u8>| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage });
+        let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
+        let corner: Vec<f32> = if e.uvs.len() == verts * 2 { e.indices.iter().flat_map(|&i| [e.uvs[i as usize * 2], e.uvs[i as usize * 2 + 1]]).collect() } else { vec![0.0; tri * 6] };
+        let entries = [
+            buf("eye indices", u32_bytes(&e.indices)),
+            buf("eye positions", f32_bytes(&e.positions)),
+            buf("eye normals", f32_bytes(&e.normals)),
+            buf("eye reference", f32_bytes(&e.positions)),
+            buf("eye uvs", f32_bytes(&corner)),
+            buf("eye flags", u32_bytes(&vec![0; tri])),
+            buf("eye verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
+        ];
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("eyes"),
+            layout: &self.g1,
+            entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
+        });
+        let [_, pos, nrm, ..] = entries;
+        let parts = e.parts.iter().map(|p| (p.first as u32, p.count as u32, p.name.clone())).collect();
+        GpuEyes { tri: tri as u32, bind, pos, nrm, key: e.key, model: e.model.clone(), parts }
+    }
+
+    fn ensure_materials(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: Option<&str>) {
+        if self.white.is_none() {
+            self.white = Some(material_bind(device, queue, &self.g2, &self.sampler, 1, 1, &[255; 4]));
+        }
+        let Some(id) = model else { return };
+        if self.looks.contains_key(id) {
+            return;
+        }
+        let Some(m) = gf_core::eye_inventory::model(id) else { return };
+        let Ok(parts) = gf_api::eyes::look(&m) else { return };
+        let looks = parts
+            .into_iter()
+            .map(|p| GpuLook {
+                part: p.part.to_string(),
+                bind: p.texture.map(|t| material_bind(device, queue, &self.g2, &self.sampler, t.width, t.height, &t.rgba)),
+                colour: p.colour,
+                roughness: p.roughness,
+                glass: p.transmission.is_some(),
+            })
+            .collect();
+        self.looks.insert(id.to_string(), looks);
+    }
+
     pub fn sync_head(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, head: &Head, uvs_changed: bool) {
+        self.ensure_materials(device, queue, head.eyes.as_ref().and_then(|e| e.model.as_deref()));
         let fresh = self.head.as_ref().is_none_or(|g| g.n != head.n || g.lods.len() != head.lods.len());
         if fresh {
             let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
@@ -355,27 +491,14 @@ impl Renderer {
                     GpuLod { tri: l.triangles() as u32, verts: l.verts.len() as u32, uvs, flags, bind }
                 })
                 .collect();
-            let eyes = head.eyes.as_ref().filter(|e| !e.indices.is_empty()).map(|e| {
-                let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
-                let entries = [
-                    buf("eye indices", u32_bytes(&e.indices)),
-                    buf("eye positions", f32_bytes(&e.positions)),
-                    buf("eye normals", f32_bytes(&e.normals)),
-                    buf("eye reference", f32_bytes(&e.positions)),
-                    buf("eye uvs", f32_bytes(&vec![0.0; tri * 6])),
-                    buf("eye flags", u32_bytes(&vec![0; tri])),
-                    buf("eye verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
-                ];
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("eyes"),
-                    layout: &self.g1,
-                    entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
-                });
-                let [_, pos, nrm, ..] = entries;
-                GpuEyes { tri: tri as u32, bind, pos, nrm }
-            });
+            let eyes = head.eyes.as_ref().filter(|e| !e.indices.is_empty()).map(|e| self.make_eyes(device, e));
             self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes });
             return;
+        }
+        let want = head.eyes.as_ref().filter(|e| !e.indices.is_empty());
+        if want.map(|e| e.key) != self.head.as_ref().and_then(|g| g.eyes.as_ref()).map(|e| e.key) {
+            let eyes = want.map(|e| self.make_eyes(device, e));
+            self.head.as_mut().expect("checked above").eyes = eyes;
         }
         let g = self.head.as_mut().expect("checked above");
         if g.revision != head.revision {
@@ -527,14 +650,30 @@ impl Renderer {
             if has_head {
                 first.draws.push(Draw::Mesh(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, base_chunk, lod));
             }
-            if o.eyes && self.head.as_ref().is_some_and(|g| g.eyes.is_some()) {
+            if o.eyes && let Some(e) = self.head.as_ref().and_then(|g| g.eyes.as_ref()) {
                 let mut u = base;
                 u[72..75].copy_from_slice(&[0.93f32, 0.93, 0.95].map(|x| x.powf(2.2)));
                 u[88] = 0.0;
                 u[92] = 0.0;
                 u[96..98].copy_from_slice(&[0.0, 0.0]);
                 u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, 0.0]);
-                first.draws.push(Draw::Eyes(chunk(u, &mut uni)));
+                let looks = e.model.as_ref().and_then(|m| self.looks.get(m)).filter(|_| LIT_MODES.contains(&slot.mode) && !e.parts.is_empty());
+                match looks {
+                    Some(looks) => {
+                        u[88] = slot.mode as f32;
+                        let mut glass = Vec::new();
+                        for (k, (_, _, name)) in e.parts.iter().enumerate() {
+                            let Some(l) = looks.iter().find(|l| &l.part == name) else { continue };
+                            let mut pu = u;
+                            pu[152..156].copy_from_slice(&l.colour);
+                            pu[156..160].copy_from_slice(&[1.0, l.roughness, if l.glass { 1.0 } else { 0.0 }, if l.bind.is_some() { 1.0 } else { 0.0 }]);
+                            let d = Draw::EyePart(chunk(pu, &mut uni), k, l.glass);
+                            if l.glass { glass.push(d) } else { first.draws.push(d) }
+                        }
+                        first.draws.extend(glass);
+                    }
+                    None => first.draws.push(Draw::Eyes(chunk(u, &mut uni))),
+                }
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
@@ -654,6 +793,7 @@ impl Renderer {
             );
         }
         let bg = background(st.opts.dark);
+        let white = self.white.as_ref();
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         let (mut draws, mut pass_count) = (0usize, 0usize);
         for (r, passes) in &plans {
@@ -693,6 +833,7 @@ impl Renderer {
                             pass.set_pipeline(&self.mesh[i]);
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &l.bind, &[]);
+                            pass.set_bind_group(2, white.expect("material default"), &[]);
                             pass.draw(0..l.tri * 3, 0..1);
                         }
                         Draw::Eyes(c) => {
@@ -700,7 +841,18 @@ impl Renderer {
                             pass.set_pipeline(&self.mesh[0]);
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &e.bind, &[]);
+                            pass.set_bind_group(2, white.expect("material default"), &[]);
                             pass.draw(0..e.tri * 3, 0..1);
+                        }
+                        Draw::EyePart(c, k, glass) => {
+                            let e = self.head.as_ref().and_then(|g| g.eyes.as_ref()).expect("eyes");
+                            let (first, count, name) = &e.parts[*k];
+                            let bind = e.model.as_ref().and_then(|m| self.looks.get(m)).and_then(|ls| ls.iter().find(|l| &l.part == name)).and_then(|l| l.bind.as_ref());
+                            pass.set_pipeline(if *glass { &self.glass } else { &self.mesh[0] });
+                            pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
+                            pass.set_bind_group(1, &e.bind, &[]);
+                            pass.set_bind_group(2, bind.or(white).expect("material default"), &[]);
+                            pass.draw(first * 3..(first + count) * 3, 0..1);
                         }
                         Draw::Points(c, lod) => {
                             let g = self.head.as_ref().expect("head");

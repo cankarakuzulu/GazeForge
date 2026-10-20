@@ -3,6 +3,7 @@
 
 pub mod cancel;
 pub mod decimate;
+pub mod eyeball;
 pub mod face_chart;
 pub mod lids;
 pub mod placement;

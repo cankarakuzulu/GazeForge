@@ -16,6 +16,25 @@ struct EyeEntry {
     gaze: [f64; 3],
     vertices: Vec<[f64; 3]>,
     triangles: Vec<[u32; 3]>,
+    #[serde(default)]
+    parts: Vec<crate::eyeball::Part>,
+    #[serde(default)]
+    uvs: Vec<[f64; 2]>,
+}
+
+const SURFACE_PARTS: [&str; 2] = ["sclera", "cornea"];
+
+impl EyeEntry {
+    fn surface(&self) -> Vec<[u32; 3]> {
+        if self.parts.is_empty() {
+            return self.triangles.clone();
+        }
+        self.parts
+            .iter()
+            .filter(|p| SURFACE_PARTS.contains(&p.name.as_str()))
+            .flat_map(|p| self.triangles.iter().skip(p.first_triangle).take(p.triangles).copied())
+            .collect()
+    }
 }
 
 const POLAR_STEPS: usize = 180;
@@ -31,6 +50,8 @@ pub struct Eye {
     table: Vec<f64>,
     pub vertices: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,
+    pub uvs: Vec<[f64; 2]>,
+    pub parts: Vec<crate::eyeball::Part>,
 }
 
 fn unit(v: [f64; 3]) -> [f64; 3] {
@@ -86,12 +107,13 @@ impl Eye {
         let helper = if gaze[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
         let side = unit(cross(gaze, helper));
         let up = cross(gaze, side);
-        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone() };
+        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone(), uvs: entry.uvs.clone(), parts: entry.parts.clone() };
+        let front: Vec<[u32; 3]> = entry.surface().into_iter().filter(|t| t.iter().any(|&i| dot(sub(entry.vertices[i as usize], entry.centre), gaze) >= 0.0)).collect();
         let mut table = vec![0.0; (POLAR_STEPS + 1) * AZIMUTH_STEPS];
         for i in 0..=POLAR_STEPS {
             for j in 0..AZIMUTH_STEPS {
                 let dir = eye.direction(i as f64 * 90.0 / POLAR_STEPS as f64, j as f64 * 360.0 / AZIMUTH_STEPS as f64);
-                table[i * AZIMUTH_STEPS + j] = outermost(entry.centre, dir, &entry.vertices, &entry.triangles).unwrap_or(entry.radius);
+                table[i * AZIMUTH_STEPS + j] = outermost(entry.centre, dir, &entry.vertices, &front).unwrap_or(entry.radius);
             }
         }
         eye.table = table;
@@ -120,7 +142,7 @@ impl Eye {
                 if l <= 0.0 {
                     return unit(out);
                 }
-                let s = if dot(m, out) < 0.0 { -1.0 / l } else { 1.0 / l };
+                let s = if self.parts.is_empty() && dot(m, out) < 0.0 { -1.0 / l } else { 1.0 / l };
                 m.map(|x| x * s)
             })
             .collect()
@@ -141,6 +163,8 @@ impl Eye {
             table: self.table.iter().map(|t| t * scale).collect(),
             vertices: self.vertices.iter().map(|&p| place(p)).collect(),
             triangles: self.triangles.clone(),
+            uvs: self.uvs.clone(),
+            parts: self.parts.clone(),
         }
     }
 
@@ -169,6 +193,10 @@ impl Eye {
         let high = at(i0 + 1, j0) * (1.0 - tj) + at(i0 + 1, j1) * tj;
         Some(low * (1.0 - ti) + high * ti)
     }
+}
+
+pub fn eye_from_mesh(centre: [f64; 3], radius: f64, gaze: [f64; 3], mesh: &crate::eyeball::EyeballMesh) -> Result<Eye, String> {
+    Eye::new(&EyeEntry { centre, radius, gaze, vertices: mesh.positions.clone(), triangles: mesh.triangles.clone(), parts: mesh.parts.clone(), uvs: mesh.uvs.clone() })
 }
 
 pub fn eyes_from_json(text: &str) -> Result<Vec<Eye>, String> {
@@ -640,7 +668,7 @@ mod tests {
                 triangles.push([ring(r, s), ring(r + 1, s + 1), ring(r, s + 1)]);
             }
         }
-        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles }
+        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles, parts: Vec::new(), uvs: Vec::new() }
     }
 
     #[test]
@@ -689,6 +717,8 @@ mod tests {
             gaze: rot(entry.gaze),
             vertices: entry.vertices.iter().map(|&p| place(p)).collect(),
             triangles: entry.triangles.clone(),
+            parts: Vec::new(),
+            uvs: Vec::new(),
         })
         .unwrap();
         assert_eq!(moved.centre, place(entry.centre));
@@ -767,5 +797,28 @@ mod tests {
         let stats = clear_game(&mut game, &mesh, &[false; 3], &[eye], |_| -0.002, &settings);
         assert_eq!(stats.short_before, 0);
         assert_eq!(game, start);
+    }
+
+    #[test]
+    fn a_parted_eyes_vertex_normals_follow_the_winding_even_where_they_face_the_centre() {
+        let c = [0.03, -0.1, 1.5];
+        let mesh = crate::eyeball::EyeballShape::default().mesh().unwrap().placed(c, [0.0, -1.0, 0.0]).unwrap();
+        let eye = eye_from_mesh(c, 0.012, [0.0, -1.0, 0.0], &mesh).unwrap();
+        let n = eye.vertex_normals();
+        let mut facing_in = 0;
+        for t in &eye.triangles {
+            let [a, b, d] = t.map(|i| eye.vertices[i as usize]);
+            let f = cross(sub(b, a), sub(d, a));
+            if length(f) < 1e-18 {
+                continue;
+            }
+            for &i in t {
+                assert!(dot(f, n[i as usize]) > 0.0);
+            }
+            if dot(f, sub(a, c)) < 0.0 {
+                facing_in += 1;
+            }
+        }
+        assert!(facing_in > 0, "the chamber disc faces the centre, so the test reaches the case");
     }
 }
