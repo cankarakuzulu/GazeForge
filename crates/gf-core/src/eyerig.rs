@@ -7,7 +7,7 @@ use gf_geom::lids::Eye;
 use crate::fit::{self, Point, Similarity, add, dot, norm, scale, sub};
 use crate::head::HeadOnly;
 
-pub const FORMAT: &str = "gazeforge.eyerig/1";
+pub const FORMAT: &str = "gazeforge.eyerig/2";
 pub const FOLLOW_HELPER: &str = "makehuman-helper/1";
 pub const FOLLOW_NONE: &str = "none";
 pub const OFFSET_MM_RANGE: f64 = 15.0;
@@ -23,11 +23,24 @@ pub struct Sides<T> {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Registration {
+    pub shift_m: Point,
+    pub skin_vertices: usize,
+    pub skin_p50_mm: f64,
+    pub skin_p95_mm: f64,
+    pub macro_mode: Option<String>,
+    pub macro_files_applied: usize,
+    pub macro_files_missing: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EyeRigManifest {
     pub format: String,
     pub catalog: String,
     pub source: String,
     pub axes: String,
+    pub registration: Registration,
     pub helpers: Sides<Vec<Point>>,
     pub targets: BTreeMap<String, Sides<Option<Vec<Point>>>>,
     pub missing: Vec<String>,
@@ -140,15 +153,6 @@ pub fn helper_sum(rig: &EyeRigManifest, terms: &[(&str, f64)]) -> Sides<Vec<Poin
     out
 }
 
-pub fn centred_helper(helper: &[Point], eye_centre: Point) -> Vec<Point> {
-    let mut mean = [0.0; 3];
-    for p in helper {
-        mean = add(mean, *p);
-    }
-    let shift = sub(eye_centre, scale(mean, 1.0 / helper.len().max(1) as f64));
-    helper.iter().map(|p| add(*p, shift)).collect()
-}
-
 pub struct EyeFrame {
     pub centre: Point,
     pub out: Point,
@@ -197,7 +201,7 @@ pub fn adjustment(frame: &EyeFrame, adjust: &EyeAdjust) -> Similarity {
     let [pitch, yaw, roll] = adjust.rotation_deg;
     let rotation = rotation_only(axis_angle(cross(frame.forward, frame.up), pitch))
         .then(&rotation_only(axis_angle(cross(frame.forward, frame.out), yaw)))
-        .then(&rotation_only(axis_angle(frame.forward, roll)));
+        .then(&rotation_only(axis_angle(cross(frame.up, frame.out), roll)));
     let about = Similarity { scale: adjust.scale, rotation: rotation.rotation, translation: [0.0; 3] };
     let offset = [0, 1, 2].map(|k| (adjust.offset_mm[0] * frame.out[k] + adjust.offset_mm[1] * frame.up[k] + adjust.offset_mm[2] * frame.forward[k]) / 1000.0);
     let c = frame.centre;
@@ -257,15 +261,15 @@ pub fn place_eyes(
         let transform = match rig {
             Some(rig) => {
                 let pick = |s: Sides<Vec<Point>>| if side == 0 { s.left } else { s.right };
-                let base = centred_helper(if side == 0 { &rig.helpers.left } else { &rig.helpers.right }, eye.centre);
+                let base = if side == 0 { &rig.helpers.left } else { &rig.helpers.right };
                 let mut delta = pick(helper_sum(rig, &terms));
                 if let Some((t, head)) = pin {
-                    let pinned = head.pin_points(&base, &pick(helper_sum(rig, &changes)), &t.coef, t.head_scale);
+                    let pinned = head.pin_points(base, &pick(helper_sum(rig, &changes)), &t.coef, t.head_scale);
                     for (d, p) in delta.iter_mut().zip(pinned) {
                         *d = add(*d, p);
                     }
                 }
-                eye_transform(&base, &delta, &frame, adjust)?
+                eye_transform(base, &delta, &frame, adjust)?
             }
             None => (!adjust.is_identity()).then(|| adjustment(&frame, adjust)),
         };
@@ -332,6 +336,16 @@ mod tests {
             moved.push(tip);
         }
         assert!((moved[0][0] + moved[1][0]).abs() < 1e-12 && (moved[0][1] - moved[1][1]).abs() < 1e-12 && (moved[0][2] - moved[1][2]).abs() < 1e-12);
+        let rolled = EyeAdjust { rotation_deg: [10.0, 15.0, 7.0], ..adj };
+        let off = |x: f64| {
+            let c = [x, -0.12, 1.49];
+            let t = adjustment(&eye_frame(c, [0.0, -1.0, 0.0]), &rolled);
+            sub(t.apply(add(c, [x.signum() * 0.004, -0.010, 0.005])), c)
+        };
+        let (l, r) = (off(0.03), off(-0.03));
+        assert!((l[0] + r[0]).abs() < 1e-12 && (l[1] - r[1]).abs() < 1e-12 && (l[2] - r[2]).abs() < 1e-12, "roll mirrors too: {l:?} vs {r:?}");
+        let up = sub(adjustment(&eye_frame([0.03, -0.12, 1.49], [0.0, -1.0, 0.0]), &EyeAdjust { rotation_deg: [0.0, 0.0, 10.0], ..EyeAdjust::default() }).apply([0.03, -0.12, 1.50]), [0.03, -0.12, 1.49]);
+        assert!(up[0] > 0.0, "roll +10 turns the eye's up toward its out side: {up:?}");
     }
 
     #[test]

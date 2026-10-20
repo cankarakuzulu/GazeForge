@@ -131,7 +131,7 @@ impl Spec {
             }
         }
         if let Some(e) = &self.eyeballs {
-            out.extend(e.problems());
+            out.extend(e.canonical().problems());
         }
         out
     }

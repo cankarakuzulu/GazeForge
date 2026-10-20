@@ -1059,7 +1059,7 @@ pub fn rig_face(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let neck = fr::mean(seam.iter().map(|&g| rest[g as usize]));
     let hinge = gf_core::rig::character_hinge(&loaded.dense.positions, &dense, &base_rig.hinge);
     let (eye_left, eye_right, eye_source) = if eye_centres.len() == 2 {
-        (eye_centres[0], eye_centres[1], "eyes file")
+        (eye_centres[0], eye_centres[1], if spec.eyeballs.is_some() { "eyes file, placed for the character" } else { "eyes file" })
     } else {
         let (l, r) = fr::eye_estimate(&dense);
         (l, r, "estimated from the eye corners (no eyes file)")

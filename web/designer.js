@@ -33,7 +33,7 @@ const D = {
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
   panelHooks: new Map(), pendingVis: new Map(),
-  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [],
+  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [],
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
 };
 window.gfDesigner = D;
@@ -359,8 +359,9 @@ function settleInput() {
   return input;
 }
 
-function setEyeballs(spec) {
+function setEyeballs(spec, origin) {
   D.eyeballs = spec ? JSON.parse(JSON.stringify(spec)) : null;
+  for (const cb of D.eyeListeners) { try { cb(origin); } catch (e) { console.error(e); } }
   notify("slider");
   scheduleDirty();
   scheduleSettle();
@@ -567,11 +568,11 @@ function buildSliders() {
   $("search").addEventListener("input", filter);
   cats.addEventListener("change", filter);
   $("reset").addEventListener("click", () => {
-    const before = D.w.slice(), mBefore = { ...D.macroW };
-    const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart };
-    const apply = (w, m) => setWeights(w.map((x, i) => [i, x]), m);
-    apply(after, mAfter);
-    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore), redo: () => apply(after, mAfter) });
+    const before = D.w.slice(), mBefore = { ...D.macroW }, eBefore = D.eyeballs;
+    const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart }, eAfter = D.start.eyeballs ?? null;
+    const apply = (w, m, e) => { setWeights(w.map((x, i) => [i, x]), m); if (JSON.stringify(e) !== JSON.stringify(D.eyeballs)) setEyeballs(e); };
+    apply(after, mAfter, eAfter);
+    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore, eBefore), redo: () => apply(after, mAfter, eAfter) });
   });
 }
 
@@ -1275,7 +1276,8 @@ function makeApi(panelId) {
     pushUndo,
     requestRender: () => request(false),
     grid: gridApi(),
-    eyes: { get: () => (D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null), set: setEyeballs, rig: () => D.eyerig, placed: () => D.eyesPlaced, hasEyes: () => !!D.eyeBase?.length },
+    eyes: { get: () => (D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null), set: setEyeballs, rig: () => D.eyerig, placed: () => D.eyesPlaced, hasEyes: () => !!D.eyeBase?.length,
+            onChange: (cb) => { if (typeof cb === "function") D.eyeListeners.push(cb); } },
     panel: panelId,
   };
 }

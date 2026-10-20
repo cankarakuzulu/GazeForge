@@ -24,7 +24,7 @@ window.GF.registerPanel({
       const s = E.get() || { follow: "none", left: blank(), right: blank() };
       return { ...s, left: full(s.left), right: full(s.right) };
     };
-    const commit = (label, before, after) => api.pushUndo({ label, undo: () => { E.set(before); render(); }, redo: () => { E.set(after); render(); } });
+    const commit = (label, before, after) => api.pushUndo({ label, undo: () => E.set(before), redo: () => E.set(after) });
     const render = () => {
       if (!E.hasEyes()) { root.innerHTML = `<div class="note">open the page with an eyes file (&amp;eyes=) to place eyeballs</div>`; return; }
       const s = spec(), rig = s.rig || E.rig();
@@ -42,7 +42,7 @@ window.GF.registerPanel({
       root.querySelector(".follow").addEventListener("change", (e) => {
         const before = E.get(), after = { ...spec(), follow: e.target.checked ? FOLLOW : "none", rig: e.target.checked ? rig : s.rig };
         if (!after.rig) delete after.rig;
-        E.set(after);
+        E.set(after, "eyes-panel");
         commit(`eyes ${e.target.checked ? "follow the sockets" : "stay where the eyes file puts them"}`, before, after);
       });
       root.querySelector(".link").addEventListener("change", (e) => { linked = e.target.checked; render(); });
@@ -52,7 +52,7 @@ window.GF.registerPanel({
         const apply = (x) => {
           const next = spec();
           for (const side of which) write(next[side], f, x);
-          E.set(next);
+          E.set(next, "eyes-panel");
           el.nextElementSibling.textContent = x;
           return next;
         };
@@ -63,5 +63,6 @@ window.GF.registerPanel({
       }
     };
     render();
+    E.onChange((origin) => { if (origin !== "eyes-panel") render(); });
   },
 });

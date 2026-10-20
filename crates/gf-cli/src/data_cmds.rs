@@ -14,7 +14,7 @@ use crate::{Options, need, number, only};
 
 const IMPORT_PACK_KEYS: &[&str] = &["store", "dense", "macro-base", "pin-top"];
 const IMPORT_CATALOG_KEYS: &[&str] = &["store", "targets", "pack"];
-const IMPORT_EYERIG_KEYS: &[&str] = &["store", "catalog", "makehuman"];
+const IMPORT_EYERIG_KEYS: &[&str] = &["store", "catalog", "makehuman", "macro"];
 const IMPORT_GAME_KEYS: &[&str] = &["store", "base", "pack"];
 const CREATE_KEYS: &[&str] = &[
     "store",
@@ -96,13 +96,13 @@ fn import_catalog(opts: &Options) -> Result<Value, String> {
 fn import_eyerig(opts: &Options) -> Result<Value, String> {
     only(opts, "store import-eyerig", &[IMPORT_EYERIG_KEYS])?;
     let store = open_store(opts)?;
-    let (reference, manifest) = store.import_eyerig(Path::new(need(opts, "makehuman")?), need(opts, "catalog")?)?;
+    let (reference, manifest) = store.import_eyerig(Path::new(need(opts, "makehuman")?), need(opts, "catalog")?, macro_source(opts)?.as_ref().map(|m| &m.definition))?;
     let left = manifest.targets.values().filter(|s| s.left.is_some()).count();
     let right = manifest.targets.values().filter(|s| s.right.is_some()).count();
     Ok(json!({"ok": true, "command": "store import-eyerig", "eyerig": reference, "catalog": manifest.catalog,
               "helper_vertices": [manifest.helpers.left.len(), manifest.helpers.right.len()],
               "targets_moving_left": left, "targets_moving_right": right,
-              "missing": manifest.missing}))
+              "registration": manifest.registration, "missing": manifest.missing}))
 }
 
 fn import_game(opts: &Options) -> Result<Value, String> {

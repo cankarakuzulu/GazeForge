@@ -85,6 +85,13 @@ pub fn problems(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
             Some(_) => {}
         }
     }
+    if let Some(r) = spec.eyeballs.as_ref().filter(|e| e.follows()).and_then(|e| e.rig.as_ref()) {
+        match store.load_eyerig(r) {
+            Ok(rig) if rig.catalog != spec.base.catalog => out.push(format!("eyeballs.rig {r} belongs to catalog {}, not to base.catalog", rig.catalog)),
+            Ok(_) => {}
+            Err(e) => out.push(format!("eyeballs.rig: {e}")),
+        }
+    }
     if let Some(r) = &spec.residual {
         if r.vertices != pack.vertices {
             out.push(format!("residual has {} vertices, the pack {}", r.vertices, pack.vertices));
@@ -99,12 +106,14 @@ pub fn problems(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
 }
 
 pub type Pin = (MacroTrace, HeadOnly);
+pub type Traced = (Vec<[f64; 3]>, Value, Option<Pin>);
+pub type TracedWithBase = (Vec<[f64; 3]>, Vec<[f64; 3]>, Value, Option<Pin>);
 
 pub fn parametric(store: &Store, resolved: &Resolved, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Value), String> {
     parametric_traced(store, resolved, spec, macro_source).map(|(p, r, _)| (p, r))
 }
 
-pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Value, Option<Pin>), String> {
+pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<Traced, String> {
     let spec = spec.canonical();
     let mut pin = None;
     let mut loaded = Vec::new();
@@ -149,6 +158,7 @@ pub fn evaluate_with_base(store: &Store, spec: &Spec, macro_source: Option<&Macr
 }
 
 pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>) -> Result<(Vec<Eye>, Option<Vec<PlacedEye>>), String> {
+    let spec = spec.canonical();
     let Some(eb) = spec.eyeballs.as_ref() else {
         return Ok((eyes, None));
     };
@@ -167,7 +177,7 @@ pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>)
     Ok((placed, Some(report)))
 }
 
-pub fn evaluate_traced(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Vec<[f64; 3]>, Value, Option<Pin>), String> {
+pub fn evaluate_traced(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<TracedWithBase, String> {
     let (problems, resolved) = problems(store, spec, macro_source);
     if !problems.is_empty() {
         return Err(format!("the spec does not validate: {}", problems.join("; ")));

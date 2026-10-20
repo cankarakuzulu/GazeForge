@@ -44,7 +44,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
   store import-catalog --store DIR --targets DIR --pack sha256:...
   store import-game --store DIR --base DIR --pack sha256:...
-  store import-eyerig --store DIR --catalog sha256:... --makehuman MAKEHUMAN_DATA_DIR
+  store import-eyerig --store DIR --catalog sha256:... --makehuman MAKEHUMAN_DATA_DIR [--macro MACRO_JSON]
   character create --store DIR --pack sha256:... --catalog sha256:... --out FILE [--game sha256:...] [--placement NAME/VERSION]
               [--name NAME] [--weights JSON|@FILE] [--macro MACRO_JSON [--sliders JSON|@FILE] [--macro-mode gf|mpfb] [--head-scale 1]]
               [--residual-from FACE.npy [--quantum-mm 0.005]]
