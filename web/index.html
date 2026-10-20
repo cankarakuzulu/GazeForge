@@ -44,10 +44,25 @@
         <label class="chip" title="Back-face highlight (B)"><input type="checkbox" data-opt="backHi"> back faces</label>
         <label class="chip" title="UV seams (cyan) and open boundaries (orange) (E)"><input type="checkbox" data-opt="seams"> seams</label>
         <label class="chip" title="Clip plane 1 (C); Alt+wheel moves it"><input type="checkbox" data-opt="clip.0.on"> clip</label>
+        <label class="chip" title="Face grid: cells fixed to the topology (T)"><input type="checkbox" data-opt="faceGrid"> face grid</label>
+        <label class="chip" title="The eye spheres while the face grid is on: the grid drawn over them, hidden, or plain">eyes <select data-opt="eyesGrid"><option value="grid">grid over</option><option value="hide">hidden</option><option value="plain">plain</option></select></label>
+        <label class="chip" title="Millimetre grid in the ortho views, a back plane in perspective (R)"><input type="checkbox" data-opt="normalGrid"> mm grid</label>
+        <label class="chip" title="Probe mode: a click shows the address of the surface point (Q); Alt+click probes in any mode"><input type="checkbox" id="probe-mode"> probe</label>
       </div>
       <div id="label" class="label"></div>
     </div>
     <div id="toast" class="toast"></div>
+    <div id="addr" class="addr hidden">
+      <code id="addr-line"></code>
+      <div id="addr-note" class="note"></div>
+      <div class="buttons">
+        <button id="addr-copy" class="small" title="Copy the address line">copy</button>
+        <button id="addr-pin" class="small" title="Pin this point (the Pins panel lists it)">pin</button>
+        <input id="goto" type="text" placeholder="go to: M12.3, dense 485123, game v10234 or a GF@ line (J)">
+        <button id="goto-btn" class="small">go</button>
+        <button id="addr-close" class="small" title="Close">×</button>
+      </div>
+    </div>
   </section>
   <aside>
     <div class="tabs">

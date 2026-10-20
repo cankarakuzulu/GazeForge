@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, jobs, photo, photo_fit, photo_gate, project, registry};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, grid, jobs, photo, photo_fit, photo_gate, project, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -121,6 +121,33 @@ pub static REGISTRY: &[CommandDef] = &[
         input: designer::scene_input,
         output: designer::scene_output,
         run: designer::scene,
+    },
+    CommandDef {
+        name: "grid.chart",
+        kind: Kind::Query,
+        summary: "The face chart of a game base: every game vertex's chart coordinate (angle about the head's vertical axis, millimetres below the top of the head), its cell (column letter, row number, keypad subcell), its region, one label anchor per cell, and the chart's sanity figures (cells over the face front, the largest and smallest cell area, folded triangles).",
+        limits: "Computed once from the base dense positions and carried by vertex identity, so a cell names the same vertices on every character; it is cached per base and region targets in the served process. Where the surface turns away from the axis (behind the ears, under the chin) one cell covers two layers of surface.",
+        input: grid::chart_input,
+        output: grid::chart_output,
+        run: grid::chart,
+    },
+    CommandDef {
+        name: "grid.locate",
+        kind: Kind::Query,
+        summary: "The cell, region and chart coordinate of dense vertices, game vertices, game triangles or surface points (triangle + barycentrics), and the cells added beside the vertices and triangles of a gate report.",
+        limits: "Regions exist for game vertices only (a dense vertex the game base does not keep has a cell but no region). A report's fields are recognised by name: tri/triangle, vertex/game_vertex, dense_vertex, worst_visible, lost_vertices, added_vertices.",
+        input: grid::locate_input,
+        output: grid::locate_output,
+        run: grid::locate,
+    },
+    CommandDef {
+        name: "grid.resolve",
+        kind: Kind::Query,
+        summary: "The vertices an address names: a cell or subcell gives its game vertices, the number of dense vertices in it, their base centroid and the game vertex nearest it; \"dense N\", \"game vN\" or a GF@ address line gives that vertex.",
+        limits: "Positions are the base's; the designer frames the same vertices on the current character. A whole address resolves to its vertex, not to its surface point.",
+        input: grid::resolve_input,
+        output: grid::resolve_output,
+        run: grid::resolve,
     },
     CommandDef {
         name: "rig.face",

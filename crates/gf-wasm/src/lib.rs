@@ -236,6 +236,17 @@ pub unsafe extern "C" fn gf_flips(k: *mut Kernel, against: u32) -> u32 {
     k.flips_against(&other) as u32
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn gf_chart_cell(u_deg: f64, v_mm: f64) -> u32 {
+    gf_geom::face_chart::pack(gf_geom::face_chart::cell_at([u_deg, v_mm]))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gf_chart_point_cell(u0: f64, v0: f64, u1: f64, v1: f64, u2: f64, v2: f64, b0: f64, b1: f64, b2: f64) -> u32 {
+    use gf_geom::face_chart as fc;
+    fc::pack(fc::point_cell([[u0, v0], [u1, v1], [u2, v2]], [b0, b1, b2]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
