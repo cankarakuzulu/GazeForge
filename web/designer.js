@@ -1148,8 +1148,7 @@ async function eyeLook(model) {
   })));
 }
 
-async function setEyeBase(eyes) {
-  await eyeLook(eyes[0]?.model);
+function setEyeBase(eyes) {
   D.eyeBase = eyes.map((e) => ({ side: e.side, verts: decodeF32(e.vertices_f32_b64), tris: decodeU32(e.triangles_u32_b64),
                                  model: e.model || null, uvs: e.uvs_f32_b64 ? decodeF32(e.uvs_f32_b64) : null, parts: e.parts || null }));
 }
@@ -1160,7 +1159,9 @@ async function refreshEyes() {
   D.eyeBaseKey = key;
   const r = await api("designer.eyes", eyeInput());
   if (key !== D.eyeBaseKey) return;
-  await setEyeBase(r.eyes);
+  await eyeLook(r.eyes[0]?.model);
+  if (key !== D.eyeBaseKey) return;
+  setEyeBase(r.eyes);
   if (!D.eyeBase.length) V.setExtra("eyes", null);
   placeEyes(D.settled?.eyes);
 }
@@ -1172,7 +1173,8 @@ async function loadScene() {
   const head = V.setHead(D.n, D.indices, sc.triangle_uvs_f32_b64 ? decodeF32(sc.triangle_uvs_f32_b64) : null);
   head.label = "head (LOD0)";
   for (const l of sc.lods) V.addHeadLod(decodeU32(l.triangles_u32_b64), decodeF32(l.triangle_uvs_f32_b64), `LOD ${l.target}`);
-  await setEyeBase(sc.eyes);
+  await eyeLook(sc.eyes[0]?.model);
+  setEyeBase(sc.eyes);
   placeEyes(D.settled?.eyes);
 }
 

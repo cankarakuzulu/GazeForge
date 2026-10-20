@@ -358,8 +358,8 @@ void main() {
   else if (mode == 0) c = shade(0, n, v, alb);
   else if (mode == 1) { vec3 f = normalize(fn); if (!front) f = -f; c = shade(1, f, v, alb); }
   else if (mode == 2) c = gcol;
-  else if (mode == 3) c = shade(2, n, v, alb);
-  else if (mode == 4) c = shade(3, n, v, alb);
+  else if (mode == 3) c = shade(matOn == 1 ? 1 : 2, n, v, alb);
+  else if (mode == 4) c = shade(matOn == 1 ? 1 : 3, n, v, alb);
   else if (mode == 5) { c = matcap(n); lit = false; }
   else if (mode == 6) { c = normalize(vn) * 0.5 + 0.5; lit = false; }
   else if (mode == 7) { c = bgCol; lit = false; }

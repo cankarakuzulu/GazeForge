@@ -501,6 +501,10 @@ pub fn scene_eyes(input: &Value) -> Result<Vec<Value>, ApiError> {
     let model = match input.get("eyeballs") {
         Some(v) => {
             let eb: gf_core::eyerig::EyeballSpec = serde_json::from_value(v.clone()).map_err(|e| ApiError::invalid(format!("eyeballs: {e}")))?;
+            let problems = eb.canonical().problems();
+            if !problems.is_empty() {
+                return Err(ApiError::invalid(problems.join("; ")).details(json!({"problems": problems})));
+            }
             let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
             gf_io::character::model_eyes_for(&store, text(input, "catalog"), &eb).map_err(ApiError::invalid)?.map(|eyes| (eb, eyes))
         }

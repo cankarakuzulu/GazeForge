@@ -279,9 +279,9 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
   } else if (mode == 2) {
     c = i.gcol;
   } else if (mode == 3) {
-    c = shade(2, n, v, base);
+    c = shade(select(2, 1, u.mat.x > 0.5), n, v, base);
   } else if (mode == 4) {
-    c = shade(3, n, v, base);
+    c = shade(select(3, 1, u.mat.x > 0.5), n, v, base);
   } else if (mode == 5) {
     c = matcap(n);
     lit = false;

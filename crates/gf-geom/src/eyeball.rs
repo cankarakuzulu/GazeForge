@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const PARTS: [&str; 4] = ["sclera", "cornea", "iris", "pupil"];
+const PUPIL_OVERLAP: f64 = 1.03;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -159,7 +160,7 @@ impl EyeballShape {
             m.uvs.push([0.5, 0.5]);
             for j in 0..n {
                 let phi = j as f64 / n as f64 * tau;
-                m.positions.push([l.pupil_radius * phi.cos(), l.pupil_radius * phi.sin(), z]);
+                m.positions.push([PUPIL_OVERLAP * l.pupil_radius * phi.cos(), PUPIL_OVERLAP * l.pupil_radius * phi.sin(), z]);
                 m.normals.push([0.0, 0.0, 1.0]);
                 m.uvs.push([0.5 + 0.5 * phi.cos(), 0.5 + 0.5 * phi.sin()]);
             }
