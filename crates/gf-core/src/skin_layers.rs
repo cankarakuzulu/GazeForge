@@ -64,9 +64,20 @@ fn round4(x: f64) -> f64 {
     if r == 0.0 { 0.0 } else { r }
 }
 
+const SHADER_WORDS: [&str; 74] = [
+    "abs", "atan", "bool", "break", "bvec2", "bvec3", "bvec4", "case", "ceil", "clamp", "const", "continue", "cos", "cross", "default",
+    "discard", "distance", "do", "dot", "else", "exp", "false", "flat", "float", "floor", "for", "fract", "highp", "if", "in", "inout",
+    "int", "ivec2", "ivec3", "ivec4", "length", "log", "lowp", "mat2", "mat3", "mat4", "max", "mediump", "min", "mix", "mod",
+    "normalize", "out", "pow", "precision", "return", "sampler2d", "sign", "sin", "smooth", "smoothstep", "sqrt", "step", "struct",
+    "switch", "tan", "texture", "true", "uint", "uniform", "uvec2", "uvec3", "uvec4", "varying", "vec2", "vec3", "vec4", "void", "while",
+];
+
 fn identifier(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with("gf_")
+        && !SHADER_WORDS.contains(&name)
 }
 
 impl SkinLayer {
@@ -137,7 +148,7 @@ impl SkinSpec {
         for (i, l) in self.layers.iter().enumerate() {
             let at = format!("skin.layers[{i}] ({})", l.name);
             if !identifier(&l.name) {
-                out.push(format!("{at}: the name must be a lowercase identifier, [a-z][a-z0-9_]*"));
+                out.push(format!("{at}: the name must be a lowercase identifier, [a-z][a-z0-9_]*, not a shading-language word and not gf_..."));
             }
             match STYLES.iter().find(|(k, _)| *k == l.kind) {
                 None => out.push(format!("{at}: kind {:?} is not one of grime, blood, paint", l.kind)),
@@ -650,6 +661,15 @@ mod tests {
         let p = bad.problems().join(" | ");
         for needle in ["lowercase identifier", "glitter", "amount 1.5", "mud_wet", "has no variant state", "colour must be", "skin.size"] {
             assert!(p.contains(needle), "{needle} not in {p}");
+        }
+    }
+
+    #[test]
+    fn shading_words_and_the_reader_prefix_are_refused_as_names() {
+        for (name, ok) in [("mix", false), ("float", false), ("gf_blood", false), ("mixed", true), ("blood_2", true)] {
+            let mut s = spec();
+            s.layers[0].name = name.into();
+            assert_eq!(s.problems().is_empty(), ok, "{name}: {:?}", s.problems());
         }
     }
 

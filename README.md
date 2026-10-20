@@ -211,7 +211,23 @@ spread over the mesh. It writes the albedo, the look's normal and roughness maps
 colour (`generated`), and a confidence map. The albedo is as photographed: its brightness is the photo's at the shading of
 the median plain-skin texel. Limits: cast shadows (under the chin), ambient occlusion and specular light are not modelled
 (highlights are down-weighted where another view sees the texel, kept where none does), and the seam between projected and
-filled skin can show at the hairline. Not yet: the skin in the exported glb and in the clients.
+filled skin can show at the hairline.
+**Skin in the glb, and live layers.** A character spec can carry `skin`: a `look` (a preset with any fields changed), the
+base's landmark table as a store reference (`skin.landmarks` checks a table and puts it in the store), a texture `size`
+(default 2048) and `layers`. A layer has a `name`, a `kind` and `style` - grime (`dust`, `sand`, `dirt`, `mud`), blood
+(`drips`, `splatter`), paint (`eye-band`, `cheek-stripes`, `chin`) - an `amount`, a second state `variant` (wet dirt and
+mud, dried blood), a `seed` and an optional linear `colour`; `live: false` paints it into the textures, otherwise a
+renderer drives it. `skin.layers` lists the kinds and styles with their colours and roughness. Each layer's mask is
+evaluated on the neutral base in millimetres, like the skin: grime gathers in creases, on upward-facing skin and on the
+lower face; blood runs down the surface from wound sites; paint is placed by the landmarks. With `skin` in the spec,
+`export-glb` gives every head level of detail one textured material: the baked skin in the core glTF material, so any
+viewer shows it, and the live layers in the [`GAZEFORGE_skin`](extensions/GAZEFORGE_skin/README.md) material extension -
+a mask per layer (four per RGBA texture) whose value orders where the layer reaches first, so one parameter both places it
+and grows it from 0 to 1. A layer baked at an amount equals the same layer drawn live at that amount (measured: no 8-bit
+difference). [`clients/godot-addon`](clients/godot-addon/addons/gazeforge_skin/README.md) is a Godot 4 addon that turns
+such materials into shader materials whose uniforms are the layers' parameters, so a game sets `blood` or `mud_wet` by
+name. Limits: layers change colour and roughness, not relief; masks are procedural (no painting or stamps yet); the body
+of `--body` gets no skin material.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

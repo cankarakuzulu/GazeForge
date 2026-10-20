@@ -91,6 +91,16 @@ roughness       = mix(roughness,   layer_roughness, k)     # after metallicRough
 
 Layers are applied in array order. Normal, occlusion and metallic are unchanged in version 1.
 
+## Readers
+
+- A material whose extension breaks this format is refused as a whole: the reader keeps the core material and reports why.
+- A parameter becomes a shader uniform in most readers, so a writer should not use shading-language keywords, types or
+  built-in function names (`float`, `mix`, `texture`, ...). GazeForge writes lowercase `[a-z][a-z0-9_]*` names and refuses
+  those words and the `gf_` prefix.
+- The mask may be filtered (bilinear, mipmapped) before the coverage formula is applied per fragment.
+- `COLOR_0`, when the core material uses it, multiplies the base colour before the layers, as in core glTF.
+- Texture transforms do not apply to masks in version 1.
+
 ## Masks in the file
 
 Masks are PNG images, four layers per RGBA image, each referenced through an ordinary glTF `texture`. Several layers can

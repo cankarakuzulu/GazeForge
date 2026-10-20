@@ -1,0 +1,25 @@
+; Engine configuration file.
+
+config_version=5
+
+[application]
+
+config/name="GazeForge skin addon tests"
+config/description="Test project for the gazeforge_skin addon."
+config/features=PackedStringArray("4.7", "Forward Plus")
+run/low_processor_mode=false
+
+[display]
+
+window/size/viewport_width=512
+window/size/viewport_height=512
+window/size/resizable=false
+window/vsync/vsync_mode=0
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gazeforge_skin/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

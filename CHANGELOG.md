@@ -27,6 +27,9 @@ open, with its last measurement, rather than left out.
   baked layers the exported textures equal `skin.generate`'s exactly; a layer baked at an amount equals the same layer
   live at that amount (max difference 0 in 8 bits). Not yet: relief (layers change colour and roughness only), painted or
   stamped masks, a textured body.
+- **Godot addon** (`clients/godot-addon`). Imports `GAZEFORGE_skin` materials, in the editor and at run time, as shader
+  materials with one uniform per layer parameter; masks arrive lossless; invalid extensions are refused with the core
+  material kept. Measured on Godot 4.7.2 (Forward+): the rendered layers match the format's math within 1 in 8 bits.
 - **Quads for OBJ.** `export-obj --quads on` writes clean triangle pairs as quads (off by default).
 - **Designers.** A Topology tool in the browser and the native studio: bad-triangle highlight, improve as a job with
   progress, the numbers and the look before and after, and designing on the improved base. `designer.sliders` takes an
