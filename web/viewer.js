@@ -16,6 +16,7 @@ export const MODES = [
   { id: "uv", label: "UV checker" },
 ];
 export const MODE_INDEX = Object.fromEntries(MODES.map((m, i) => [m.id, i]));
+const LIT_MODES = new Set([0, 1, 3, 4]);
 
 export const LIGHT_PRESETS = {
   studio: { label: "studio three-point", ambient: 0.16, ground: 0.4, lights: [{ az: -40, el: 30, i: 1.0, k: 5600 }, { az: 50, el: 10, i: 0.35, k: 6500 }, { az: 160, el: 35, i: 0.8, k: 7500 }] },
@@ -180,7 +181,7 @@ export class Camera {
 const COMMON = `
 uniform int mode; uniform vec3 eye; uniform vec3 camS; uniform vec3 camU; uniform vec3 camF; uniform int ortho;
 uniform int nLights; uniform vec3 lightDir[4]; uniform vec3 lightCol[4]; uniform vec3 sky; uniform vec3 ground;
-uniform vec3 baseCol; uniform float aniso;
+uniform vec3 baseCol; uniform float aniso; uniform int matOn;
 vec3 hemi(vec3 n) { return mix(ground, sky, n.z * 0.5 + 0.5); }
 vec3 tangentOf(vec3 n) {
   vec3 h = cross(vec3(0.0, 0.0, 1.0), n);
@@ -264,6 +265,7 @@ void main() {
     vec3 v = ortho == 1 ? -camF : normalize(eye - p);
     gcol = shade(2, normalize(vn), v, baseCol);
   }
+  if (matOn == 1 && hasUV == 1) uv = texelFetch(uvT, at(c), 0).xy;
   if (hasFlags == 1) eflags = texelFetch(flagT, at(t), 0).r;
   ch = vec2(0.0);
   if (gridOn == 1 && hasChart == 1) {
@@ -294,7 +296,18 @@ ${CLIP}
 uniform int gridOn; uniform int hasChart; uniform vec2 gridStep; uniform vec3 gridInk;
 uniform int wireOn; uniform float wireW; uniform vec3 wireCol; uniform int xrayPass; uniform int wireFade; uniform int backHi; uniform int seamOn;
 uniform vec3 bgCol; uniform vec3 interiorCol; uniform float heatMax; uniform int hasRef; uniform int hasUV; uniform int hasFlags; uniform float exposure;
+uniform vec4 matCol; uniform int matHasTex; uniform sampler2D matTex; uniform float matRough; uniform int matGlass;
 out vec4 o;
+vec3 glints(vec3 n, vec3 v, float rough) {
+  float sh = 2.0 / max(rough * rough, 1e-4);
+  vec3 s = vec3(0.0);
+  for (int i = 0; i < 4; i++) {
+    if (i >= nLights) break;
+    vec3 h = normalize(lightDir[i] + v);
+    s += lightCol[i] * pow(max(dot(n, h), 0.0), sh) * step(0.0, dot(n, lightDir[i]));
+  }
+  return s * (sh + 2.0) / 8.0;
+}
 vec3 ramp(float t) {
   t = clamp(t, 0.0, 1.0) * 4.0;
   vec3 a = vec3(0.16, 0.26, 0.85), b = vec3(0.10, 0.72, 0.82), c = vec3(0.32, 0.80, 0.30), d = vec3(0.96, 0.84, 0.20), e = vec3(0.86, 0.14, 0.10);
@@ -329,15 +342,24 @@ void main() {
   vec3 n = normalize(vn);
   if (!front) n = -n;
   vec3 v = ortho == 1 ? -camF : normalize(eye - vp);
+  if (matOn == 1 && matGlass == 1) {
+    if (!front) discard;
+    float f = 0.04 + 0.96 * pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 5.0);
+    vec3 s = (glints(n, v, matRough) + hemi(reflect(-v, n))) * f * exp2(exposure);
+    o = vec4(min(s, vec3(1.0)), clamp(matCol.a * (1.0 - f) + f, 0.0, 1.0));
+    return;
+  }
+  vec3 alb = baseCol;
+  if (matOn == 1) alb = matCol.rgb * (matHasTex == 1 ? pow(texture(matTex, uv).rgb, vec3(2.2)) : vec3(1.0));
   float hl = 0.55 + 0.45 * abs(dot(n, v));
   vec3 c;
   bool lit = true;
   if (!front && nPlanes > 0) { c = interiorCol * (0.45 + 0.55 * abs(dot(n, v))); lit = false; }
-  else if (mode == 0) c = shade(0, n, v, baseCol);
-  else if (mode == 1) { vec3 f = normalize(fn); if (!front) f = -f; c = shade(1, f, v, baseCol); }
+  else if (mode == 0) c = shade(0, n, v, alb);
+  else if (mode == 1) { vec3 f = normalize(fn); if (!front) f = -f; c = shade(1, f, v, alb); }
   else if (mode == 2) c = gcol;
-  else if (mode == 3) c = shade(2, n, v, baseCol);
-  else if (mode == 4) c = shade(3, n, v, baseCol);
+  else if (mode == 3) c = shade(2, n, v, alb);
+  else if (mode == 4) c = shade(3, n, v, alb);
   else if (mode == 5) { c = matcap(n); lit = false; }
   else if (mode == 6) { c = normalize(vn) * 0.5 + 0.5; lit = false; }
   else if (mode == 7) { c = bgCol; lit = false; }
@@ -345,6 +367,7 @@ void main() {
   else if (mode == 9) { c = (hasRef == 1 ? diverge(disp / heatMax) : vec3(0.55)) * hl; lit = false; }
   else if (mode == 10) { c = diverge(tc / heatMax) * hl; lit = false; }
   else { c = (hasUV == 1 ? checker(uv) : vec3(0.55)) * hl; lit = false; }
+  if (lit && matOn == 1) c += glints(n, v, matRough) * 0.04;
   if (lit) c = pow(max(c * exp2(exposure), vec3(0.0)), vec3(1.0 / 2.2));
   if (backHi == 1 && !front && nPlanes == 0) c = mix(c, vec3(0.92, 0.10, 0.16), 0.65);
   if (seamOn == 1 && hasFlags == 1) {
@@ -471,7 +494,7 @@ export class Viewer {
       for (const [name, unit] of Object.entries(units)) gl.uniform1i(p.u(name), unit);
       return p;
     };
-    const units = { idxT: 0, posT: 1, nrmT: 2, refT: 3, uvT: 4, flagT: 5, regT: 6, chartT: 7 };
+    const units = { idxT: 0, posT: 1, nrmT: 2, refT: 3, uvT: 4, flagT: 5, regT: 6, chartT: 7, matTex: 8 };
     this.meshProg = compile(MESH_VS, MESH_FS, units);
     this.pointProg = compile(POINT_VS, POINT_FS, { idxT: 0, posT: 1, regT: 6 });
     this.lineProg = compile(LINE_VS, LINE_FS);
@@ -484,6 +507,7 @@ export class Viewer {
     this.dummy = {
       f3: this.tex("f3", 1, new Float32Array(3)), f2: this.tex("f2", 1, new Float32Array(2)),
       u1: this.tex("u1", 1, new Uint32Array(1)), b1: this.tex("b1", 1, new Uint8Array(1)),
+      rgba: this.materialTexture(1, 1, new Uint8Array([255, 255, 255, 255])),
     };
     this.emptyVao = gl.createVertexArray();
     this.lineVao = gl.createVertexArray();
@@ -627,9 +651,47 @@ export class Viewer {
     const idx = spec.indices instanceof Uint32Array ? spec.indices : Uint32Array.from(spec.indices);
     const n = pos.length / 3;
     const nrm = spec.normals ? (spec.normals instanceof Float32Array ? spec.normals : Float32Array.from(spec.normals)) : vertexNormals(pos, idx, n);
+    let corner = null;
+    if (spec.uvs && spec.uvs.length === n * 2) {
+      corner = new Float32Array(idx.length * 2);
+      for (let i = 0; i < idx.length; i++) { corner[2 * i] = spec.uvs[2 * idx[i]]; corner[2 * i + 1] = spec.uvs[2 * idx[i] + 1]; }
+    }
     const m = { id, label: spec.label || id, kind, n, visible: old ? old.visible : true, color: parseColor(spec.color, [0.72, 0.70, 0.68]),
-                pos: this.tex("f3", n, pos), nrm: this.tex("f3", n, nrm), ref: null, region: null, lods: [this.makeLod(idx, null)], cpuPos: pos, nrmCPU: nrm, wind: windingSign(pos, idx) };
+                pos: this.tex("f3", n, pos), nrm: this.tex("f3", n, nrm), ref: null, region: null, lods: [this.makeLod(idx, corner)], cpuPos: pos, nrmCPU: nrm, wind: windingSign(pos, idx),
+                parts: spec.parts && spec.look ? spec.parts : null, look: spec.parts && spec.look ? spec.look : null };
     this.meshes.set(id, m);
+  }
+
+  materialTexture(width, height, rgba) {
+    const gl = this.gl, t = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE8);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    return t;
+  }
+
+  drawParts(p, m, glass) {
+    const gl = this.gl;
+    for (const part of m.parts) {
+      const look = m.look[part.look];
+      if (!look || !!look.glass !== glass) continue;
+      gl.uniform1i(p.u("matOn"), 1);
+      gl.uniform4fv(p.u("matCol"), look.colour);
+      gl.uniform1f(p.u("matRough"), look.roughness);
+      gl.uniform1i(p.u("matGlass"), look.glass ? 1 : 0);
+      gl.uniform1i(p.u("matHasTex"), look.tex ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE8);
+      gl.bindTexture(gl.TEXTURE_2D, look.tex || this.dummy.rgba);
+      gl.drawArrays(gl.TRIANGLES, part.first * 3, part.count * 3);
+    }
+    gl.uniform1i(p.u("matOn"), 0);
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   poseExtra(id, rot, centre) {
@@ -1098,6 +1160,7 @@ export class Viewer {
 
   meshUniforms(p, M, st) {
     const gl = this.gl, o = this.opts;
+    gl.uniform1i(p.u("matOn"), 0);
     gl.uniformMatrix4fv(p.u("mvp"), false, M.mvp);
     gl.uniform3fv(p.u("eye"), M.eye);
     gl.uniform3fv(p.u("camS"), M.s);
@@ -1152,6 +1215,8 @@ export class Viewer {
     bind(0, lod.idx, D.u1); bind(1, m.pos, D.f3); bind(2, m.nrm, D.f3); bind(3, m.ref, D.f3); bind(4, lod.uv, D.f2); bind(5, lod.flags, D.b1); bind(6, m.region, D.b1);
     if (p === this.meshProg) {
       bind(7, m.chart, D.f2);
+      gl.activeTexture(gl.TEXTURE8);
+      gl.bindTexture(gl.TEXTURE_2D, D.rgba);
       gl.uniform1i(p.u("hasChart"), m.chart && (m.kind === "head" || this.opts.eyesGrid === "grid") ? 1 : 0);
       gl.uniform1f(p.u("windSign"), m.wind || 1);
       gl.uniform1i(p.u("hasRef"), m.ref ? 1 : 0);
@@ -1192,7 +1257,21 @@ export class Viewer {
     const mp = this.meshProg;
     gl.useProgram(mp);
     this.meshUniforms(mp, M, st);
-    for (const m of meshes) { const lod = this.lodOf(m, st); this.bindMesh(mp, m, lod); gl.drawArrays(gl.TRIANGLES, 0, lod.tri * 3); }
+    const lit = LIT_MODES.has(st.mode);
+    for (const m of meshes) {
+      const lod = this.lodOf(m, st);
+      this.bindMesh(mp, m, lod);
+      if (lit && m.look) this.drawParts(mp, m, false);
+      else gl.drawArrays(gl.TRIANGLES, 0, lod.tri * 3);
+    }
+    if (lit && meshes.some((m) => m.look)) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      for (const m of meshes) if (m.look) { this.bindMesh(mp, m, this.lodOf(m, st)); this.drawParts(mp, m, true); }
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
     gl.disable(gl.POLYGON_OFFSET_FILL);
     const P = this.planes();
     if (o.caps && P.length) {

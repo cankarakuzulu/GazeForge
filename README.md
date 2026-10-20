@@ -181,6 +181,10 @@ materials: the sclera and the iris textured (the PNGs embedded in the glb), a ne
 `KHR_materials_transmission` and `KHR_materials_ior` (the model's index of refraction, 1.376) and alpha blending at a low
 base alpha, so a viewer without transmission still shows the iris through it. Without a rig the eyes are nodes
 `Eye_L` / `Eye_R`; with `--rig head` they are children of the eye joints. Eyes from an eyes file export as before.
+`eyes.look` returns one model's shading part by part (base colour, roughness, transmission and index of refraction,
+blending, and the iris and sclera textures as RGBA pixels), the same values the glb writes. `designer.scene` and
+`designer.eyes` (only the eyes, for a client that changes the model) take the spec's `eyeballs`: with a model they return
+its eyes at their rest place with UVs and parts instead of an eyes file's.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 
@@ -593,10 +597,13 @@ moves and refits after the settle.
 
 `api.eyes` gives `get()` and `set(eyeballs)` (the character's `eyeballs`, see Characters; `set` settles), `rig()` (the
 catalog's eye rig), `placed()` (the last settle's eye report) and `hasEyes()`. The Eyes panel (`web/panels/eyes.js`) is
-built on it: follow the sockets, link left and right (default), and per eye the out, up and forward offsets, pitch, yaw,
-roll and scale relative to the socket; each slider release joins undo and redo. The page draws the eyes file's own eye
-meshes and places them from each settle's eye report, so an eye moves when the settle lands (no live preview between
-settles in the browser; the native studio previews it).
+built on it: an eye model picker (the inventory by family, or the eyes file) with its radius, follow the sockets, link
+left and right (default), and per eye the out, up and forward offsets, pitch, yaw, roll and scale relative to the
+socket; each change joins undo and redo. The page draws the eye model's eyes (or the eyes file's meshes) and places them
+from each settle's eye report, so an eye moves when the settle lands (no live preview between settles in the browser; the
+native studio previews it). In the lit render modes (clay, flat, Blinn-Phong, anisotropic) a model's eyes are shaded
+from `eyes.look`: the textured sclera and iris, a near-black pupil, and a glossy cornea drawn over them with blending
+(Fresnel reflection and a sharp highlight); the other modes draw them like any mesh.
 
 ### Grid and addresses
 

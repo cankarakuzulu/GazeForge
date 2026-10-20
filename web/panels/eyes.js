@@ -25,11 +25,25 @@ window.GF.registerPanel({
       return { ...s, left: full(s.left), right: full(s.right) };
     };
     const commit = (label, before, after) => api.pushUndo({ label, undo: () => E.set(before), redo: () => E.set(after) });
+    let inventory = null;
+    api.call("eyes.inventory", {}).then((r) => { inventory = r; render(); }).catch(() => {});
+    const modelPicker = (s, rig) => {
+      if (!inventory || !rig) return "";
+      const current = s.model?.id || "";
+      const groups = inventory.families.map((f) => `<optgroup label="${f}">${inventory.models.filter((m) => m.family === f)
+        .map((m) => `<option value="${m.id}" ${m.id === current ? "selected" : ""}>${m.name || m.id}</option>`).join("")}</optgroup>`).join("");
+      const radius = s.model?.radius_mm ?? 12;
+      return `<label class="eye-row" title="a premade eye: shaded sclera, iris and cornea, built at the eye rig's places">eye model
+          <select class="model"><option value="" ${current ? "" : "selected"}>${E.hasEyes() && !current ? "eyes file" : "none"}</option>${groups}</select></label>
+        ${current ? `<label class="eye-row" title="eyeball radius in mm; double click: back to 12">radius mm
+          <input type="range" class="radius" min="5" max="20" step="0.1" value="${radius}"><output>${radius}</output></label>` : ""}`;
+    };
     const render = () => {
-      if (!E.hasEyes()) { root.innerHTML = `<div class="note">open the page with an eyes file (&amp;eyes=) to place eyeballs</div>`; return; }
       const s = spec(), rig = s.rig || E.rig();
+      if (!E.hasEyes() && !rig) { root.innerHTML = `<div class="note">open the page with an eyes file (&amp;eyes=), or use a catalog with an eye rig, to place eyeballs</div>`; return; }
       const sides = linked ? [["both eyes", ["left", "right"]]] : [["left eye", ["left"]], ["right eye", ["right"]]];
       root.innerHTML = `<div class="eyes">
+        ${modelPicker(s, rig)}
         <label title="move and scale each eye with its socket, the way MakeHuman moves its helper eyeball; the eyelid clearance uses the moved eyes">
           <input type="checkbox" class="follow" ${s.follow === FOLLOW ? "checked" : ""} ${rig || s.follow === FOLLOW ? "" : "disabled"}> follow the sockets</label>
         ${rig ? "" : `<div class="note">this catalog has no eye rig (store import-eyerig makes one)</div>`}
@@ -46,8 +60,25 @@ window.GF.registerPanel({
         commit(`eyes ${e.target.checked ? "follow the sockets" : "stay where the eyes file puts them"}`, before, after);
       });
       root.querySelector(".link").addEventListener("change", (e) => { linked = e.target.checked; render(); });
+      root.querySelector(".model")?.addEventListener("change", (e) => {
+        const before = E.get(), after = spec();
+        if (e.target.value) { after.model = { id: e.target.value, radius_mm: after.model?.radius_mm ?? 12 }; after.rig = rig; }
+        else delete after.model;
+        E.set(after, "eyes-panel");
+        commit(e.target.value ? `eye model ${e.target.value}` : "no eye model", before, after);
+        render();
+      });
+      const radius = root.querySelector(".radius");
+      if (radius) {
+        let rBefore = null;
+        const setRadius = (x) => { const next = spec(); next.model = { ...next.model, radius_mm: x }; E.set(next, "eyes-panel"); radius.nextElementSibling.textContent = x; };
+        radius.addEventListener("pointerdown", () => { rBefore = E.get(); });
+        radius.addEventListener("input", () => { if (!rBefore) rBefore = E.get(); setRadius(+radius.value); });
+        radius.addEventListener("change", () => { commit(`eye radius ${radius.value} mm`, rBefore, E.get()); rBefore = null; });
+        radius.addEventListener("dblclick", () => { const b = E.get(); radius.value = 12; setRadius(12); commit("eye radius back to 12 mm", b, E.get()); });
+      }
       let before = null;
-      for (const el of root.querySelectorAll("input[type=range]")) {
+      for (const el of root.querySelectorAll("input[type=range][data-i]")) {
         const f = FIELDS[+el.dataset.i], which = el.dataset.sides.split(",");
         const apply = (x) => {
           const next = spec();

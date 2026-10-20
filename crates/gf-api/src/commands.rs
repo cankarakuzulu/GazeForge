@@ -117,11 +117,20 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "designer.scene",
         kind: Kind::Query,
-        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes of an optional eyes file (centre, radius, side, gaze and mesh).",
-        limits: "A level with a vertex outside the finest level drops that triangle and counts it; eyes are the file's spheres, not a placed eye mesh.",
+        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes (centre, radius, side, gaze and mesh) of an eye model (eyeballs with a model, with UVs and parts) or of an optional eyes file.",
+        limits: "A level with a vertex outside the finest level drops that triangle and counts it; the eyes are at their rest place, before the character moves them (designer.settle reports each eye's transform).",
         input: designer::scene_input,
         output: designer::scene_output,
         run: designer::scene,
+    },
+    CommandDef {
+        name: "designer.eyes",
+        kind: Kind::Query,
+        summary: "Only the eyes of designer.scene: an eye model's eyes (eyeballs with a model) or an eyes file's, at their rest place, for a client that changes the model without reloading the scene.",
+        limits: "The same eyes and format as designer.scene's eyes; no levels of detail.",
+        input: designer::scene_input,
+        output: designer::eyes_output,
+        run: designer::eyes,
     },
     CommandDef {
         name: "eyes.generate",
@@ -140,6 +149,15 @@ pub static REGISTRY: &[CommandDef] = &[
         input: eyes::inventory_input,
         output: eyes::inventory_output,
         run: eyes::inventory,
+    },
+    CommandDef {
+        name: "eyes.look",
+        kind: Kind::Query,
+        summary: "How one eye model is shaded, part by part (sclera, cornea, iris, pupil): base colour, roughness, transmission and index of refraction, blending, and the iris and sclera textures as RGBA pixels - the same values the glb export writes as materials.",
+        limits: "Textures are procedural (seeded per model) at 1024x256 (iris) and 512x256 (sclera); textures false returns only their sizes.",
+        input: eyes::look_input,
+        output: eyes::look_output,
+        run: eyes::look_command,
     },
     CommandDef {
         name: "eyes.textures",

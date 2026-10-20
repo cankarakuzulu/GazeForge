@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use gf_core::eye_inventory::EyeModel;
 use gf_geom::eyeball::EyeballShape;
 use gf_io::store::Store;
 use serde_json::{Value, json};
@@ -40,6 +41,83 @@ fn unit(v: [f64; 3]) -> Result<[f64; 3], ApiError> {
 pub const IRIS_SIZE: [usize; 2] = [1024, 256];
 pub const SCLERA_SIZE: [usize; 2] = [512, 256];
 
+pub struct Texture {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
+}
+
+pub struct PartLook {
+    pub part: &'static str,
+    pub colour: [f32; 4],
+    pub roughness: f32,
+    pub transmission: Option<f32>,
+    pub ior: Option<f32>,
+    pub blend: bool,
+    pub texture: Option<Texture>,
+}
+
+pub fn model_textures(m: &EyeModel) -> Result<(Texture, Texture), String> {
+    let l = m.shape.layout()?;
+    let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
+    let [iw, ih] = IRIS_SIZE;
+    let [sw, sh] = SCLERA_SIZE;
+    Ok((
+        Texture { width: iw, height: ih, rgba: gf_core::eye_texture::iris_rgba(&m.iris, iw, ih) },
+        Texture { width: sw, height: sh, rgba: gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, sw, sh, m.iris.seed) },
+    ))
+}
+
+pub fn look(m: &EyeModel) -> Result<Vec<PartLook>, String> {
+    let (iris, sclera) = model_textures(m)?;
+    let plain = |part: &'static str, colour: [f32; 4], texture: Option<Texture>, roughness: f32| PartLook {
+        part,
+        colour,
+        roughness,
+        transmission: None,
+        ior: None,
+        blend: false,
+        texture,
+    };
+    Ok(vec![
+        plain("sclera", [1.0; 4], Some(sclera), 0.35),
+        PartLook { transmission: Some(1.0), ior: Some(m.cornea.ior), blend: true, ..plain("cornea", [1.0, 1.0, 1.0, 0.08], None, m.cornea.roughness) },
+        plain("iris", [1.0; 4], Some(iris), 0.55),
+        plain("pupil", [0.01, 0.01, 0.01, 1.0], None, 0.9),
+    ])
+}
+
+pub fn look_input() -> Value {
+    obj(json!({"model": {"type": "string", "minLength": 1, "description": "an eye model id, as eyes.inventory lists it"},
+               "textures": {"type": "boolean", "description": "include each textured part's RGBA pixels (default true)"}}), &["model"])
+}
+
+pub fn look_output() -> Value {
+    shape(json!({"model": {"type": "string"},
+                 "parts": {"type": "array", "description": "in the eye mesh's part order (sclera, cornea, iris, pupil): colour (linear RGBA), roughness, transmission, ior, blend, and texture {width, height, rgba_u8_b64} or null"}}))
+}
+
+pub fn look_command(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let id = text(input, "model");
+    let m = gf_core::eye_inventory::model(id).ok_or_else(|| ApiError::not_found(format!("eye model {id:?} is not in the inventory")).hint("eyes.inventory lists the models"))?;
+    let pixels = input.get("textures").and_then(Value::as_bool).unwrap_or(true);
+    let parts: Vec<Value> = look(&m)
+        .map_err(ApiError::invalid)?
+        .into_iter()
+        .map(|p| {
+            let texture = p.texture.map(|t| {
+                let mut v = json!({"width": t.width, "height": t.height});
+                if pixels {
+                    v["rgba_u8_b64"] = json!(crate::designer::base64(&t.rgba));
+                }
+                v
+            });
+            json!({"part": p.part, "colour": p.colour, "roughness": p.roughness, "transmission": p.transmission, "ior": p.ior, "blend": p.blend, "texture": texture})
+        })
+        .collect();
+    Ok(json!({"model": m.id, "parts": parts}))
+}
+
 pub fn textures_input() -> Value {
     obj(
         json!({"models": {"type": "array", "items": {"type": "string"}, "description": "model ids; default: every model of the inventory"},
@@ -64,14 +142,10 @@ pub fn textures(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let mut written = Vec::new();
     for m in all.iter().filter(|m| wanted.as_ref().is_none_or(|w| w.contains(&m.id))) {
-        let l = m.shape.layout().map_err(ApiError::invalid)?;
-        let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
-        for (kind, (w, h), pixels) in [
-            ("iris", (IRIS_SIZE[0], IRIS_SIZE[1]), gf_core::eye_texture::iris_rgba(&m.iris, IRIS_SIZE[0], IRIS_SIZE[1])),
-            ("sclera", (SCLERA_SIZE[0], SCLERA_SIZE[1]), gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, SCLERA_SIZE[0], SCLERA_SIZE[1], m.iris.seed)),
-        ] {
+        let (iris, sclera) = model_textures(m).map_err(ApiError::invalid)?;
+        for (kind, t) in [("iris", iris), ("sclera", sclera)] {
             let path = out.join(format!("{}.{kind}.png", m.id));
-            std::fs::write(&path, gf_io::png::rgba(w, h, &pixels).map_err(ApiError::internal)?).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+            std::fs::write(&path, gf_io::png::rgba(t.width, t.height, &t.rgba).map_err(ApiError::internal)?).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
             written.push(path.display().to_string());
         }
     }
