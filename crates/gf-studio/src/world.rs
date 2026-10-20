@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::face_rig::FaceRig;
 use crate::stitch::Stitch;
+use crate::timeline::Timeline;
 use crate::hud::Hud;
 use crate::i18n::{tr, tr_or, trf};
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
@@ -76,6 +77,8 @@ pub struct World {
     pub overlays: Vec<Overlay>,
     extra_key: u64,
     pub stitch: Stitch,
+    pub timeline: Timeline,
+    pub eye_pose: Option<([f64; 9], [f64; 3])>,
 }
 
 impl Default for World {
@@ -126,6 +129,8 @@ impl Default for World {
             overlays: Vec::new(),
             extra_key: 0,
             stitch: Stitch::default(),
+            timeline: Timeline::default(),
+            eye_pose: None,
         }
     }
 }
@@ -205,6 +210,7 @@ impl World {
         }
         self.face_poll();
         self.stitch_poll();
+        self.timeline_poll();
         if self.preview_dirty {
             self.update_preview();
         }
@@ -248,10 +254,24 @@ impl World {
     fn present_pose(&mut self) {
         self.pose_dirty = false;
         let (Some(s), Some((_, p))) = (self.session.as_mut(), self.poses.last()) else { return };
-        let h = &mut s.head;
-        h.positions.copy_from_slice(p);
-        h.normals = crate::session::vertex_normals(&h.positions, &h.lods[0].indices, h.n);
-        h.revision += 1;
+        s.head.positions.copy_from_slice(p);
+        s.head.normals = crate::session::vertex_normals(&s.head.positions, &s.head.lods[0].indices, s.head.n);
+        s.head.revision += 1;
+        s.preview_eyes(self.shape.as_ref().and_then(|sh| sh.live.eyeballs.as_ref()));
+        if let (Some((m, c)), Some(e)) = (self.eye_pose, s.head.eyes.as_mut()) {
+            for v in e.positions.chunks_exact_mut(3) {
+                let (x, y, z) = (v[0] as f64 - c[0], v[1] as f64 - c[1], v[2] as f64 - c[2]);
+                v[0] = (m[0] * x + m[1] * y + m[2] * z + c[0]) as f32;
+                v[1] = (m[3] * x + m[4] * y + m[5] * z + c[1]) as f32;
+                v[2] = (m[6] * x + m[7] * y + m[8] * z + c[2]) as f32;
+            }
+            for v in e.normals.chunks_exact_mut(3) {
+                let (x, y, z) = (v[0] as f64, v[1] as f64, v[2] as f64);
+                v[0] = (m[0] * x + m[1] * y + m[2] * z) as f32;
+                v[1] = (m[3] * x + m[4] * y + m[5] * z) as f32;
+                v[2] = (m[6] * x + m[7] * y + m[8] * z) as f32;
+            }
+        }
     }
 
     pub fn face_load(&mut self) {
@@ -360,6 +380,9 @@ impl World {
                         self.face = FaceRig::default();
                         self.extras.clear();
                         self.overlays.clear();
+                        self.timeline = Timeline { clip: None, ..std::mem::take(&mut self.timeline) };
+                        self.timeline.rig = None;
+                        self.eye_pose = None;
                         self.stitch = Stitch { store: std::mem::take(&mut self.stitch.store), body: std::mem::take(&mut self.stitch.body), values: self.stitch.values, auto: self.stitch.auto, ..Stitch::default() };
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
@@ -430,6 +453,9 @@ impl World {
                         self.face_load();
                     }
                     self.stitch_changed(false);
+                    if self.timeline.rig.is_some() {
+                        self.timeline_deltas();
+                    }
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {

@@ -16,6 +16,7 @@ mod session;
 mod shape;
 mod stitch;
 mod studio;
+mod timeline;
 mod topology;
 mod ui_script;
 mod viewer;

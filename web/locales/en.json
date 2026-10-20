@@ -541,6 +541,7 @@
  "timeline.importing": "Timeline: importing CSV ...",
  "timeline.label_capture": "Capture",
  "timeline.label_csv": "CSV, experimental",
+ "timeline.load_clip": "Load clip",
  "timeline.load_deltas": "Load deltas",
  "timeline.loop": "Loop",
  "timeline.need_paths": "Timeline: give an input path and an output prefix",

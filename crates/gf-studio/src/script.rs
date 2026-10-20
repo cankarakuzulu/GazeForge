@@ -711,6 +711,38 @@ impl Offscreen {
                 json!({"status": w.face.status, "loaded": w.face.rig.is_some(), "joints": w.face.rig.as_ref().map_or(0, |r| r.joints.len()),
                        "mode": w.face.mode.name(), "active": w.face.active(), "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>()})
             }
+            "timeline" => {
+                match text("do").unwrap_or("summary") {
+                    "deltas" => {
+                        w.timeline_deltas();
+                        w.wait(|w| w.timeline.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if w.timeline.rig.is_none() {
+                            return Err(w.timeline.rig_note.clone());
+                        }
+                    }
+                    "clip" => {
+                        let path = text("file").ok_or("timeline clip needs file")?;
+                        let v = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")).and_then(|t| gf_api::exactjson::text(&t).map_err(|e| format!("{path}: {e}")))?;
+                        if !w.timeline_clip(v, "script") {
+                            return Err(w.timeline.status.clone());
+                        }
+                    }
+                    "seek" => {
+                        w.timeline_play(false);
+                        w.timeline.t = num("t").ok_or("timeline seek needs t")?;
+                        w.timeline_show();
+                    }
+                    "head" => {
+                        w.timeline.apply_head = step.get("on").and_then(Value::as_bool).unwrap_or(true);
+                        w.timeline_show();
+                    }
+                    "summary" => {}
+                    other => return Err(format!("timeline do is deltas, clip, seek, head or summary, got {other}")),
+                }
+                w.tick();
+                json!({"status": w.timeline.status, "rig_note": w.timeline.rig_note, "readout": w.timeline.readout, "t": w.timeline.t, "frames": w.timeline.clip.as_ref().map(|c| c.times.len()),
+                       "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), "eye_pose": w.eye_pose.is_some()})
+            }
             "stitch" => {
                 match text("do").unwrap_or("summary") {
                     "go" => {
