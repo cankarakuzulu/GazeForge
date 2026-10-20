@@ -410,6 +410,11 @@ impl Offscreen {
         let w = &mut self.world;
         let res = match op {
             "skin" => w.skin_script(step, sw, sh)?,
+            "journal" => {
+                w.tick();
+                w.journal_flush();
+                w.journal_state()
+            }
             "load" => {
                 let store = text("store").ok_or("load needs store")?;
                 if let Some(n) = num("preview_threads") {

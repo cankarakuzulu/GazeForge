@@ -456,7 +456,7 @@ impl Studio<'_> {
         if self.world.shape.is_some() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let h = self.world.shape.as_ref().map_or((0, 0), |s| (s.history.done.len(), s.history.undone.len()));
+                let h = (self.world.journal.can_undo() as usize, self.world.journal.can_redo() as usize);
                 let undo_tip = self.tip(tr("action.undo"), "undo");
                 let redo_tip = self.tip(tr("action.redo"), "redo");
                 if ui.add_enabled_ui(h.0 > 0, |ui| icons::button(ui, "undo-2", false, &undo_tip)).inner.clicked() {
@@ -618,6 +618,7 @@ impl Studio<'_> {
         }
         self.cube_input(ui, rect, ppp, w, h);
         let moving = self.world.state.step(dt);
+        self.world.journal.pointer_down = ui.input(|i| i.pointer.any_down());
         self.world.tick();
         self.renderer.sync_world(self.gfx.device, self.gfx.queue, self.world);
         self.renderer.dpr = ppp as f64;

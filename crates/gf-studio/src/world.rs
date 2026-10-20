@@ -75,6 +75,7 @@ pub struct World {
     pose_dirty: bool,
     pub face: FaceRig,
     pub skin: crate::skin::SkinUi,
+    pub journal: crate::history::Journal,
     pub extras: Vec<Extra>,
     pub overlays: Vec<Overlay>,
     extra_key: u64,
@@ -131,6 +132,7 @@ impl Default for World {
             pose_dirty: false,
             face: FaceRig::default(),
             skin: crate::skin::SkinUi::default(),
+            journal: crate::history::Journal::default(),
             extras: Vec::new(),
             overlays: Vec::new(),
             extra_key: 0,
@@ -223,6 +225,7 @@ impl World {
         }
         self.face_poll();
         self.skin_poll();
+        self.journal_tick();
         self.stitch_poll();
         self.timeline_poll();
         self.project_poll();
@@ -404,6 +407,7 @@ impl World {
                         self.poses.clear();
                         self.face = FaceRig::default();
                         self.skin_from_session();
+                        self.journal_reset();
                         self.extras.clear();
                         self.overlays.clear();
                         let old = std::mem::take(&mut self.timeline);
@@ -749,13 +753,13 @@ impl World {
         }
     }
 
-    pub fn undo(&mut self, redo: bool) -> Option<String> {
+    pub fn shape_step(&mut self, redo: bool) -> Option<String> {
         let shape = self.shape.as_mut()?;
         let label = if redo { shape.redo() } else { shape.undo() }?;
         self.preview_dirty = true;
         self.edit_at.get_or_insert_with(Instant::now);
         self.request_settle();
-        Some(if redo { trf("designer.redone", &[("what", &label)]) } else { trf("designer.undone", &[("what", &label)]) })
+        Some(label)
     }
 
     pub fn save(&mut self, out: &str) -> Result<(), String> {

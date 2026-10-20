@@ -369,6 +369,7 @@ impl World {
             self.project.pending_epoch = None;
             if let Some(p) = self.project.pending_panels.take() {
                 self.apply_panel_states(&p);
+                self.journal.rebase_panels();
             }
             self.project.saved_sig = Some(self.project_sig());
             if !self.project.recovered && self.project.doc.is_some() {

@@ -48,8 +48,8 @@ pub struct SkinUi {
     pub stamp_strength: f64,
     pub landmarks_path: String,
     pub look_id: String,
-    pub done: Vec<SkinSpec>,
-    pub undone: Vec<SkinSpec>,
+    pub done: Vec<Option<SkinSpec>>,
+    pub undone: Vec<Option<SkinSpec>>,
     pub revision: u64,
     pub dirty: Option<Dirty>,
     pub hover: Option<[f64; 3]>,
@@ -155,10 +155,10 @@ impl World {
             return Err(env["error"]["message"].as_str().unwrap_or("skin.landmarks failed").to_string());
         }
         let landmarks = env["result"]["landmarks"].as_str().unwrap_or_default().to_string();
+        let before = self.skin.spec.take();
+        self.skin_push_history(before);
         self.skin.spec = Some(SkinSpec { look, landmarks, size: gf_core::skin_layers::DEFAULT_SIZE, layers: Vec::new() });
         self.skin.work = None;
-        self.skin.done.clear();
-        self.skin.undone.clear();
         self.skin_write_character();
         self.skin_rebuild();
         Ok(())
@@ -238,22 +238,22 @@ impl World {
             return;
         }
         let n = spec.layers.len();
-        self.skin_push_history(before);
+        self.skin_push_history(Some(before));
         self.skin.selected = self.skin.selected.min(n.saturating_sub(1));
         self.skin_write_character();
         self.skin_rebuild();
     }
 
-    fn skin_push_history(&mut self, spec: SkinSpec) {
+    fn skin_push_history(&mut self, spec: Option<SkinSpec>) {
         self.skin.done.push(spec);
         let over = self.skin.done.len().saturating_sub(HISTORY_LIMIT);
         self.skin.done.drain(..over);
-        self.skin.undone.clear();
+        self.journal_push(crate::history::Domain::Skin);
     }
 
     pub fn skin_checkpoint(&mut self) {
         let Some(spec) = self.skin.spec.clone() else { return };
-        self.skin_push_history(spec);
+        self.skin_push_history(Some(spec));
     }
 
     pub fn skin_tweak(&mut self, f: impl FnOnce(&mut SkinSpec)) {
@@ -266,16 +266,29 @@ impl World {
         }
     }
 
-    pub fn skin_undo(&mut self, redo: bool) -> bool {
-        let Some(spec) = self.skin.spec.clone() else { return false };
+    pub fn skin_step(&mut self, redo: bool) -> Option<String> {
+        let current = self.skin.spec.clone();
         let (from, to) = if redo { (&mut self.skin.undone, &mut self.skin.done) } else { (&mut self.skin.done, &mut self.skin.undone) };
-        let Some(prev) = from.pop() else { return false };
-        to.push(spec);
-        self.skin.selected = self.skin.selected.min(prev.layers.len().saturating_sub(1));
-        self.skin.spec = Some(prev);
-        self.skin_write_character();
-        self.skin_rebuild();
-        true
+        let prev = from.pop()?;
+        to.push(current);
+        self.skin.painting = None;
+        match prev {
+            Some(spec) => {
+                self.skin.selected = self.skin.selected.min(spec.layers.len().saturating_sub(1));
+                self.skin.look_id = spec.look.id.clone();
+                self.skin.spec = Some(spec);
+                self.skin_write_character();
+                self.skin_rebuild();
+            }
+            None => {
+                self.skin.spec = None;
+                self.skin.work = None;
+                self.skin.dirty = None;
+                self.skin.status = tr("skin.none").into();
+                self.skin_write_character();
+            }
+        }
+        Some(tr("history.skin").to_string())
     }
 
     pub fn skin_pick(&self, r: &Rect, px: f64, py: f64) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
@@ -307,7 +320,7 @@ impl World {
             self.skin.spec = Some(before);
             return false;
         }
-        self.skin_push_history(before);
+        self.skin_push_history(Some(before));
         self.skin.painting = Some(index);
         self.skin.last_screen = Some((px, py));
         true
@@ -438,7 +451,7 @@ impl World {
             self.skin.spec = Some(before);
             return false;
         }
-        self.skin_push_history(before);
+        self.skin_push_history(Some(before));
         self.skin_write_character();
         true
     }
@@ -523,10 +536,10 @@ impl World {
                 }
             }
             "undo" => {
-                self.skin_undo(false);
+                self.undo(false);
             }
             "redo" => {
-                self.skin_undo(true);
+                self.undo(true);
             }
             "dump_masks" => {
                 let dir = std::path::PathBuf::from(text("dir").ok_or("skin dump_masks needs dir")?);

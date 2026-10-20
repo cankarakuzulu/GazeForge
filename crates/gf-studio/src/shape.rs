@@ -106,6 +106,7 @@ pub struct Step {
 pub struct History {
     pub done: Vec<Step>,
     pub undone: Vec<Step>,
+    pub pushes: u64,
 }
 
 pub const HISTORY_LIMIT: usize = 300;
@@ -254,6 +255,7 @@ impl ShapeModel {
 
     fn push(&mut self, label: String, before: Values, after: Values) {
         self.history.done.push(Step { label, before, after });
+        self.history.pushes += 1;
         if self.history.done.len() > HISTORY_LIMIT {
             self.history.done.remove(0);
         }

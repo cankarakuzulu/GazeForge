@@ -2,6 +2,7 @@ mod app;
 mod cube;
 mod face_rig;
 mod godot;
+mod history;
 mod hud;
 mod i18n;
 mod icon_data;

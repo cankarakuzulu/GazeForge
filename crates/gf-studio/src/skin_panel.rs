@@ -31,16 +31,6 @@ impl Studio<'_> {
             self.skin_layers_ui(ui);
             ui.separator();
             self.skin_tools_ui(ui);
-            ui.separator();
-            ui.horizontal(|ui| {
-                let (can_undo, can_redo) = (!self.world.skin.done.is_empty(), !self.world.skin.undone.is_empty());
-                if ui.add_enabled(can_undo, egui::Button::new(tr("skin.undo"))).clicked() {
-                    self.world.skin_undo(false);
-                }
-                if ui.add_enabled(can_redo, egui::Button::new(tr("skin.redo"))).clicked() {
-                    self.world.skin_undo(true);
-                }
-            });
             if let Some(spec) = &self.world.skin.spec {
                 for p in spec.problems() {
                     ui.colored_label(egui::Color32::from_rgb(230, 120, 60), p);
