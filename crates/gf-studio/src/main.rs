@@ -9,6 +9,7 @@ mod icons;
 mod input;
 mod keymap;
 mod preview;
+mod project;
 mod render;
 mod rig_panel;
 mod script;

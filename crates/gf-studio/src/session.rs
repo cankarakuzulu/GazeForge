@@ -342,7 +342,7 @@ fn ms(t: Instant) -> f64 {
 }
 
 impl Session {
-    pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes_file: Option<&str>, game: Option<&str>) -> Result<(Session, Value), String> {
+    pub fn open(store: &str, spec: Option<&str>, character: Option<&Value>, macro_file: Option<&str>, eyes_file: Option<&str>, game: Option<&str>) -> Result<(Session, Value), String> {
         let ctx = Ctx::from_env();
         let (eyes, eye_bases) = match eyes_file {
             Some(p) => {
@@ -356,6 +356,9 @@ impl Session {
         let mut input = json!({"store": store});
         if let Some(s) = spec {
             input["spec"] = json!(s);
+        }
+        if let Some(c) = character {
+            input["character"] = c.clone();
         }
         if let Some(m) = macro_file {
             input["macro"] = json!(m);

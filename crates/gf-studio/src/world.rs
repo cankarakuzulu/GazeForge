@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::face_rig::FaceRig;
 use crate::stitch::Stitch;
+use crate::project::Project;
 use crate::timeline::Timeline;
 use crate::hud::Hud;
 use crate::i18n::{tr, tr_or, trf};
@@ -79,6 +80,7 @@ pub struct World {
     pub stitch: Stitch,
     pub timeline: Timeline,
     pub eye_pose: Option<([f64; 9], [f64; 3])>,
+    pub project: Project,
 }
 
 impl Default for World {
@@ -131,6 +133,7 @@ impl Default for World {
             stitch: Stitch::default(),
             timeline: Timeline::default(),
             eye_pose: None,
+            project: Project::default(),
         }
     }
 }
@@ -176,11 +179,15 @@ impl World {
     }
 
     pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) {
+        self.request_load_with(store, spec, None, macro_file, eyes, game);
+    }
+
+    pub fn request_load_with(&mut self, store: &str, spec: Option<&str>, character: Option<Value>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) {
         self.load_seq += 1;
         self.loading = Some(Instant::now());
         self.load_result = None;
         let owned = |s: Option<&str>| s.map(str::to_string);
-        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: owned(spec), macro_file: owned(macro_file), eyes: owned(eyes), game: owned(game) });
+        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: owned(spec), character, macro_file: owned(macro_file), eyes: owned(eyes), game: owned(game) });
     }
 
     pub fn idle(&self) -> bool {
@@ -211,6 +218,8 @@ impl World {
         self.face_poll();
         self.stitch_poll();
         self.timeline_poll();
+        self.project_poll();
+        self.project_autosave();
         if self.preview_dirty {
             self.update_preview();
         }

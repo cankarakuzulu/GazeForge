@@ -42,6 +42,7 @@ pub struct UiState {
     pub cube_hover: Option<(usize, Element)>,
     pub cube_drag: Option<usize>,
     pub wizards: crate::wizard::Wizards,
+    pub project: crate::project::ProjectUi,
 }
 
 pub struct UiArgs {
@@ -80,6 +81,7 @@ impl UiState {
             cube_hover: None,
             cube_drag: None,
             wizards: Default::default(),
+            project: Default::default(),
         })
     }
 }
@@ -238,7 +240,8 @@ impl Studio<'_> {
         egui::Panel::left("side").default_size(300.0).show(ui, |ui| self.side(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, dt));
         self.keys_window(&ctx);
-        self.s.wizards.show(&ctx, self.world, "untitled");
+        let slot = self.world.project.slot();
+        self.s.wizards.show(&ctx, self.world, &slot);
         if let Some((store, spec)) = self.s.wizards.open_spec.take() {
             if !store.is_empty() {
                 self.s.store = store;
@@ -429,6 +432,7 @@ impl Studio<'_> {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
         });
+        self.project_panel(ui);
         self.topology_panel(ui);
         self.face_rig_panel(ui);
         self.stitch_panel(ui);

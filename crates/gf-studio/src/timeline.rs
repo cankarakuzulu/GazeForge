@@ -18,6 +18,7 @@ pub struct Clip {
     pub fps: f64,
     pub head: Option<Vec<[f64; 4]>>,
     pub experimental: bool,
+    pub raw: Value,
 }
 
 pub fn parse_clip(c: &Value) -> Result<Clip, String> {
@@ -42,6 +43,7 @@ pub fn parse_clip(c: &Value) -> Result<Clip, String> {
         fps: c["fps"].as_f64().filter(|f| *f > 0.0).unwrap_or(30.0),
         head,
         experimental: c["experimental"] == true,
+        raw: c.clone(),
     })
 }
 

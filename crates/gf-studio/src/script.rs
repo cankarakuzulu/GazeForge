@@ -711,6 +711,31 @@ impl Offscreen {
                 json!({"status": w.face.status, "loaded": w.face.rig.is_some(), "joints": w.face.rig.as_ref().map_or(0, |r| r.joints.len()),
                        "mode": w.face.mode.name(), "active": w.face.active(), "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>()})
             }
+            "project" => {
+                match text("do").unwrap_or("summary") {
+                    "save" => {
+                        w.project_save(text("name").ok_or("project save needs name")?, false);
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                    }
+                    "open" => {
+                        w.project_open(text("name").ok_or("project open needs name")?, step.get("recovery").and_then(Value::as_bool).unwrap_or(false));
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if !w.project.unresolved.is_empty() || w.project.doc.is_none() {
+                            return Err(w.project.status.clone());
+                        }
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                        w.wait(|w| w.face.job.is_none() && w.stitch.job.is_none() && w.timeline.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "notes" => w.project.notes = text("text").unwrap_or_default().to_string(),
+                    "new" => w.project_new(),
+                    "summary" => {}
+                    other => return Err(format!("project do is save, open, notes, new or summary, got {other}")),
+                }
+                w.tick();
+                json!({"name": w.project.name, "active": w.project.active, "characters": w.project.doc.as_ref().and_then(|d| d["characters"].as_array()).map(Vec::len),
+                       "dirty": w.project_dirty(), "status": w.project.status, "notes": w.project.notes, "panels": w.panel_states(),
+                       "weights": w.character_input().map(|c| c["weights"].clone())})
+            }
             "timeline" => {
                 match text("do").unwrap_or("summary") {
                     "deltas" => {
