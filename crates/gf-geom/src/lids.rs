@@ -102,6 +102,30 @@ impl Eye {
         self.gaze
     }
 
+    pub fn vertex_normals(&self) -> Vec<[f64; 3]> {
+        let mut n = vec![[0.0f64; 3]; self.vertices.len()];
+        for t in &self.triangles {
+            let [a, b, c] = t.map(|i| self.vertices[i as usize]);
+            let f = cross(sub(b, a), sub(c, a));
+            for &i in t {
+                n[i as usize] = [0, 1, 2].map(|k| n[i as usize][k] + f[k]);
+            }
+        }
+        self.vertices
+            .iter()
+            .zip(n)
+            .map(|(p, m)| {
+                let out = sub(*p, self.centre);
+                let l = length(m);
+                if l <= 0.0 {
+                    return unit(out);
+                }
+                let s = if dot(m, out) < 0.0 { -1.0 / l } else { 1.0 / l };
+                m.map(|x| x * s)
+            })
+            .collect()
+    }
+
     pub fn transformed(&self, scale: f64, rotation: [[f64; 3]; 3], translation: [f64; 3]) -> Eye {
         let rotate = |v: [f64; 3]| [0, 1, 2].map(|i| dot(rotation[i], v));
         let place = |p: [f64; 3]| {

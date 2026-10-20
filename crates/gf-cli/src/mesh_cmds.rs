@@ -921,6 +921,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 gf_core::body::scale_about(&mut c, pivot, s);
                 e.centre = c[0];
                 e.radius *= s;
+                if spec.eyeballs.is_some() {
+                    gf_core::body::scale_about(&mut e.vertices, pivot, s);
+                }
             }
         }
         if eyes.len() != 2 {
@@ -939,10 +942,20 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let hinge_now = hinge_now[0];
         let (left, right) = if eyes[0].centre[0] >= eyes[1].centre[0] { (&eyes[0], &eyes[1]) } else { (&eyes[1], &eyes[0]) };
         let joints = rig::joints(neck, hinge_now, left.centre, right.centre);
-        let attachments = [("Eye_L", 3usize, left.radius), ("Eye_R", 4usize, right.radius)]
+        let attachments = [("Eye_L", 3usize, left), ("Eye_R", 4usize, right)]
             .iter()
-            .map(|&(name, joint, radius)| {
-                let s = rig::sphere(radius, EYE_RINGS, EYE_SEGMENTS);
+            .map(|&(name, joint, eye)| {
+                if spec.eyeballs.is_some() {
+                    let c = eye.centre;
+                    return gltf::Attachment {
+                        name: name.into(),
+                        joint,
+                        positions: eye.vertices.iter().map(|p| gm::to_gltf([p[0] - c[0], p[1] - c[1], p[2] - c[2]])).collect(),
+                        normals: eye.vertex_normals().iter().map(|n| gm::to_gltf(*n)).collect(),
+                        indices: eye.triangles.iter().flatten().copied().collect(),
+                    };
+                }
+                let s = rig::sphere(eye.radius, EYE_RINGS, EYE_SEGMENTS);
                 gltf::Attachment {
                     name: name.into(),
                     joint,
@@ -1230,6 +1243,23 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let extras = json!({"spec": spec.revision(), "pack": spec.base.pack, "game_base": game_ref,
                         "placement": placement.version().to_string(), "tool": tool});
     let glb_names: Vec<String> = if face2_correctives.is_some() { names.iter().cloned().chain(names.iter().map(|n| format!("{n}.corrective"))).collect() } else { names.clone() };
+    if let (false, true, Some(eyes)) = (rigged, spec.eyeballs.is_some(), &moved_eyes) {
+        for eye in eyes {
+            let mut vertices = eye.vertices.clone();
+            if let Some((pivot, s)) = head_scale {
+                gf_core::body::scale_about(&mut vertices, pivot, s);
+            }
+            body_lods.push(Lod {
+                name: if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }.into(),
+                positions: vertices.iter().map(|p| gm::to_gltf(*p)).collect(),
+                normals: eye.vertex_normals().iter().map(|n| gm::to_gltf(*n)).collect(),
+                uvs: vec![[0.0, 0.0]; vertices.len()],
+                indices: eye.triangles.iter().flatten().copied().collect(),
+                morphs: Vec::new(),
+                skin: None,
+            });
+        }
+    }
     let (bytes, report) = gltf::glb_full(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);

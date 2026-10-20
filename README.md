@@ -234,8 +234,10 @@ Game-ready options (each is opt-in; without them the output is unchanged):
   base: the jaw weight is the jaw target's displacement (`--rig-jaw`, e.g. a jaw-open unit) projected on the rotation
   about the hinge fitted to that same target; the neck weight is 1 on the neck seam (so a body's neck joint drives the
   seam exactly) and falls to 0 at half the chin-to-seam distance; the head takes the rest. Joint positions follow the
-  character (the seam centroid, the fitted hinge moved with the face, the eye centres from `--eyes`), and two eyeball
-  spheres `Eye_L` / `Eye_R` are children of the eye joints.
+  character (the seam centroid, the fitted hinge moved with the face, the eye centres from `--eyes`), and two eyeballs
+  `Eye_L` / `Eye_R` are children of the eye joints: spheres of the eyes file's radii, or, for a spec with `eyeballs`, the
+  eyes file's own meshes as placed for the character. Without a rig, a spec with `eyeballs` exported with `--eyes` gets
+  the placed eye meshes as two more nodes `Eye_L` / `Eye_R`; a spec without the field exports as before.
 
 ##### Face rig
 
