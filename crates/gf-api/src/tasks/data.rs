@@ -142,6 +142,7 @@ fn create(opts: &Options) -> Result<Value, String> {
         macros: None,
         residual: None,
         eyeballs: None,
+        skin: None,
     };
     if let Some(source) = &source {
         let (pack, _) = store.load_pack(&pack_ref)?;

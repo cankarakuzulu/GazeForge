@@ -641,6 +641,7 @@ fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Mater
                 ior: p.ior,
                 blend: p.blend,
                 double_sided: false,
+                extension: None,
             })
         })
         .collect()
@@ -1179,6 +1180,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     joints_1: Vec::new(),
                     weights_1: Vec::new(),
                 }),
+                material: None,
             });
         }
         if !failures.is_empty() {
@@ -1291,6 +1293,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             indices: surface.indices,
             morphs,
             skin,
+            material: None,
         });
     }
     let morph_meta: Vec<Value> = ids
@@ -1325,15 +1328,28 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 indices: eye.triangles.iter().flatten().copied().collect(),
                 morphs: Vec::new(),
                 skin: None,
+                material: None,
             });
         }
     }
-    let eye_mats = match &eye_model {
+    let mut materials = match &eye_model {
         Some(m) if !eye_parts.is_empty() => eye_materials(m)?,
         _ => Vec::new(),
     };
+    let skin_report = match &spec.skin {
+        Some(skin) => {
+            crate::jobs::progress("skin", 0, 1, "textures and layers");
+            let (material, report) = crate::skin::head_material(&store, skin, &dense.positions, &base)?;
+            for lod in lods.iter_mut() {
+                lod.material = Some(materials.len());
+            }
+            materials.push(material);
+            Some(report)
+        }
+        None => None,
+    };
     crate::jobs::progress("write", 0, 1, "glb");
-    let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &eye_mats)?;
+    let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &materials)?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -1381,6 +1397,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     if !body_meta.is_null() {
         sidecar["body"] = body_meta.clone();
     }
+    if let Some(skin) = &skin_report {
+        sidecar["skin"] = skin.clone();
+    }
     let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
     std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
     let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
@@ -1403,6 +1422,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if let Some(eyes) = eyes_report {
         result["eyes"] = json!(eyes);
+    }
+    if let Some(skin) = skin_report {
+        result["skin"] = skin;
     }
     Ok(result)
 }

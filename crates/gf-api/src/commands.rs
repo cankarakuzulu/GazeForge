@@ -187,6 +187,24 @@ pub static REGISTRY: &[CommandDef] = &[
         run: skin::generate,
     },
     CommandDef {
+        name: "skin.layers",
+        kind: Kind::Query,
+        summary: "The layer kinds and styles a character spec's skin.layers can name (grime: dust, sand, dirt, mud; blood: drips, splatter; paint: eye-band, cheek-stripes, chin), each with its colour, opacity, roughness, edge spread and second state (wet, dry). A live layer is exported as a mask a renderer drives through the GAZEFORGE_skin glTF extension; a baked one is painted into the base textures.",
+        limits: "Masks are procedural, placed by the base's landmark table and seeded; painted or stamped masks are not available yet.",
+        input: skin::layers_input,
+        output: skin::layers_output,
+        run: skin::layers,
+    },
+    CommandDef {
+        name: "skin.landmarks",
+        kind: Kind::Mutation,
+        summary: "Put a base's landmark table (JSON {\"vertices\": {MediaPipe landmark: dense vertex}}) into the store, after checking it against the game base's pack and the landmarks the skin regions and layers need. Returns the reference a character spec's skin.landmarks takes.",
+        limits: "Checks indices and presence only, not where the landmarks sit on the face.",
+        input: skin::landmarks_input,
+        output: skin::landmarks_output,
+        run: skin::landmarks,
+    },
+    CommandDef {
         name: "skin.project",
         kind: Kind::Mutation,
         summary: "Project the photos of a photos-path run onto the game base's texels, through the fitted cameras: visibility by the fitted mesh's z-buffer, weights by facing and distance from the outline, eyes and brows masked by the front photo's landmarks, delit by a spherical-harmonics shading fit, each view gain-matched to the front. What no photo sees takes the mirrored side, then a procedural skin whose tone is fitted to the photos and whose colour is pulled to the photos' by a gain field spread over the mesh. Also writes the procedural skin alone (generated) and a confidence map.",
@@ -986,6 +1004,7 @@ fn character_create(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         macros: None,
         residual: None,
         eyeballs: None,
+        skin: None,
     }
     .canonical();
     let (problems, _) = ch::problems(&store, &spec, None);

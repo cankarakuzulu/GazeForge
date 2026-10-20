@@ -2,8 +2,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
+use gf_core::skin_layers::{self as sl, SkinSpec};
 use gf_core::skin_texture::{self as st, SkinLook};
 use gf_core::{game_mesh, skin_map, skin_regions};
+use gf_geom::decimate::Decimated;
+use gf_io::gltf;
 use gf_io::store::Store;
 use serde_json::{Value, json};
 
@@ -62,17 +65,125 @@ pub fn resolve_look(input: &Value) -> Result<SkinLook, ApiError> {
 }
 
 pub fn read_landmarks(path: &Path, dense: &[[f64; 3]]) -> Result<BTreeMap<usize, [f64; 3]>, ApiError> {
-    let raw = std::fs::read_to_string(path).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
-    let v: Value = serde_json::from_str(&raw).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
-    let table = v.get("vertices").and_then(Value::as_object).ok_or_else(|| ApiError::invalid(format!("{}: no vertices table", path.display())))?;
+    let raw = std::fs::read(path).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+    parse_landmarks(&raw, dense).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))
+}
+
+pub fn parse_landmarks(raw: &[u8], dense: &[[f64; 3]]) -> Result<BTreeMap<usize, [f64; 3]>, String> {
+    let v: Value = serde_json::from_slice(raw).map_err(|e| e.to_string())?;
+    let table = v.get("vertices").and_then(Value::as_object).ok_or("no vertices table")?;
     let mut out = BTreeMap::new();
     for (k, idx) in table {
-        let lm: usize = k.parse().map_err(|_| ApiError::invalid(format!("{}: landmark key {k:?} is not a number", path.display())))?;
-        let i = idx.as_u64().ok_or_else(|| ApiError::invalid(format!("{}: landmark {k} has no vertex index", path.display())))? as usize;
-        let p = dense.get(i).ok_or_else(|| ApiError::invalid(format!("{}: landmark {k} names vertex {i}, beyond the dense base", path.display())))?;
+        let lm: usize = k.parse().map_err(|_| format!("landmark key {k:?} is not a number"))?;
+        let i = idx.as_u64().ok_or_else(|| format!("landmark {k} has no vertex index"))? as usize;
+        let p = dense.get(i).ok_or_else(|| format!("landmark {k} names vertex {i}, beyond the dense base"))?;
         out.insert(lm, *p);
     }
     Ok(out)
+}
+
+pub fn head_material(store: &Store, skin: &SkinSpec, dense: &[[f64; 3]], mesh: &Decimated) -> Result<(gltf::Material, Value), String> {
+    let started = Instant::now();
+    let raw = store.get_ref(&skin.landmarks).map_err(|e| format!("skin.landmarks: {e}"))?;
+    let landmarks = parse_landmarks(&raw, dense).map_err(|e| format!("skin.landmarks: {e}"))?;
+    let positions: Vec<[f64; 3]> = mesh.kept.iter().map(|&k| dense[k as usize]).collect();
+    let normals = game_mesh::game_normals(&positions, &mesh.triangles);
+    let regions = skin_regions::build(&positions, &normals, &mesh.triangles, &landmarks)?;
+    let map = skin_map::build(&mesh.triangle_uvs, skin.size, PAD);
+    let mut tex = st::generate(&map, &positions, &normals, &mesh.triangles, &mesh.triangle_uvs, &regions, &skin.look);
+    let surface = sl::Surface { map: &map, positions: &positions, normals: &normals, triangles: &mesh.triangles, uvs: &mesh.triangle_uvs, regions: &regions, landmarks: &landmarks };
+    let texels = sl::texels(&surface);
+    let mut live = Vec::new();
+    let mut rows = Vec::new();
+    for layer in &skin.layers {
+        let response = layer.response().ok_or_else(|| format!("skin layer {}: no response for {} {}", layer.name, layer.kind, layer.style))?;
+        let mask = sl::mask(&surface, &texels, layer)?;
+        let reached = mask.iter().filter(|&&m| m > 0).count();
+        if layer.is_live() {
+            live.push(mask);
+        } else {
+            sl::bake(&mut tex, &mask, &response, layer.amount as f32, layer.variant as f32);
+        }
+        rows.push(json!({"name": layer.name, "kind": layer.kind, "style": layer.style, "live": layer.is_live(), "amount": layer.amount,
+                         "variant": layer.variant, "mask_texels": reached}));
+    }
+    let png = |rgba: &[u8]| gf_io::png::rgba(skin.size, skin.size, rgba);
+    let rgba = |rgb: &[u8]| -> Vec<u8> { rgb.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect() };
+    let masks = sl::pack(&live).iter().map(|m| png(m)).collect::<Result<Vec<_>, _>>()?;
+    let material = gltf::Material {
+        name: "head_skin".into(),
+        base_color: [1.0; 4],
+        base_texture: Some(png(&tex.albedo)?),
+        normal_texture: Some(png(&rgba(&tex.normal))?),
+        orm_texture: Some(png(&rgba(&tex.orm))?),
+        metallic: 0.0,
+        roughness: 1.0,
+        transmission: None,
+        ior: None,
+        blend: false,
+        double_sided: false,
+        extension: Some(gltf::MaterialExtension { name: sl::EXTENSION, value: sl::extension(skin), textures: masks }),
+    };
+    let report = json!({"look": skin.look.id, "size": skin.size, "layers": rows, "mask_textures": live.len().div_ceil(4),
+                        "covered_fraction": map.covered() as f64 / (skin.size * skin.size) as f64, "seconds": started.elapsed().as_secs_f64()});
+    Ok((material, report))
+}
+
+pub fn layers_input() -> Value {
+    obj(json!({}), &[])
+}
+
+pub fn layers_output() -> Value {
+    shape(json!({"extension": {"type": "string"}, "kinds": {"type": "array"}}))
+}
+
+pub fn layers(_: &Ctx, _: &Value) -> Result<Value, ApiError> {
+    let kinds: Vec<Value> = sl::STYLES
+        .iter()
+        .map(|(kind, styles)| {
+            let rows: Vec<Value> = styles
+                .iter()
+                .filter_map(|style| {
+                    let probe = sl::SkinLayer { name: "x".into(), kind: kind.to_string(), style: style.to_string(), live: None, amount: 0.0, variant: 0.0, seed: 0, colour: None };
+                    let r = probe.response()?;
+                    Some(json!({"style": style, "colour": r.colour, "opacity": r.opacity, "roughness": r.roughness, "spread": r.spread,
+                                "variant": r.variant.map(|(name, colour, roughness)| json!({"name": name, "colour": colour, "roughness": roughness}))}))
+                })
+                .collect();
+            json!({"kind": kind, "styles": rows})
+        })
+        .collect();
+    Ok(json!({"extension": sl::EXTENSION, "kinds": kinds, "max_live": sl::MAX_LIVE, "default_size": sl::DEFAULT_SIZE,
+              "layer": "{name: [a-z][a-z0-9_]*, kind, style, live: true (default) | false, amount: 0..1 (live: the default; baked: how much is painted in), variant: 0..1 (the second state), seed, colour: optional linear rgb}"}))
+}
+
+pub fn landmarks_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1},
+               "game": {"type": "string", "minLength": 1, "description": "the game base the table is checked against (its pack's dense base)"},
+               "landmarks": {"type": "string", "minLength": 1, "description": "path of the table, e.g. base_landmarks.json from a photos run"}}),
+        &["store", "game", "landmarks"],
+    )
+}
+
+pub fn landmarks_output() -> Value {
+    shape(json!({"landmarks": {"type": "string"}, "count": {"type": "integer"}}))
+}
+
+pub fn landmarks(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
+    let (manifest, mesh) = store.load_game(text(input, "game")).map_err(ApiError::not_found)?;
+    let (_, dense) = store.load_pack(&manifest.pack).map_err(ApiError::not_found)?;
+    let path = Path::new(text(input, "landmarks"));
+    let table = read_landmarks(path, &dense.positions)?;
+    let positions: Vec<[f64; 3]> = mesh.kept.iter().map(|&k| dense.positions[k as usize]).collect();
+    let normals = game_mesh::game_normals(&positions, &mesh.triangles);
+    skin_regions::build(&positions, &normals, &mesh.triangles, &table).map_err(ApiError::invalid)?;
+    if let Some(missing) = sl::LANDMARKS.iter().find(|i| !table.contains_key(i)) {
+        return Err(ApiError::invalid(format!("{}: landmark {missing} is missing; the skin layers need {:?}", path.display(), sl::LANDMARKS)));
+    }
+    let hex = store.put_file(path).map_err(ApiError::internal)?;
+    Ok(json!({"landmarks": gf_core::hash::reference(&hex), "count": table.len()}))
 }
 
 pub fn project_input() -> Value {

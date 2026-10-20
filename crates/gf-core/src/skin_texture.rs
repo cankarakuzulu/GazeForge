@@ -166,7 +166,7 @@ fn noise3(p: [f32; 3], seed: u32) -> f32 {
     lerp(lerp(x00, x10, f[1]), lerp(x01, x11, f[1]), f[2])
 }
 
-fn fbm3(p: [f32; 3], seed: u32, octaves: u32) -> f32 {
+pub(crate) fn fbm3(p: [f32; 3], seed: u32, octaves: u32) -> f32 {
     let (mut sum, mut amp, mut norm, mut f) = (0.0, 0.5, 0.0, 1.0);
     for o in 0..octaves {
         sum += amp * noise3(p.map(|x| x * f), seed.wrapping_add(o * 131));
@@ -177,7 +177,7 @@ fn fbm3(p: [f32; 3], seed: u32, octaves: u32) -> f32 {
     sum / norm
 }
 
-fn cells(p: [f32; 3], seed: u32, density: f32) -> (f32, f32) {
+pub(crate) fn cells(p: [f32; 3], seed: u32, density: f32) -> (f32, f32) {
     let c = p.map(|x| x.floor() as i64);
     let mut best = (f32::INFINITY, 0.0f32);
     for dz in -1..=1 {
@@ -199,7 +199,7 @@ fn cells(p: [f32; 3], seed: u32, density: f32) -> (f32, f32) {
     best
 }
 
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     fade(((x - e0) / (e1 - e0)).clamp(0.0, 1.0))
 }
 
