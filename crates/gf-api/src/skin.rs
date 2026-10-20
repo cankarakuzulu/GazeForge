@@ -75,6 +75,212 @@ pub fn read_landmarks(path: &Path, dense: &[[f64; 3]]) -> Result<BTreeMap<usize,
     Ok(out)
 }
 
+pub fn project_input() -> Value {
+    obj(
+        crate::photo::with_tools(json!({"run": {"type": "string", "minLength": 1, "description": "a photos-path run: views.json, fit_photos.json (cameras) and fitted_dense.npy"},
+               "store": {"type": "string", "minLength": 1},
+               "game": {"type": "string", "minLength": 1},
+               "landmarks": {"type": "string", "minLength": 1, "description": "the base's landmark table; default <run>/base_landmarks.json"},
+               "look": {"type": "string", "minLength": 1, "description": "the preset whose detail (pores, freckles, stubble...) fills what no photo sees; its tone is fitted to the photos"},
+               "skin": {"type": "object", "description": "overrides of the preset's fields, as in skin.generate"},
+               "brows": {"enum": ["remove", "keep"], "description": "remove (default): the brows are not projected and the skin under them is filled; keep: they stay in the texture"},
+               "size": {"type": "integer", "minimum": 256, "maximum": 8192},
+               "name": {"type": "string", "minLength": 1, "description": "file prefix, default projected"},
+               "out": {"type": "string", "minLength": 1, "description": "folder for the PNGs"}})),
+        &["run", "store", "game", "out"],
+    )
+}
+
+pub fn project_output() -> Value {
+    shape(json!({"albedo": {"type": "string"}, "generated_albedo": {"type": "string"}, "confidence": {"type": "string"}, "look": {"type": "object"},
+                 "photos": {"type": "object"}, "fill": {"type": "object"}, "seconds": {"type": "number"}}))
+}
+
+fn write_png(path: &Path, size: usize, rgba: &[u8]) -> Result<String, ApiError> {
+    let png = gf_io::png::rgba(size, size, rgba).map_err(ApiError::internal)?;
+    std::fs::write(path, png).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+    Ok(path.display().to_string())
+}
+
+pub fn project(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let started = Instant::now();
+    let run = Path::new(text(input, "run"));
+    let mut look = resolve_look(input)?;
+    let size = input.get("size").and_then(Value::as_u64).map(|s| s as usize).unwrap_or(DEFAULT_SIZE);
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
+    let (manifest, mesh) = store.load_game(text(input, "game")).map_err(ApiError::not_found)?;
+    let (_, dense) = store.load_pack(&manifest.pack).map_err(ApiError::not_found)?;
+    let fitted = gf_io::dense::read_points_any(&run.join("fitted_dense.npy")).map_err(ApiError::not_found)?;
+    if fitted.len() != dense.positions.len() {
+        return Err(ApiError::invalid(format!("fitted_dense.npy has {} vertices, the pack {}", fitted.len(), dense.positions.len())));
+    }
+    let landmarks_path = input.get("landmarks").and_then(Value::as_str).map(Path::new).map(Path::to_path_buf).unwrap_or_else(|| run.join("base_landmarks.json"));
+    let landmarks = read_landmarks(&landmarks_path, &dense.positions)?;
+    let neutral: Vec<[f64; 3]> = mesh.kept.iter().map(|&k| dense.positions[k as usize]).collect();
+    let shaped: Vec<[f64; 3]> = mesh.kept.iter().map(|&k| fitted[k as usize]).collect();
+    let neutral_n = game_mesh::game_normals(&neutral, &mesh.triangles);
+    let shaped_n = game_mesh::game_normals(&shaped, &mesh.triangles);
+    let regions = skin_regions::build(&neutral, &neutral_n, &mesh.triangles, &landmarks).map_err(ApiError::invalid)?;
+    let map = skin_map::build(&mesh.triangle_uvs, size, PAD);
+    let n = size * size;
+    let dir = run.join("skin");
+    std::fs::create_dir_all(&dir).map_err(|e| ApiError::invalid(format!("{}: {e}", dir.display())))?;
+    let io = |r: Result<(), String>| r.map_err(ApiError::internal);
+    io(gf_io::write_table_i32(&dir.join("texel_tri.npy"), n, 1, map.triangle.iter().map(|&t| if t == skin_map::NONE { -1 } else { t as i32 }).collect()))?;
+    io(gf_io::write_table_f32(&dir.join("texel_bary.npy"), n, 2, map.bary.iter().flatten().copied().collect()))?;
+    io(gf_io::dense::write_points(&dir.join("positions.npy"), &shaped))?;
+    io(gf_io::dense::write_points(&dir.join("normals.npy"), &shaped_n))?;
+    io(gf_io::write_table_i32(&dir.join("triangles.npy"), mesh.triangles.len(), 3, mesh.triangles.iter().flatten().map(|&i| i as i32).collect()))?;
+    let nr = skin_regions::NAMES.len();
+    io(gf_io::write_table_f32(&dir.join("regions.npy"), neutral.len(), nr, regions.weights.iter().flatten().copied().collect()))?;
+    let brows = input.get("brows").and_then(Value::as_str).unwrap_or("remove");
+    let photos = crate::photo::worker(
+        input,
+        "skin_worker.py",
+        "project",
+        json!({"dir": dir.display().to_string(), "views": run.join("views.json").display().to_string(), "cameras": run.join("fit_photos.json").display().to_string(), "brows": brows}),
+        run,
+    )?;
+    let (_, _, projected) = gf_io::read_table_f32(&dir.join("projected.npy")).map_err(ApiError::internal)?;
+    let (_, _, confidence) = gf_io::read_table_f32(&dir.join("confidence.npy")).map_err(ApiError::internal)?;
+    if projected.len() != n * 3 || confidence.len() != n {
+        return Err(ApiError::internal("the worker's arrays do not match the texel count"));
+    }
+    let neutral_mm: Vec<[f32; 3]> = neutral.iter().map(|p| p.map(|x| (x * 1000.0) as f32)).collect();
+    let mirror = skin_map::mirror(&map, &mesh.triangles, &neutral_mm);
+    let px = |k: usize| [projected[k * 3], projected[k * 3 + 1], projected[k * 3 + 2]];
+    let mut colour = vec![[0.0f32; 3]; n];
+    let mut conf = vec![0.0f32; n];
+    let mut mirrored = 0usize;
+    for k in 0..n {
+        if map.triangle[k] == skin_map::NONE {
+            continue;
+        }
+        let (q, c) = (confidence[k], px(k));
+        let m = mirror[k];
+        let (qm, cm) = if m != skin_map::NONE { (confidence[m as usize], px(m as usize)) } else { (0.0, [0.0; 3]) };
+        let wm = (qm * (1.0 - q)).max(0.0);
+        let total = q + wm;
+        if total > 1e-6 {
+            colour[k] = [0, 1, 2].map(|j| (q * c[j] + wm * cm[j]) / total);
+        }
+        if wm > q {
+            mirrored += 1;
+        }
+        conf[k] = total.min(1.0);
+    }
+    let region_at = |k: usize, r: usize| -> f32 {
+        let t = mesh.triangles[map.triangle[k] as usize];
+        let [b0, b1] = map.bary[k];
+        b0 * regions.weights[t[0] as usize][r] + b1 * regions.weights[t[1] as usize][r] + (1.0 - b0 - b1) * regions.weights[t[2] as usize][r]
+    };
+    let (cheeks, forehead) = (skin_regions::Regions::index("cheeks").unwrap(), skin_regions::Regions::index("forehead").unwrap());
+    let mut samples: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for k in 0..n {
+        if map.triangle[k] != skin_map::NONE && conf[k] > 0.8 && (region_at(k, cheeks) > 0.4 || region_at(k, forehead) > 0.4) {
+            for j in 0..3 {
+                samples[j].push(colour[k][j]);
+            }
+        }
+    }
+    if samples[0].len() < 100 {
+        return Err(ApiError::invalid(format!("only {} confident cheek and forehead texels; the photos do not show enough skin to fit a tone", samples[0].len())));
+    }
+    let median = |v: &mut Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    let target = [median(&mut samples[0]), median(&mut samples[1]), median(&mut samples[2])];
+    let (m, h, u, err) = st::fit_tone(target);
+    look.melanin = m;
+    look.haemoglobin = h;
+    look.undertone = u;
+    look.id = format!("{}+photos", look.id);
+    let tex = st::generate(&map, &neutral, &neutral_n, &mesh.triangles, &mesh.triangle_uvs, &regions, &look);
+    let proc_lin = |k: usize| [0, 1, 2].map(|j| st::to_linear(tex.albedo[k * 4 + j] as f32 / 255.0));
+    let v = neutral.len();
+    let mut gsum = vec![[0.0f64; 3]; v];
+    let mut wsum = vec![0.0f64; v];
+    for k in 0..n {
+        if map.triangle[k] == skin_map::NONE || conf[k] < 0.6 {
+            continue;
+        }
+        let p = proc_lin(k);
+        let t = mesh.triangles[map.triangle[k] as usize];
+        let [b0, b1] = map.bary[k];
+        for (c, b) in t.iter().zip([b0, b1, 1.0 - b0 - b1]) {
+            for j in 0..3 {
+                gsum[*c as usize][j] += (b * (colour[k][j] / p[j].max(1e-4)).clamp(0.2, 5.0)) as f64;
+            }
+            wsum[*c as usize] += b as f64;
+        }
+    }
+    let known: Vec<bool> = wsum.iter().map(|&w| w > 1e-6).collect();
+    let n_known = known.iter().filter(|&&k| k).count().max(1) as f64;
+    let mean_gain: [f64; 3] = [0, 1, 2].map(|j| (0..v).filter(|&i| known[i]).map(|i| gsum[i][j] / wsum[i]).sum::<f64>() / n_known);
+    let mut gain: Vec<[f64; 3]> = (0..v).map(|i| if known[i] { gsum[i].map(|x| x / wsum[i]) } else { mean_gain }).collect();
+    let nb = skin_regions::neighbours(v, &mesh.triangles);
+    for round in 0..400 {
+        let prev = gain.clone();
+        for i in 0..v {
+            if nb[i].is_empty() || (known[i] && round >= 20) {
+                continue;
+            }
+            let mut s = [0.0; 3];
+            for &j in &nb[i] {
+                for c in 0..3 {
+                    s[c] += prev[j as usize][c];
+                }
+            }
+            gain[i] = s.map(|x| x / nb[i].len() as f64);
+        }
+    }
+    let mut albedo = vec![0u8; n * 4];
+    let mut generated = vec![0u8; n * 4];
+    let mut conf_png = vec![0u8; n * 4];
+    for k in 0..n {
+        let s = map.source[k];
+        if s == skin_map::NONE {
+            albedo[k * 4..k * 4 + 4].copy_from_slice(&[128, 128, 128, 255]);
+            generated[k * 4..k * 4 + 4].copy_from_slice(&[128, 128, 128, 255]);
+            conf_png[k * 4..k * 4 + 4].copy_from_slice(&[0, 0, 0, 255]);
+            continue;
+        }
+        let s = s as usize;
+        let t = mesh.triangles[map.triangle[s] as usize];
+        let [b0, b1] = map.bary[s];
+        let b = [b0, b1, 1.0 - b0 - b1];
+        let g = [0, 1, 2].map(|j| (0..3).map(|c| b[c] as f64 * gain[t[c] as usize][j]).sum::<f64>() as f32);
+        let p = proc_lin(s);
+        let q = conf[s];
+        let c = [0, 1, 2].map(|j| q * colour[s][j] + (1.0 - q) * p[j] * g[j]);
+        for j in 0..3 {
+            albedo[k * 4 + j] = (st::to_srgb(c[j]) * 255.0 + 0.5) as u8;
+            generated[k * 4 + j] = (st::to_srgb(p[j] * mean_gain[j] as f32) * 255.0 + 0.5) as u8;
+        }
+        albedo[k * 4 + 3] = 255;
+        generated[k * 4 + 3] = 255;
+        let qc = (q * 255.0 + 0.5) as u8;
+        conf_png[k * 4..k * 4 + 4].copy_from_slice(&[qc, qc, qc, 255]);
+    }
+    let out = Path::new(text(input, "out"));
+    std::fs::create_dir_all(out).map_err(|e| ApiError::invalid(format!("{}: {e}", out.display())))?;
+    let name = input.get("name").and_then(Value::as_str).unwrap_or("projected");
+    let rgba = |rgb: &[u8]| -> Vec<u8> { rgb.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect() };
+    let albedo_path = write_png(&out.join(format!("{name}.albedo.png")), size, &albedo)?;
+    let normal_path = write_png(&out.join(format!("{name}.normal.png")), size, &rgba(&tex.normal))?;
+    let orm_path = write_png(&out.join(format!("{name}.orm.png")), size, &rgba(&tex.orm))?;
+    let generated_path = write_png(&out.join(format!("{name}.generated.albedo.png")), size, &generated)?;
+    let conf_path = write_png(&out.join(format!("{name}.confidence.png")), size, &conf_png)?;
+    let covered = map.covered().max(1) as f64;
+    let photo_part = (0..n).filter(|&k| map.triangle[k] != skin_map::NONE).map(|k| conf[k] as f64).sum::<f64>() / covered;
+    Ok(json!({"albedo": albedo_path, "normal": normal_path, "orm": orm_path, "generated_albedo": generated_path, "confidence": conf_path,
+              "look": look, "photos": photos,
+              "fill": {"photo_share": photo_part, "mirrored_texels": mirrored, "tone_target_linear": target, "tone_fit_log_rms": err, "albedo_scale": "as photographed: the colour at the shading of the median forehead, cheek and nose texel",
+                       "gain_vertices_known": known.iter().filter(|&&k| k).count(), "vertices": v},
+              "seconds": started.elapsed().as_secs_f64()}))
+}
+
 pub fn generate(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let started = Instant::now();
     let look = resolve_look(input)?;

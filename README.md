@@ -196,7 +196,22 @@ follows every character built on that base. Detail finer than about two texels f
 1024 texture is smooth and a 4096 one shows pores. The regions (lips, inner mouth, nose, cheeks, forehead, chin, upper
 lip, beard zone, under-eyes, eyelids, ears, scalp, neck, T-zone) come from the base's landmark table (`landmarks`:
 MediaPipe landmark to dense vertex) and the ears from how far the surface stands out of a smoothed head; `regions: true`
-also writes a picture of them. Not yet: the skin in the exported glb and in the clients, and skin from photos.
+also writes a picture of them.
+`skin.project` makes a skin from the photos of a photos-path run (`views.json`, the fitted cameras in `fit_photos.json`,
+`fitted_dense.npy`): each texel's point on the fitted head goes through every photo's camera, counts where the fitted
+mesh's z-buffer shows it, and is weighted by how squarely it faces the camera and how far it lies from the head's outline
+in the photo. The eyes and brows (`brows: keep` keeps the brows) are masked by the front photo's landmarks, the scalp and
+the inside of the mouth by their regions, and hair by the photo itself (pixels much darker or greyer than the plain skin,
+with a soft margin; the beard zone is exempt, so a beard stays in the texture), as are bluish pixels (clothing). Each view
+is delit by a spherical-harmonics shading fit on plain skin (forehead, cheeks, nose; first order when a view sees little
+of it) and gain-matched to the front on their overlap. A view whose camera does not register the mesh (more than 4 % of
+the head falls on the photo's background) is not used, and the report says so. What no photo sees takes the mirrored side,
+then the procedural skin of `look` with its tone fitted to the photos and its colour pulled to theirs by a gain field
+spread over the mesh. It writes the albedo, the look's normal and roughness maps, the procedural skin alone in the photos'
+colour (`generated`), and a confidence map. The albedo is as photographed: its brightness is the photo's at the shading of
+the median plain-skin texel. Limits: cast shadows (under the chin), ambient occlusion and specular light are not modelled
+(highlights are down-weighted where another view sees the texel, kept where none does), and the seam between projected and
+filled skin can show at the hairline. Not yet: the skin in the exported glb and in the clients.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

@@ -42,6 +42,18 @@ pub fn read_points(path: &Path) -> Result<Vec<[f64; 3]>, String> {
     points_from(&array).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+pub fn read_points_any(path: &Path) -> Result<Vec<[f64; 3]>, String> {
+    if let Ok(array) = read_npy::<_, Array2<f64>>(path) {
+        if array.ncols() != 3 {
+            return Err(format!("{}: expected N x 3, got {:?}", path.display(), array.shape()));
+        }
+        let points: Vec<[f64; 3]> = array.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+        check_finite(&points).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok(points);
+    }
+    read_points(path)
+}
+
 pub fn write_points(path: &Path, points: &[[f64; 3]]) -> Result<(), String> {
     let flat: Vec<f32> = points.iter().flat_map(|p| p.map(|x| x as f32)).collect();
     let array = Array2::from_shape_vec((points.len(), 3), flat).map_err(|e| e.to_string())?;

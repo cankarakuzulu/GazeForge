@@ -55,3 +55,19 @@ pub fn write_table(path: &Path, rows: usize, cols: usize, values: Vec<f64>) -> R
     let array = Array2::from_shape_vec((rows, cols), values).map_err(|e| e.to_string())?;
     ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
 }
+
+pub fn write_table_f32(path: &Path, rows: usize, cols: usize, values: Vec<f32>) -> Result<(), String> {
+    let array = Array2::from_shape_vec((rows, cols), values).map_err(|e| e.to_string())?;
+    ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub fn write_table_i32(path: &Path, rows: usize, cols: usize, values: Vec<i32>) -> Result<(), String> {
+    let array = Array2::from_shape_vec((rows, cols), values).map_err(|e| e.to_string())?;
+    ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub fn read_table_f32(path: &Path) -> Result<(usize, usize, Vec<f32>), String> {
+    let array: Array2<f32> = ndarray_npy::read_npy(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (r, c) = array.dim();
+    Ok((r, c, array.iter().copied().collect()))
+}

@@ -34,6 +34,47 @@ impl TexelMap {
     }
 }
 
+pub fn mirror(map: &TexelMap, triangles: &[[u32; 3]], positions_mm: &[[f32; 3]]) -> Vec<u32> {
+    let pts = map.interpolate(triangles, positions_mm);
+    let cell = 1.0f32;
+    let key = |p: [f32; 3]| (p[0].div_euclid(cell) as i32, p[1].div_euclid(cell) as i32, p[2].div_euclid(cell) as i32);
+    let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<u32>> = std::collections::HashMap::new();
+    for (k, p) in pts.iter().enumerate() {
+        if map.triangle[k] != NONE
+            && let Some(p) = p
+        {
+            grid.entry(key(*p)).or_default().push(k as u32);
+        }
+    }
+    let mut out = vec![NONE; pts.len()];
+    for (k, p) in pts.iter().enumerate() {
+        let Some(p) = p else { continue };
+        if map.triangle[k] == NONE {
+            continue;
+        }
+        let q = [-p[0], p[1], p[2]];
+        let (cx, cy, cz) = key(q);
+        let mut best = (f32::INFINITY, NONE);
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if let Some(list) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &j in list {
+                            let r = pts[j as usize].unwrap();
+                            let d = (r[0] - q[0]).powi(2) + (r[1] - q[1]).powi(2) + (r[2] - q[2]).powi(2);
+                            if d < best.0 {
+                                best = (d, j);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out[k] = best.1;
+    }
+    out
+}
+
 fn edge(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
     (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 }

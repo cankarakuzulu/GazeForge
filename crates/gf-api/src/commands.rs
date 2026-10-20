@@ -187,6 +187,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: skin::generate,
     },
     CommandDef {
+        name: "skin.project",
+        kind: Kind::Mutation,
+        summary: "Project the photos of a photos-path run onto the game base's texels, through the fitted cameras: visibility by the fitted mesh's z-buffer, weights by facing and distance from the outline, eyes and brows masked by the front photo's landmarks, delit by a spherical-harmonics shading fit, each view gain-matched to the front. What no photo sees takes the mirrored side, then a procedural skin whose tone is fitted to the photos and whose colour is pulled to the photos' by a gain field spread over the mesh. Also writes the procedural skin alone (generated) and a confidence map.",
+        limits: "Cast shadows, ambient occlusion and specular light are not modelled (highlights are down-weighted, not removed). Hair on the forehead or temples is projected as skin. Needs the run's views.json, fit_photos.json and fitted_dense.npy, and Python with numpy and opencv.",
+        input: skin::project_input,
+        output: skin::project_output,
+        run: skin::project,
+    },
+    CommandDef {
         name: "grid.chart",
         kind: Kind::Query,
         summary: "The face chart of a game base: every game vertex's chart coordinate (angle about the head's vertical axis, millimetres below the top of the head), its cell (column letter, row number, keypad subcell), its region, one label anchor per cell, and the chart's sanity figures (cells over the face front, the largest and smallest cell area, folded triangles).",

@@ -85,11 +85,11 @@ pub struct SkinTextures {
 
 const PALETTE: [[f32; 3]; 6] = [[236.0, 212.0, 198.0], [218.0, 186.0, 166.0], [190.0, 152.0, 128.0], [152.0, 112.0, 88.0], [106.0, 74.0, 56.0], [64.0, 44.0, 34.0]];
 
-fn to_linear(c: f32) -> f32 {
+pub fn to_linear(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
-fn to_srgb(c: f32) -> f32 {
+pub fn to_srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
@@ -114,6 +114,23 @@ pub fn tone(melanin: f32, haemoglobin: f32, undertone: f32) -> [f32; 3] {
     let u = undertone.clamp(-1.0, 1.0);
     let under = if u >= 0.0 { [1.0, 1.0 - 0.01 * u, 1.0 - 0.08 * u] } else { [1.0, 1.0 + 0.03 * u, 1.0 + 0.01 * u] };
     mul3(mul3(base, blood), under)
+}
+
+pub fn fit_tone(target: [f32; 3]) -> (f32, f32, f32, f32) {
+    let mut best = (f32::INFINITY, 0.0, 0.0, 0.0);
+    for mi in 0..=100 {
+        for hi in 0..=20 {
+            for ui in 0..=20 {
+                let (m, h, u) = (mi as f32 / 100.0, hi as f32 / 20.0, ui as f32 / 10.0 - 1.0);
+                let c = tone(m, h, u);
+                let err: f32 = (0..3).map(|k| (c[k].max(1e-4).ln() - target[k].max(1e-4).ln()).powi(2)).sum();
+                if err < best.0 {
+                    best = (err, m, h, u);
+                }
+            }
+        }
+    }
+    (best.1, best.2, best.3, best.0.sqrt())
 }
 
 fn hash3(x: i64, y: i64, z: i64, seed: u32) -> u64 {
