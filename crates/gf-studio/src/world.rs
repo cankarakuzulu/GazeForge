@@ -81,6 +81,8 @@ pub struct World {
     pub timeline: Timeline,
     pub eye_pose: Option<([f64; 9], [f64; 3])>,
     pub project: Project,
+    pub face_morphs: Option<String>,
+    pub face_prefix: Option<String>,
 }
 
 impl Default for World {
@@ -134,6 +136,8 @@ impl Default for World {
             timeline: Timeline::default(),
             eye_pose: None,
             project: Project::default(),
+            face_morphs: None,
+            face_prefix: None,
         }
     }
 }
@@ -219,7 +223,7 @@ impl World {
         self.stitch_poll();
         self.timeline_poll();
         self.project_poll();
-        self.project_autosave();
+        self.project_autosave("timer");
         if self.preview_dirty {
             self.update_preview();
         }
@@ -293,9 +297,9 @@ impl World {
             return;
         }
         let mut input = s.settle_input(&s.character, false);
-        let prefix = std::env::var("GAZEFORGE_FACE_PREFIX").unwrap_or_else(|_| "faceunits/".into());
+        let prefix = self.face_prefix();
         input["morphs"] = json!(crate::face_rig::SHAPES.iter().map(|n| format!("{prefix}{n}")).collect::<Vec<_>>());
-        if let Ok(dir) = std::env::var("GAZEFORGE_FACE_MORPHS") {
+        if let Some(dir) = self.face_morphs() {
             input["morph_dir"] = json!(dir);
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -320,6 +324,7 @@ impl World {
                     self.face.joint = rig.joints.iter().position(|j| j.posed).unwrap_or(0);
                 }
                 self.face.rig = Some(rig);
+                self.face.overlay_off = false;
                 self.face.status = self.face.loaded_text();
             }
             Err(e) => self.face.status = trf("rig.error", &[("error", &e)]),
@@ -329,6 +334,14 @@ impl World {
         } else {
             self.face_update();
         }
+    }
+
+    pub fn face_morphs(&self) -> Option<String> {
+        self.face_morphs.clone().or_else(|| std::env::var("GAZEFORGE_FACE_MORPHS").ok())
+    }
+
+    pub fn face_prefix(&self) -> String {
+        self.face_prefix.clone().or_else(|| std::env::var("GAZEFORGE_FACE_PREFIX").ok()).unwrap_or_else(|| "faceunits/".into())
     }
 
     pub fn face_update(&mut self) {
@@ -389,8 +402,8 @@ impl World {
                         self.face = FaceRig::default();
                         self.extras.clear();
                         self.overlays.clear();
-                        self.timeline = Timeline { clip: None, ..std::mem::take(&mut self.timeline) };
-                        self.timeline.rig = None;
+                        let old = std::mem::take(&mut self.timeline);
+                        self.timeline = Timeline { file: old.file, source: old.source, glb: old.glb, out: old.out, speed: old.speed, looping: old.looping, apply_head: old.apply_head, ..Timeline::default() };
                         self.eye_pose = None;
                         self.stitch = Stitch { store: std::mem::take(&mut self.stitch.store), body: std::mem::take(&mut self.stitch.body), values: self.stitch.values, auto: self.stitch.auto, ..Stitch::default() };
                         self.settle_wanted = None;
@@ -465,6 +478,7 @@ impl World {
                     if self.timeline.rig.is_some() {
                         self.timeline_deltas();
                     }
+                    self.project_autosave("settle");
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {
@@ -649,6 +663,7 @@ impl World {
             self.edit_at.get_or_insert_with(Instant::now);
             if self.face.rig.is_some() && self.poses.iter().any(|(k, _)| k == "rig") {
                 self.poses.retain(|(k, _)| k != "rig");
+                self.face.overlay_off = true;
                 self.face.status = tr("rig.changed").into();
             }
         }

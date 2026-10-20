@@ -413,6 +413,7 @@ impl Offscreen {
                 if let Some(n) = num("preview_threads") {
                     w.preview_threads = (n as usize).max(1);
                 }
+                w.project_detach();
                 w.request_load(store, text("spec"), text("macro"), text("eyes"), text("game"));
                 w.wait(|w| w.loading.is_none(), 600.0)?;
                 let r = w.load_result.clone().ok_or("the load returned nothing")??;
@@ -714,8 +715,16 @@ impl Offscreen {
             "project" => {
                 match text("do").unwrap_or("summary") {
                     "save" => {
-                        w.project_save(text("name").ok_or("project save needs name")?, false);
                         w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                        let name = text("name").ok_or("project save needs name")?;
+                        w.project_save(name, false);
+                        if w.project.job.is_none() {
+                            return Err(w.project.status.clone());
+                        }
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                        if w.project.name.as_deref() != Some(name) {
+                            return Err(w.project.status.clone());
+                        }
                     }
                     "open" => {
                         w.project_open(text("name").ok_or("project open needs name")?, step.get("recovery").and_then(Value::as_bool).unwrap_or(false));
@@ -727,9 +736,17 @@ impl Offscreen {
                         w.wait(|w| w.face.job.is_none() && w.stitch.job.is_none() && w.timeline.job.is_none(), num("seconds").unwrap_or(300.0))?;
                     }
                     "notes" => w.project.notes = text("text").unwrap_or_default().to_string(),
-                    "new" => w.project_new(),
+                    "pick" => {
+                        w.project_pick(num("index").ok_or("project pick needs index")? as usize);
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                        w.wait(|w| w.stitch.job.is_none() && w.face.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "new" => {
+                        w.project_new();
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                    }
                     "summary" => {}
-                    other => return Err(format!("project do is save, open, notes, new or summary, got {other}")),
+                    other => return Err(format!("project do is save, open, notes, pick, new or summary, got {other}")),
                 }
                 w.tick();
                 json!({"name": w.project.name, "active": w.project.active, "characters": w.project.doc.as_ref().and_then(|d| d["characters"].as_array()).map(Vec::len),

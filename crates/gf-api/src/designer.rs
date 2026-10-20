@@ -275,8 +275,11 @@ pub fn from_base64(text: &str) -> Result<Vec<u8>, String> {
         _ => None,
     };
     let body = text.trim_end_matches('=').as_bytes();
-    if !text.len().is_multiple_of(4) || text.len() - body.len() > 2 {
+    if !text.len().is_multiple_of(4) {
         return Err(format!("base64 text of length {} is not padded to a multiple of 4", text.len()));
+    }
+    if text.len() - body.len() > 2 || body.len() % 4 == 1 {
+        return Err(format!("base64 text of length {} has {} padding characters, more than its data allows", text.len(), text.len() - body.len()));
     }
     let mut out = Vec::with_capacity(body.len() * 3 / 4);
     for chunk in body.chunks(4) {

@@ -33,6 +33,10 @@ pub struct Project {
     pub autosaved: bool,
     pub recovered: bool,
     pub last_open: Option<String>,
+    pub pending_epoch: Option<u64>,
+    pub relinked: bool,
+    pub last_auto_sig: Option<String>,
+    pub autosave_reason: &'static str,
 }
 
 impl Default for Project {
@@ -54,6 +58,10 @@ impl Default for Project {
             autosaved: false,
             recovered: false,
             last_open: None,
+            pending_epoch: None,
+            relinked: false,
+            last_auto_sig: None,
+            autosave_reason: "timer",
         }
     }
 }
@@ -86,7 +94,7 @@ impl World {
         let values: Map<String, Value> = CONTROLS.iter().enumerate().map(|(i, c)| (c.0.to_string(), json!(s.values[i]))).collect();
         out.insert("stitch".into(), json!({"resources": resources, "show": s.show, "seam": s.seam, "auto": s.auto, "values": values, "stitched": s.wanted}));
         let t = &self.timeline;
-        out.insert("timeline".into(), json!({"version": 1, "t": t.t, "speed": t.speed, "loop": t.looping, "applyHead": t.apply_head, "playing": false,
+        out.insert("timeline".into(), json!({"version": 1, "t": t.t, "speed": t.speed, "loop": t.looping, "applyHead": t.apply_head, "playing": t.playing,
                                              "clip": t.clip.as_ref().map_or(Value::Null, |c| c.raw.clone())}));
         out
     }
@@ -139,12 +147,16 @@ impl World {
                 self.timeline.t = v;
             }
             self.timeline_show();
+            if t["playing"] == true {
+                self.timeline_play(true);
+            }
         }
     }
 
     pub fn character_input(&self) -> Option<Value> {
         let s = self.session.as_ref()?;
-        let mut c = s.settle_input(&s.character, false);
+        let character = self.shape.as_ref().map_or_else(|| s.character.clone(), |sh| sh.character(&s.start, &sh.live));
+        let mut c = s.settle_input(&character, false);
         if let Some(o) = c.as_object_mut() {
             for k in ["store", "eyes", "uvs", "fast"] {
                 o.remove(k);
@@ -158,7 +170,7 @@ impl World {
     }
 
     pub fn project_dirty(&self) -> bool {
-        self.session.is_some() && (self.project.recovered || self.project.saved_sig.as_deref() != Some(&self.project_sig()))
+        self.session.is_some() && (self.project.recovered || self.project.relinked || self.project.saved_sig.as_deref() != Some(&self.project_sig()))
     }
 
     fn project_input(&self, name: &str) -> Option<Value> {
@@ -179,8 +191,11 @@ impl World {
         if let Some(m) = &s.macro_file {
             options.insert("macro".into(), json!(m));
         }
-        if let Ok(d) = std::env::var("GAZEFORGE_FACE_MORPHS") {
+        if let Some(d) = self.face_morphs() {
             options.insert("face_morphs".into(), json!(d));
+        }
+        if let Some(p) = self.face_prefix.clone() {
+            options.insert("face_prefix".into(), json!(p));
         }
         let mut input = json!({"name": name, "root": root(), "store": s.store, "characters": characters, "active": a, "panels": self.panel_states(), "notes": p.notes, "options": options});
         if let Some(v) = p.doc.as_ref().map(|d| d["viewer"].clone()).filter(|v| v.is_object()) {
@@ -224,9 +239,14 @@ impl World {
     pub fn project_open(&mut self, name: &str, recovery: bool) {
         self.project.last_open = Some(name.to_string());
         let mut input = json!({"name": name, "root": root(), "recovery": recovery});
-        let given: Map<String, Value> = self.project.unresolved.iter().filter_map(|u| Some((u["role"].as_str()?.to_string(), u["given"].clone()))).filter(|(_, v)| v.as_str().is_some_and(|s| !s.trim().is_empty())).collect();
+        let given: Map<String, Value> = self.project.unresolved.iter().filter(|u| u["skip"] != true).filter_map(|u| Some((u["role"].as_str()?.to_string(), u["given"].clone()))).filter(|(_, v)| v.as_str().is_some_and(|s| !s.trim().is_empty())).collect();
+        let skip: Vec<Value> = self.project.unresolved.iter().filter(|u| u["skip"] == true).map(|u| u["role"].clone()).collect();
+        self.project.relinked = !given.is_empty() || !skip.is_empty();
         if !given.is_empty() {
             input["resources"] = Value::Object(given);
+        }
+        if !skip.is_empty() {
+            input["skip"] = Value::Array(skip);
         }
         self.project_call(Op::Open { name: name.to_string(), recovery }, "project.load", input);
     }
@@ -240,10 +260,17 @@ impl World {
         self.project_call(Op::Export, "project.export", json!({"name": name, "root": root()}));
     }
 
-    pub fn project_new(&mut self) {
+    pub fn project_detach(&mut self) {
         self.project = Project { list: std::mem::take(&mut self.project.list), recoveries: std::mem::take(&mut self.project.recoveries), ..Project::default() };
-        self.project.saved_sig = Some(self.project_sig());
+        self.project.pending_epoch = Some(self.epoch);
+    }
+
+    pub fn project_new(&mut self) {
+        let Some(s) = &self.session else { return };
+        let (store, mac, eyes) = (s.store.clone(), s.macro_file.clone(), s.eyes_file.clone());
+        self.project_detach();
         self.project.status = tr("designer.project_unsaved").into();
+        self.request_load_with(&store, None, None, mac.as_deref(), eyes.as_deref(), None);
     }
 
     pub fn project_pick(&mut self, k: usize) {
@@ -252,6 +279,7 @@ impl World {
         let Some(s) = &self.session else { return };
         self.project.active = k;
         self.project.saved_sig = None;
+        self.project.pending_epoch = Some(self.epoch);
         self.project.pending_panels = d["panels"].as_object().map(|p| Value::Object(p.clone()));
         let (store, mac, eyes) = (s.store.clone(), s.macro_file.clone(), s.eyes_file.clone());
         self.request_load_with(&store, None, Some(c["spec"].clone()), mac.as_deref(), eyes.as_deref(), None);
@@ -266,13 +294,17 @@ impl World {
                 (Op::Save { name, recovery }, Ok(r)) => {
                     if recovery {
                         self.project.autosaved = true;
-                        self.project.status = trf("designer.autosaved", &[("reason", &tr("project.frag.settle")), ("modified", &r["modified"].as_str().unwrap_or(""))]);
+                        self.project.status = trf("designer.autosaved", &[("reason", &tr(&format!("project.frag.{}", self.project.autosave_reason))), ("modified", &r["modified"].as_str().unwrap_or(""))]);
                     } else {
                         let was = self.project.name.clone();
                         self.project.name = Some(name.clone());
                         self.project.doc = Some(r["project"].clone());
                         self.project.recovered = false;
+                        self.project.relinked = false;
                         self.project.autosaved = false;
+                        self.project.resources = r["project"]["resources"].as_object().into_iter().flatten()
+                            .filter_map(|(role, v)| v["hint"].as_str().map(|h| (role.clone(), json!({"path": h}))))
+                            .collect();
                         self.project.saved_sig = Some(self.project_sig());
                         self.project.status = trf("designer.project_saved", &[("path", &r["path"].as_str().unwrap_or("")), ("bytes", &r["bytes"]), ("modified", &r["modified"].as_str().unwrap_or(""))]);
                         if was.is_none() && name != gf_api::project::UNTITLED {
@@ -296,6 +328,10 @@ impl World {
                     self.project.doc = Some(doc);
                     self.project.saved_sig = None;
                     self.project.status = tr("project.opening").into();
+                    self.face_morphs = res("face_morphs").or_else(|| self.project.doc.as_ref().and_then(|d| d["options"]["face_morphs"].as_str()).map(str::to_string));
+                    self.face_prefix = self.project.doc.as_ref().and_then(|d| d["options"]["face_prefix"].as_str()).map(str::to_string);
+                    self.project.pending_epoch = Some(self.epoch);
+                    self.project.last_autosave = Some(Instant::now());
                     self.request_load_with(&store, None, Some(spec), mac.as_deref(), eyes.as_deref(), None);
                 }
                 (Op::Open { .. }, Err(e)) => {
@@ -318,7 +354,19 @@ impl World {
                 (Op::List, Err(e)) => self.project.status = message(&e),
             }
         }
-        if self.session.is_some() && self.project.saved_sig.is_none() && self.loading.is_none() {
+        if self.project.saved_sig.is_none() && self.loading.is_none() && matches!(self.load_result, Some(Err(_))) {
+            let e = self.load_result.as_ref().and_then(|r| r.as_ref().err()).cloned().unwrap_or_default();
+            self.project.pending_panels = None;
+            self.project.pending_epoch = None;
+            self.project.status = trf("studio.note.load_failed", &[("error", &e)]);
+            self.project.doc = None;
+            self.project.name = None;
+            if self.session.is_some() {
+                self.project.saved_sig = Some(self.project_sig());
+            }
+        }
+        if self.session.is_some() && self.project.saved_sig.is_none() && self.loading.is_none() && self.project.pending_epoch.is_none_or(|e| e != self.epoch) {
+            self.project.pending_epoch = None;
             if let Some(p) = self.project.pending_panels.take() {
                 self.apply_panel_states(&p);
             }
@@ -329,15 +377,21 @@ impl World {
         }
     }
 
-    pub fn project_autosave(&mut self) {
+    pub fn project_autosave(&mut self, reason: &'static str) {
         if self.session.is_none() || self.project.job.is_some() || self.loading.is_some() || self.project.saved_sig.is_none() {
             return;
         }
-        if self.project.last_autosave.is_some_and(|t| t.elapsed().as_secs_f64() < 60.0) {
+        if reason == "timer" && self.project.last_autosave.is_some_and(|t| t.elapsed().as_secs_f64() < 60.0) {
             return;
         }
         self.project.last_autosave = Some(Instant::now());
         if self.project_dirty() {
+            let sig = self.project_sig();
+            if reason == "settle" && self.project.last_auto_sig.as_deref() == Some(&sig) {
+                return;
+            }
+            self.project.last_auto_sig = Some(sig);
+            self.project.autosave_reason = reason;
             let slot = self.project.slot();
             self.project_save(&slot, true);
         } else if self.project.autosaved {
@@ -445,6 +499,12 @@ impl crate::studio::Studio<'_> {
                     let mut given = u["given"].as_str().unwrap_or_default().to_string();
                     if ui.add(egui::TextEdit::singleline(&mut given).hint_text(tr("designer.relink_path")).desired_width(f32::INFINITY)).changed() {
                         u["given"] = json!(given);
+                    }
+                    if u["optional"] == true {
+                        let mut skip = u["skip"] == true;
+                        if ui.checkbox(&mut skip, tr("designer.open_without")).changed() {
+                            u["skip"] = json!(skip);
+                        }
                     }
                 }
                 if ui.button(tr("ui.p-relink-ok")).clicked()

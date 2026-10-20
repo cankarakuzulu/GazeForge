@@ -97,7 +97,7 @@ impl Studio<'_> {
 
     pub fn face_rig_paint(&self, painter: &egui::Painter, rect: egui::Rect, ppp: f32, w: u32, h: u32) {
         let f = &self.world.face;
-        let (Some(rig), true) = (&f.rig, f.overlay) else { return };
+        let (Some(rig), true) = (&f.rig, f.overlay && !f.overlay_off) else { return };
         let (points, lines) = rig.joint_overlay(f.mode, &f.weights, &f.manual);
         let colour = egui::Color32::from_rgb(255, 140, 38);
         for r in viewer::rects(self.world.state.layout, w, h) {

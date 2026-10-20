@@ -95,8 +95,14 @@ impl Rig {
             return Err(format!("rig.face arrays do not agree: {} vertices, rest {}, influences {}/{}, blend {}/{}, offsets {} for {} shapes",
                                n, rest.len(), ij.len(), iw.len(), index.len(), delta.len(), offsets.len(), poses.len()));
         }
-        if offsets.last().copied().unwrap_or(0) as usize != index.len() {
-            return Err("rig.face blend offsets end before the blend index".into());
+        if offsets.last().copied().unwrap_or(0) as usize != index.len() || offsets.windows(2).any(|w| w[0] > w[1]) {
+            return Err("rig.face blend offsets do not rise to the end of the blend index".into());
+        }
+        if joints.iter().any(|j| j.parent.is_some_and(|p| p >= joints.len())) || ij.iter().any(|&j| j as usize >= joints.len().max(1)) || index.iter().any(|&g| g as usize >= n) {
+            return Err("rig.face names a joint or a vertex that does not exist".into());
+        }
+        if poses.iter().any(|s| s.len() != joints.len()) {
+            return Err("rig.face poses do not cover every joint".into());
         }
         Ok(Rig { n, joints, poses, fit: r["fit"].as_array().cloned().unwrap_or_default(), rest, ij, iw, offsets, index, delta, ms: r["timing_ms"]["total"].as_f64().unwrap_or(0.0) })
     }
@@ -192,6 +198,7 @@ pub struct FaceRig {
     pub status: String,
     pub job: Option<std::sync::mpsc::Receiver<Result<Rig, String>>>,
     pub stale: bool,
+    pub overlay_off: bool,
 }
 
 impl Default for FaceRig {
@@ -207,6 +214,7 @@ impl Default for FaceRig {
             status: crate::i18n::tr("rig.not_loaded").to_string(),
             job: None,
             stale: false,
+            overlay_off: false,
         }
     }
 }
@@ -288,6 +296,33 @@ mod tests {
         let q = r.evaluate(Mode::Joints, &[0.0], &m);
         assert!((q[3] - 0.1).abs() < 1e-7 && q[4].abs() < 1e-7, "rotating about the tip joint keeps the tip");
         assert_eq!(r.joint_overlay(Mode::Blend, &[1.0], &none).1.len(), 1);
+    }
+
+    #[test]
+    fn a_reply_naming_missing_joints_or_vertices_is_refused() {
+        let good = tiny();
+        let mut cases = Vec::new();
+        let mut r = json!({"vertices": 2, "joints": [{"name": "root", "parent": null, "position": [0, 0, 0]}, {"name": "tip", "parent": 7, "position": [0.1, 0, 0]}],
+                           "poses": [[[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]], "rest_f32_b64": b64(&good.rest.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>()),
+                           "influence_joints_u8_b64": b64(&good.ij), "influence_weights_f32_b64": b64(&good.iw.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>()),
+                           "blend": {"offsets": [0, 1], "index_u32_b64": b64(&1u32.to_le_bytes()), "delta_f32_b64": b64(&[0u8; 12])}});
+        cases.push(r.clone());
+        r["joints"][1]["parent"] = json!(0);
+        r["influence_joints_u8_b64"] = json!(b64(&[5, 0, 0, 0, 1, 0, 0, 0]));
+        cases.push(r.clone());
+        r["influence_joints_u8_b64"] = json!(b64(&good.ij));
+        r["blend"]["index_u32_b64"] = json!(b64(&9u32.to_le_bytes()));
+        cases.push(r.clone());
+        r["blend"]["index_u32_b64"] = json!(b64(&1u32.to_le_bytes()));
+        r["poses"] = json!([[[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]]);
+        r["blend"]["offsets"] = json!([0, 5, 1]);
+        cases.push(r.clone());
+        for (i, c) in cases.iter().enumerate() {
+            assert!(Rig::from_json(c).is_err(), "case {i} was accepted");
+        }
+        r["poses"] = json!([[[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]]);
+        r["blend"]["offsets"] = json!([0, 1]);
+        assert!(Rig::from_json(&r).is_ok());
     }
 
     #[test]

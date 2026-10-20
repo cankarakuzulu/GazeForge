@@ -34,7 +34,10 @@ pub fn parse_clip(c: &Value) -> Result<Clip, String> {
     if weights.len() != times.len() || weights.iter().any(|r| r.len() != names.len()) {
         return Err(tr("timeline.bad_shape").into());
     }
-    let head = c["head"]["rotation_xyzw"].as_array().map(|a| a.iter().map(|q| std::array::from_fn(|k| q[k].as_f64().unwrap_or(0.0))).collect());
+    let head: Option<Vec<[f64; 4]>> = c["head"]["rotation_xyzw"].as_array().map(|a| a.iter().map(|q| std::array::from_fn(|k| q[k].as_f64().unwrap_or(0.0))).collect());
+    if head.as_ref().is_some_and(|h| h.len() != times.len()) {
+        return Err(tr("timeline.bad_head").into());
+    }
     Ok(Clip {
         name: c["name"].as_str().map(str::to_string),
         names,
@@ -195,10 +198,10 @@ impl World {
             return;
         }
         let mut input = s.settle_input(&s.character, false);
-        let prefix = std::env::var("GAZEFORGE_FACE_PREFIX").unwrap_or_else(|_| "faceunits/".into());
+        let prefix = self.face_prefix();
         input["morphs"] = json!(SHAPES.iter().map(|n| format!("{prefix}{n}")).collect::<Vec<_>>());
         input["rounds"] = json!(0);
-        if let Ok(dir) = std::env::var("GAZEFORGE_FACE_MORPHS") {
+        if let Some(dir) = self.face_morphs() {
             input["morph_dir"] = json!(dir);
         }
         let (tx, rx) = channel();

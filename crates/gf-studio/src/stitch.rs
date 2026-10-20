@@ -181,7 +181,7 @@ impl World {
             } else if env["error"]["code"] == "gate_failed" && env["error"]["details"]["mesh"].is_object() {
                 Ok((env["error"]["details"].clone(), false))
             } else {
-                Err(env["error"]["message"].as_str().unwrap_or("character.stitch failed").to_string())
+                Err(format!("character.stitch: {}", env["error"]["message"].as_str().unwrap_or("")))
             };
             let _ = tx.send(out);
         });

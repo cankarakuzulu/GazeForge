@@ -420,6 +420,7 @@ impl Studio<'_> {
             ui.horizontal(|ui| {
                 let load = ui.add_enabled(self.world.loading.is_none(), egui::Button::new(tr("studio.load"))).on_hover_text(tr("studio.load_tip"));
                 if load.clicked() {
+                    self.world.project_detach();
                     self.load();
                 }
             });
