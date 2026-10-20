@@ -490,7 +490,10 @@ advanced, and bindings: `$run.NAME`, `$STEP.input.FIELD`, `$STEP.result.PATH`, `
 `ROOT/runs/PROJECT/WIZARD-N` (`steps/STEP` holds each step's record, the rest the files its steps write, bound as `$dir`): `wizards.start` makes it, `wizards.step` checks a step's input
 against its command's schema and runs it (or submits it as a job) and marks later steps stale, and `wizards.state` reads
 the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed. An agent
-can drive a wizard with the same calls. `photos` takes a front and a profile photo (and optionally the other profile)
+can drive a wizard with the same calls. The wizards: `setup` (a store from a dense base folder, its targets, a game
+base and the eye rig), `build_base` (a game base built and imported), `create` (a character from target weights,
+validated), `photos`, `export`, `body` (a body pack), and, behind a "developer tasks" toggle, `check` (shell gates),
+`lids` (eyelids out of the eyeballs) and `macros` (macro weights and label tables). `photos` takes a front and a profile photo (and optionally the other profile)
 through `photo.check`, `photo.views` (whose worker now also writes each photo's overlay: landmarks green, outline red,
 profile key points yellow), `fit.photos` and `character.create`, and opens the saved spec in the designer. `export` takes
 a character spec through `export.glb` (with an optional obj of the finest level) and `gates.facing`. Each writes the same
