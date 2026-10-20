@@ -894,6 +894,7 @@ dependencies = [
  "gf-geom",
  "ndarray",
  "ndarray-npy",
+ "png",
  "serde",
  "serde_json",
 ]

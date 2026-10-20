@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::hash;
+use crate::skin_authored::{self, Grid, Images, Stamp, Stroke};
 use crate::skin_map::{NONE, TexelMap};
 use crate::skin_regions::{self, Regions};
 use crate::skin_texture::{SkinLook, SkinTextures, cells, fbm3, smoothstep, to_linear, to_srgb};
@@ -48,6 +49,12 @@ pub struct SkinLayer {
     pub seed: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procedural: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stamps: Vec<Stamp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<Stroke>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +92,10 @@ impl SkinLayer {
         self.live.unwrap_or(true)
     }
 
+    pub fn is_procedural(&self) -> bool {
+        self.procedural.unwrap_or(true)
+    }
+
     pub fn response(&self) -> Option<Response> {
         let blood = Response { colour: [0.20, 0.008, 0.008], opacity: 0.95, roughness: 0.22, spread: 0.08, variant: Some(("dry", [0.045, 0.008, 0.006], 0.7)) };
         let mut r = match (self.kind.as_str(), self.style.as_str()) {
@@ -112,12 +123,17 @@ impl SkinSpec {
         let layers = self
             .layers
             .iter()
-            .map(|l| SkinLayer {
-                live: Some(l.is_live()),
-                amount: round4(l.amount),
-                variant: round4(l.variant),
-                colour: l.colour.map(|c| c.map(round4)),
-                ..l.clone()
+            .map(|l| {
+                let mut c = SkinLayer {
+                    live: Some(l.is_live()),
+                    procedural: Some(l.is_procedural()),
+                    amount: round4(l.amount),
+                    variant: round4(l.variant),
+                    colour: l.colour.map(|c| c.map(round4)),
+                    ..l.clone()
+                };
+                skin_authored::canonical(&mut c);
+                c
             })
             .collect();
         SkinSpec { layers, ..self.clone() }
@@ -163,6 +179,7 @@ impl SkinSpec {
             if l.colour.is_some_and(|c| c.iter().any(|x| !(x.is_finite() && (0.0..=1.0).contains(x)))) {
                 out.push(format!("{at}: colour must be three linear values in [0, 1]"));
             }
+            out.extend(skin_authored::problems(l, &at));
             if l.variant != 0.0 && l.response().is_some_and(|r| r.variant.is_none()) {
                 out.push(format!("{at}: {} {} has no variant state", l.kind, l.style));
             }
@@ -225,13 +242,20 @@ pub struct Surface<'a> {
 }
 
 pub struct Texel {
-    mm: [f32; 3],
-    n: [f32; 3],
+    pub mm: [f32; 3],
+    pub n: [f32; 3],
     mouth: f32,
     eyelids: f32,
     lips: f32,
     concave: f32,
     area: f32,
+}
+
+#[cfg(test)]
+impl Texel {
+    pub(crate) fn probe(mm: [f32; 3], n: [f32; 3]) -> Texel {
+        Texel { mm, n, mouth: 0.0, eyelids: 0.0, lips: 0.0, concave: 0.0, area: 1.0 }
+    }
 }
 
 const MOUTH: usize = 1;
@@ -552,21 +576,33 @@ fn paint(s: &Surface, texels: &[Option<Texel>], m: &Marks, style: &str, seed: u3
     Ok(out)
 }
 
-pub fn mask(s: &Surface, texels: &[Option<Texel>], layer: &SkinLayer) -> Result<Vec<u8>, String> {
+pub fn procedural(s: &Surface, texels: &[Option<Texel>], layer: &SkinLayer) -> Result<Vec<f32>, String> {
+    if !layer.is_procedural() {
+        return Ok(vec![0.0; texels.len()]);
+    }
     let m = marks(s)?;
-    let values = match layer.kind.as_str() {
-        "grime" => grime(texels, &m, &layer.style, layer.seed),
-        "blood" => blood(s, texels, &layer.style, layer.seed)?,
-        "paint" => paint(s, texels, &m, &layer.style, layer.seed)?,
-        other => return Err(format!("no mask for kind {other:?}")),
-    };
-    Ok((0..texels.len())
+    match layer.kind.as_str() {
+        "grime" => Ok(grime(texels, &m, &layer.style, layer.seed)),
+        "blood" => blood(s, texels, &layer.style, layer.seed),
+        "paint" => paint(s, texels, &m, &layer.style, layer.seed),
+        other => Err(format!("no mask for kind {other:?}")),
+    }
+}
+
+pub fn mask(s: &Surface, texels: &[Option<Texel>], grid: &Grid, layer: &SkinLayer, images: &Images) -> Result<Vec<u8>, String> {
+    let mut values = procedural(s, texels, layer)?;
+    skin_authored::apply(&mut values, texels, grid, layer, images, None)?;
+    Ok(bytes(s.map, &values))
+}
+
+pub fn bytes(map: &TexelMap, values: &[f32]) -> Vec<u8> {
+    (0..values.len())
         .map(|k| {
-            let src = s.map.source[k];
+            let src = map.source[k];
             let v = if src == NONE { 0.0 } else { values[src as usize] };
             (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
         })
-        .collect())
+        .collect()
 }
 
 pub fn coverage(m: u8, amount: f32, spread: f32) -> f32 {
@@ -642,9 +678,9 @@ mod tests {
             landmarks: hash::reference(&"b".repeat(64)),
             size: 1024,
             layers: vec![
-                SkinLayer { name: "blood".into(), kind: "blood".into(), style: "drips".into(), live: None, amount: 0.25, variant: 0.0, seed: 3, colour: None },
-                SkinLayer { name: "dust".into(), kind: "grime".into(), style: "dust".into(), live: Some(false), amount: 0.5, variant: 0.0, seed: 1, colour: None },
-                SkinLayer { name: "mud".into(), kind: "grime".into(), style: "mud".into(), live: Some(true), amount: 0.0, variant: 0.3, seed: 2, colour: None },
+                SkinLayer { name: "blood".into(), kind: "blood".into(), style: "drips".into(), live: None, amount: 0.25, variant: 0.0, seed: 3, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
+                SkinLayer { name: "dust".into(), kind: "grime".into(), style: "dust".into(), live: Some(false), amount: 0.5, variant: 0.0, seed: 1, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
+                SkinLayer { name: "mud".into(), kind: "grime".into(), style: "mud".into(), live: Some(true), amount: 0.0, variant: 0.3, seed: 2, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
             ],
         }
     }
@@ -656,7 +692,7 @@ mod tests {
         bad.layers[0].name = "Blood-1".into();
         bad.layers[1].style = "glitter".into();
         bad.layers[2].amount = 1.5;
-        bad.layers.push(SkinLayer { name: "mud_wet".into(), kind: "paint".into(), style: "chin".into(), live: None, amount: 0.1, variant: 0.5, seed: 0, colour: Some([2.0, 0.0, 0.0]) });
+        bad.layers.push(SkinLayer { name: "mud_wet".into(), kind: "paint".into(), style: "chin".into(), live: None, amount: 0.1, variant: 0.5, seed: 0, colour: Some([2.0, 0.0, 0.0]), procedural: None, stamps: Vec::new(), strokes: Vec::new() });
         bad.size = 100;
         let p = bad.problems().join(" | ");
         for needle in ["lowercase identifier", "glitter", "amount 1.5", "mud_wet", "has no variant state", "colour must be", "skin.size"] {

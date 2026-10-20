@@ -205,6 +205,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: skin::landmarks,
     },
     CommandDef {
+        name: "skin.stamp",
+        kind: Kind::Mutation,
+        summary: "Put a stamp image (PNG) into the store for a skin layer's stamps. Returns the reference a stamp's image takes, the image's size and how much of it the alpha and luminance channels cover.",
+        limits: "A stamp's mask is one channel of the image (alpha by default, or luminance); colour stamps are not available yet.",
+        input: skin::stamp_input,
+        output: skin::stamp_output,
+        run: skin::stamp,
+    },
+    CommandDef {
         name: "skin.project",
         kind: Kind::Mutation,
         summary: "Project the photos of a photos-path run onto the game base's texels, through the fitted cameras: visibility by the fitted mesh's z-buffer, weights by facing and distance from the outline, eyes and brows masked by the front photo's landmarks, delit by a spherical-harmonics shading fit, each view gain-matched to the front. What no photo sees takes the mirrored side, then a procedural skin whose tone is fitted to the photos and whose colour is pulled to the photos' by a gain field spread over the mesh. Also writes the procedural skin alone (generated) and a confidence map.",
