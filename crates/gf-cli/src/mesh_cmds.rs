@@ -15,7 +15,7 @@ use gf_io::store::Store;
 use gf_io::{game_base, obj};
 use serde_json::{Value, json};
 
-use crate::{Options, count, need, number, only, placement_keys, placer};
+use crate::{Options, count, need, number, only, placement_keys, placer, placer_with};
 
 const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
 const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles", "cells"];
@@ -637,7 +637,6 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
     }
     only(opts, &format!("export-glb (spec placement {version})"), &allowed)?;
-    let placement = placer(opts, version)?;
     let mode = Sparse::parse(opts.get("sparse").map(String::as_str).unwrap_or("auto"))?;
     let out = Path::new(need(opts, "out")?);
     let started = std::time::Instant::now();
@@ -645,7 +644,14 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(p) => Some(ch::read_macro_definition(Path::new(p))?),
         None => None,
     };
-    let (positions, evaluation) = ch::evaluate(&store, &spec, source.as_ref())?;
+    let (positions, _, evaluation, pin) = ch::evaluate_traced(&store, &spec, source.as_ref())?;
+    let placed_eyes = match (spec.eyeballs.is_some(), opts.get("eyes")) {
+        (true, Some(p)) => Some(ch::place_eyes(&store, &spec, pin.as_ref(), gf_io::load_eyes(Path::new(p))?)?),
+        _ => None,
+    };
+    let moved_eyes = placed_eyes.as_ref().map(|(e, _)| e.clone());
+    let eyes_report = placed_eyes.and_then(|(_, r)| r);
+    let placement = placer_with(opts, version, moved_eyes.clone())?;
     let (_, dense) = store.load_pack(&spec.base.pack)?;
     let catalog = store.load_catalog(&spec.base.catalog)?;
     let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
@@ -659,7 +665,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let lid_run = match opts.get("lids").map(String::as_str).unwrap_or("off") {
         "off" => None,
         "auto" => {
-            let eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--lids auto needs --eyes EYES.json")?))?;
+            let eyes = match &moved_eyes {
+                Some(e) => e.clone(),
+                None => gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--lids auto needs --eyes EYES.json")?))?,
+            };
             let step = number(opts, "lids-step-mm", 0.05)? / 1000.0;
             if step <= 0.0 {
                 return Err("--lids-step-mm must be positive".into());
@@ -902,7 +911,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut face2_correctives: Option<(Vec<Vec<gf_core::face_rig::JointPose>>, Vec<Point>)> = None;
     if rigged {
         use gf_core::rig;
-        let mut eyes = gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?;
+        let mut eyes = match &moved_eyes {
+            Some(e) => e.clone(),
+            None => gf_io::load_eyes(Path::new(opts.get("eyes").ok_or("--rig head needs --eyes EYES.json")?))?,
+        };
         if let Some((pivot, s)) = head_scale {
             for e in eyes.iter_mut() {
                 let mut c = [e.centre];
@@ -1285,6 +1297,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if lod0_out.is_some() {
         result["lod0_out"] = sidecar["lod0_out"].clone();
+    }
+    if let Some(eyes) = eyes_report {
+        result["eyes"] = json!(eyes);
     }
     Ok(result)
 }

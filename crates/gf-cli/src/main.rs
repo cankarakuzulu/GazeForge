@@ -44,6 +44,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   store import-pack --store DIR --dense DIR [--macro-base JSON|@FILE] [--pin-top Z_METRES]
   store import-catalog --store DIR --targets DIR --pack sha256:...
   store import-game --store DIR --base DIR --pack sha256:...
+  store import-eyerig --store DIR --catalog sha256:... --makehuman MAKEHUMAN_DATA_DIR
   character create --store DIR --pack sha256:... --catalog sha256:... --out FILE [--game sha256:...] [--placement NAME/VERSION]
               [--name NAME] [--weights JSON|@FILE] [--macro MACRO_JSON [--sliders JSON|@FILE] [--macro-mode gf|mpfb] [--head-scale 1]]
               [--residual-from FACE.npy [--quantum-mm 0.005]]
@@ -284,6 +285,18 @@ pub(crate) fn placer(opts: &Options, version: PlacementVersion) -> Result<Box<dy
             let (settings, uv_mode) = f2_settings(opts, &fit_settings(opts)?)?;
             Box::new(gp::F2 { settings, surface_uvs: uv_mode == "surface" })
         }
+    })
+}
+
+pub(crate) fn placer_with(opts: &Options, version: PlacementVersion, eyes: Option<Vec<gf_geom::lids::Eye>>) -> Result<Box<dyn Placement>, String> {
+    let Some(eyes) = eyes else {
+        return placer(opts, version);
+    };
+    Ok(match version.name {
+        "f3" | "f4" => Box::new(gp::F3 { eyes, ..f3_placement(opts, version.name)? }),
+        "f5" => Box::new(gp::F5 { eyes, ..f5_placement(opts)? }),
+        "f6" => Box::new(gp::F6 { eyes, ..f6_placement(opts)? }),
+        _ => placer(opts, version)?,
     })
 }
 

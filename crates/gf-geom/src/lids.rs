@@ -21,6 +21,7 @@ struct EyeEntry {
 const POLAR_STEPS: usize = 180;
 const AZIMUTH_STEPS: usize = 360;
 
+#[derive(Clone)]
 pub struct Eye {
     pub centre: [f64; 3],
     pub radius: f64,
@@ -28,6 +29,8 @@ pub struct Eye {
     side: [f64; 3],
     up: [f64; 3],
     table: Vec<f64>,
+    pub vertices: Vec<[f64; 3]>,
+    pub triangles: Vec<[u32; 3]>,
 }
 
 fn unit(v: [f64; 3]) -> [f64; 3] {
@@ -83,7 +86,7 @@ impl Eye {
         let helper = if gaze[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
         let side = unit(cross(gaze, helper));
         let up = cross(gaze, side);
-        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new() };
+        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone() };
         let mut table = vec![0.0; (POLAR_STEPS + 1) * AZIMUTH_STEPS];
         for i in 0..=POLAR_STEPS {
             for j in 0..AZIMUTH_STEPS {
@@ -93,6 +96,28 @@ impl Eye {
         }
         eye.table = table;
         Ok(eye)
+    }
+
+    pub fn gaze(&self) -> [f64; 3] {
+        self.gaze
+    }
+
+    pub fn transformed(&self, scale: f64, rotation: [[f64; 3]; 3], translation: [f64; 3]) -> Eye {
+        let rotate = |v: [f64; 3]| [0, 1, 2].map(|i| dot(rotation[i], v));
+        let place = |p: [f64; 3]| {
+            let r = rotate(p);
+            [0, 1, 2].map(|k| scale * r[k] + translation[k])
+        };
+        Eye {
+            centre: place(self.centre),
+            radius: self.radius * scale,
+            gaze: rotate(self.gaze),
+            side: rotate(self.side),
+            up: rotate(self.up),
+            table: self.table.iter().map(|t| t * scale).collect(),
+            vertices: self.vertices.iter().map(|&p| place(p)).collect(),
+            triangles: self.triangles.clone(),
+        }
     }
 
     fn direction(&self, polar_deg: f64, azimuth_deg: f64) -> [f64; 3] {
@@ -618,6 +643,45 @@ mod tests {
             assert!(r > 0.0119 && r <= 0.012 + 1e-9, "surface {r} along {dir:?}");
         }
         assert!(eye.surface([0.0, 0.0, -1.0]).is_none());
+    }
+
+    #[test]
+    fn a_transformed_eye_matches_one_built_from_the_transformed_mesh() {
+        let mut entry = sphere(0.012, 24, 48);
+        entry.centre = [0.003, -0.002, 0.001];
+        entry.gaze = unit([0.2, -0.1, 1.0]);
+        let eye = Eye::new(&entry).unwrap();
+        let (a, s, t) = (0.35_f64, 1.17, [0.03, -0.12, 1.49]);
+        let rotation = [[a.cos(), 0.0, a.sin()], [0.0, 1.0, 0.0], [-a.sin(), 0.0, a.cos()]];
+        let moved = eye.transformed(s, rotation, t);
+        let rot = |v: [f64; 3]| [0, 1, 2].map(|i| dot(rotation[i], v));
+        let place = |p: [f64; 3]| {
+            let r = rot(p);
+            [0, 1, 2].map(|k| s * r[k] + t[k])
+        };
+        let fresh = Eye::new(&EyeEntry {
+            centre: place(entry.centre),
+            radius: entry.radius * s,
+            gaze: rot(entry.gaze),
+            vertices: entry.vertices.iter().map(|&p| place(p)).collect(),
+            triangles: entry.triangles.clone(),
+        })
+        .unwrap();
+        assert_eq!(moved.centre, place(entry.centre));
+        assert_eq!(moved.vertices[7], place(entry.vertices[7]));
+        let g = moved.gaze();
+        let mut worst: f64 = 0.0;
+        for i in 0..40 {
+            let (p, q) = (i as f64 * 0.037, i as f64 * 1.31);
+            let side = unit(cross(g, [0.0, 0.0, 1.0]));
+            let up = cross(g, side);
+            let dir = unit([0, 1, 2].map(|k| g[k] * p.cos() + (side[k] * q.cos() + up[k] * q.sin()) * p.sin()));
+            let (m, f) = (moved.surface(dir).unwrap(), fresh.surface(dir).unwrap());
+            worst = worst.max((m - f).abs());
+            let back = [0, 1, 2].map(|i| (0..3).map(|k| rotation[k][i] * dir[k]).sum::<f64>());
+            assert!((m - s * eye.surface(back).unwrap()).abs() < 1e-12);
+        }
+        assert!(worst < 2e-5 * s, "transformed vs rebuilt surface differs by {worst} m");
     }
 
     #[test]

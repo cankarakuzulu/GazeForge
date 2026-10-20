@@ -6,6 +6,7 @@ use gf_core::catalog::{
     BlobStore, CATALOG_FORMAT, CatalogEntry, CatalogManifest, GAME_FORMAT, GameLod, GameManifest, HeadOnlySettings, PACK_FORMAT,
     PackManifest, SparseTarget,
 };
+use gf_core::eyerig::{EyeRigManifest, FORMAT as EYERIG_FORMAT, Sides};
 use gf_core::hash;
 use gf_geom::decimate::{Decimated, Stats};
 use ndarray::{Array1, Array2};
@@ -20,7 +21,65 @@ pub struct Store {
     pub root: PathBuf,
 }
 
-pub const KINDS: [&str; 3] = ["packs", "catalogs", "game"];
+pub const KINDS: [&str; 4] = ["packs", "catalogs", "game", "eyerigs"];
+const HELPER_GROUPS: [&str; 2] = ["helper-l-eye", "helper-r-eye"];
+
+fn makehuman_axes(x: f64, y: f64, z: f64) -> [f64; 3] {
+    [x * 0.1 + 0.0, -z * 0.1 + 0.0, y * 0.1 + 0.0]
+}
+
+type Helpers = ([Vec<usize>; 2], Vec<[f64; 3]>);
+
+fn read_helpers(obj: &Path) -> Result<Helpers, String> {
+    let text = std::fs::read_to_string(obj).map_err(io(obj))?;
+    let mut vertices = Vec::new();
+    let mut members: [std::collections::BTreeSet<usize>; 2] = Default::default();
+    let mut group: Option<usize> = None;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => {
+                let p: Vec<f64> = parts.take(3).map(|t| t.parse::<f64>().map_err(|e| format!("{}: {e}", obj.display()))).collect::<Result<_, _>>()?;
+                vertices.push([p[0], p[1], p[2]]);
+            }
+            Some("g") => group = parts.next().and_then(|g| HELPER_GROUPS.iter().position(|h| *h == g)),
+            Some("f") => {
+                if let Some(side) = group {
+                    for t in parts {
+                        let i: usize = t.split('/').next().unwrap_or("").parse().map_err(|e| format!("{}: face index {t}: {e}", obj.display()))?;
+                        members[side].insert(i - 1);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let [l, r] = members.map(|m| m.into_iter().collect::<Vec<_>>());
+    if l.is_empty() || r.is_empty() {
+        return Err(format!("{} has no {} or {} faces", obj.display(), HELPER_GROUPS[0], HELPER_GROUPS[1]));
+    }
+    if l.iter().chain(&r).any(|&i| i >= vertices.len()) {
+        return Err(format!("{}: a helper face indexes past the vertices", obj.display()));
+    }
+    Ok(([l, r], vertices))
+}
+
+fn read_gz_target(path: &Path) -> Result<Vec<(usize, [f64; 3])>, String> {
+    use std::io::Read;
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).map_err(io(path))?).read_to_string(&mut text).map_err(io(path))?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 4 || line.starts_with('#') {
+            continue;
+        }
+        let i: usize = parts[0].parse().map_err(|e| format!("{}: {line:?}: {e}", path.display()))?;
+        let d: Vec<f64> = parts[1..].iter().map(|t| t.parse::<f64>().map_err(|e| format!("{}: {line:?}: {e}", path.display()))).collect::<Result<_, _>>()?;
+        out.push((i, [d[0], d[1], d[2]]));
+    }
+    Ok(out)
+}
 const PACK_ARRAYS: [&str; 4] = ["positions", "face_sizes", "corner_vertices", "corner_uvs"];
 const GAME_ARRAYS: [&str; 4] = ["kept", "owner", "triangles", "triangle_uvs"];
 
@@ -210,6 +269,68 @@ impl Store {
             return Err(format!("catalog {reference} has format {:?}", manifest.format));
         }
         Ok(manifest)
+    }
+
+    pub fn import_eyerig(&self, makehuman: &Path, catalog: &str) -> Result<(String, EyeRigManifest), String> {
+        let catalog_manifest = self.load_catalog(catalog)?;
+        let ([left, right], vertices) = read_helpers(&makehuman.join("3dobjs").join("base.obj"))?;
+        let slot: BTreeMap<usize, (usize, usize)> = left.iter().enumerate().map(|(k, &i)| (i, (0, k))).chain(right.iter().enumerate().map(|(k, &i)| (i, (1, k)))).collect();
+        let base = |ids: &[usize]| ids.iter().map(|&i| makehuman_axes(vertices[i][0], vertices[i][1], vertices[i][2])).collect::<Vec<_>>();
+        let mut targets = BTreeMap::new();
+        let mut missing = Vec::new();
+        for id in catalog_manifest.targets.keys() {
+            let path = makehuman.join("targets").join(format!("{id}.target.gz"));
+            if !path.is_file() {
+                missing.push(id.clone());
+                continue;
+            }
+            let mut sides = [vec![[0.0; 3]; left.len()], vec![[0.0; 3]; right.len()]];
+            for (i, d) in read_gz_target(&path)? {
+                if let Some(&(side, k)) = slot.get(&i) {
+                    sides[side][k] = makehuman_axes(d[0], d[1], d[2]);
+                }
+            }
+            let [l, r] = sides.map(|s| s.iter().any(|d| *d != [0.0; 3]).then_some(s));
+            if l.is_some() || r.is_some() {
+                targets.insert(id.clone(), Sides { left: l, right: r });
+            }
+        }
+        let manifest = EyeRigManifest {
+            format: EYERIG_FORMAT.into(),
+            catalog: catalog.to_string(),
+            source: format!("MakeHuman base.obj groups {} and {} (CC0), moved by each catalog target's MakeHuman file", HELPER_GROUPS[0], HELPER_GROUPS[1]),
+            axes: "metres, MakeHuman (x, -z, y) times 0.1".into(),
+            helpers: Sides { left: base(&left), right: base(&right) },
+            targets,
+            missing,
+        };
+        Ok((self.put_manifest("eyerigs", &manifest)?, manifest))
+    }
+
+    pub fn load_eyerig(&self, reference: &str) -> Result<EyeRigManifest, String> {
+        let manifest: EyeRigManifest = self.get_manifest("eyerigs", reference)?;
+        if manifest.format != EYERIG_FORMAT {
+            return Err(format!("eye rig {reference} has format {:?}", manifest.format));
+        }
+        Ok(manifest)
+    }
+
+    pub fn find_eyerig(&self, catalog: &str) -> Result<Option<String>, String> {
+        let dir = self.root.join("eyerigs");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).map_err(io(&dir))? {
+            let path = entry.map_err(io(&dir))?.path();
+            let Some(hex) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else { continue };
+            let reference = hash::reference(hex);
+            if self.load_eyerig(&reference).is_ok_and(|m| m.catalog == catalog) {
+                found.push(reference);
+            }
+        }
+        found.sort();
+        if found.len() > 1 {
+            return Err(format!("the store holds {} eye rigs for catalog {catalog} ({}); name one", found.len(), found.join(", ")));
+        }
+        Ok(found.pop())
     }
 
     pub fn load_target(&self, catalog: &CatalogManifest, id: &str) -> Result<SparseTarget, String> {

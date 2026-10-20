@@ -635,6 +635,7 @@ pub fn new(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 weights: BTreeMap::new(),
                 macros: None,
                 residual: None,
+                eyeballs: None,
             }
         }
     };

@@ -666,6 +666,7 @@ fn character_create(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         weights: number_map(input.get("weights")),
         macros: None,
         residual: None,
+        eyeballs: None,
     }
     .canonical();
     let (problems, _) = ch::problems(&store, &spec, None);

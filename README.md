@@ -99,10 +99,14 @@ Identical files are stored once.
 gazeforge store import-pack --store DIR --dense DIR [--macro-base SLIDERS_JSON|@FILE] [--pin-top Z_METRES]
 gazeforge store import-catalog --store DIR --targets DIR --pack sha256:...
 gazeforge store import-game --store DIR --base DIR --pack sha256:...
+gazeforge store import-eyerig --store DIR --catalog sha256:... --makehuman MAKEHUMAN_DATA_DIR
 ```
 
 `import-catalog` reads `catalog.json` and its sparse targets (`.npz` with `indices` u32 and `deltas` f32 x 3, on the
-dense order) as baked. `import-game` also imports `lod_<N>` subdirectories. `--macro-base` records the pack's own macro
+dense order) as baked. `import-game` also imports `lod_<N>` subdirectories. `import-eyerig` builds a catalog's eye rig
+(`gazeforge.eyerig/1`) from a MakeHuman data directory (CC0 assets): the helper eyeballs of `3dobjs/base.obj`
+(`helper-l-eye`, `helper-r-eye`, 72 vertices each) and, for every catalog target, how its MakeHuman file
+(`targets/<id>.target.gz`) moves them; a target whose file is missing is listed under `missing`. `--macro-base` records the pack's own macro
 slider values and `--pin-top` the height up to which head-only macros are pinned to the neck seam; both are needed for
 characters with macros.
 
@@ -125,6 +129,30 @@ gazeforge character evaluate --store DIR --spec FILE --out DENSE.npy [--macro MA
 file that `export-obj --positions` reads. `--residual-from` stores `FACE - (base + sum(w * T) + macros)` as an i16,
 planar, delta-coded, zlib-compressed blob (`i16-planar-delta-zlib/1`); the default quantum of 0.005 mm keeps every
 vertex within 0.0044 mm of the face.
+
+**Eyeballs.** An optional `eyeballs` field makes the eyes of an eyes file follow the character:
+
+```json
+"eyeballs": {"follow": "makehuman-helper/1", "rig": "sha256:...",
+             "left": {"offset_mm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": 1},
+             "right": {"offset_mm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": 1}}
+```
+
+With `follow: makehuman-helper/1` each eye moves the way MakeHuman moves its helper eyeball: the rig's helper (centred on
+the eye of the eyes file) takes the weighted sum of every target's helper motion, macros through the same head-only
+strip and pin as the skin, and the similarity (rotation, uniform scale, translation) fitted from the helper's rest to
+its moved shape is applied to the eye: its mesh, its centre and radius, and the surface table the eyelid clearance reads.
+So the eye translation targets move the eye, while the targets that reshape the lids leave it where it is, as in
+MakeHuman. `follow: none` keeps the eyes where the file puts them. The per-eye adjustments are applied before the
+follow, about the eye's centre and in its own frame (offset along out from the midline, up and forward in mm; pitch up,
+yaw outward and roll in degrees; a uniform scale), so they ride on the socket and mirror between the sides; they are
+limited to 15 mm, 45 degrees and [0.5, 1.5]. A spec without the field places and exports exactly as before. The
+residual does not move the eyes. Limits: the eyelid clearance of the placements lifts skin only within its clearance
+band (0.3 to 0.6 mm by default), so where a target puts the skin deeper into an eye (static or moved) the skin stays
+inside it unless the export runs with `--lids auto`; MakeHuman's own `head-scale-horiz` targets scale the helper eyeball
+by up to 21 percent while moving the lid rim less, so a following eye can sit in its lids there.
+`designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
+`designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 
 #### Macros
 

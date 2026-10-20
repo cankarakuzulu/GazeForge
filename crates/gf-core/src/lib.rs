@@ -6,6 +6,7 @@ pub mod fit;
 pub mod game_mesh;
 pub mod gates;
 pub mod character;
+pub mod eyerig;
 pub mod hash;
 pub mod head;
 pub mod macros;
