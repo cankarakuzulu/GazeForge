@@ -16,8 +16,10 @@ pub const ACTIONS: &[(&str, &str, &[&str])] = &[
     ("back_faces", "back-face highlight", &["Alt+B"]),
     ("seams", "UV seams and open boundaries", &["Alt+E"]),
     ("clip", "clip plane 1", &["Alt+C"]),
+    ("eyes", "eye meshes", &["Alt+Y"]),
     ("light_gizmo", "light direction gizmo", &["Alt+G"]),
     ("theme", "dark or light viewport", &["Alt+T"]),
+    ("interface_theme", "dark or light interface", &["Alt+Shift+T"]),
     ("screenshot", "save the active viewport as PNG", &["Alt+K"]),
     ("screenshot_layout", "save the whole layout as PNG", &["Alt+Shift+K"]),
     ("fov_down", "narrower field of view", &["Alt+OpenBracket"]),
@@ -31,6 +33,7 @@ pub const ACTIONS: &[(&str, &str, &[&str])] = &[
     ("view_top", "top view", &["Alt+7"]),
     ("view_bottom", "bottom view", &["Alt+Shift+7"]),
     ("view_three_quarter", "three-quarter view", &["Alt+9"]),
+    ("view_home", "home view of the active viewport, framed", &["Alt+Home"]),
     ("ortho", "orthographic or perspective", &["Alt+5", "Alt+O"]),
     ("undo", "undo the last shape change", &["Ctrl+Z"]),
     ("redo", "redo the last undone shape change", &["Ctrl+Y", "Ctrl+Shift+Z"]),
@@ -188,6 +191,16 @@ mod tests {
             let function_key = b.key.name().starts_with('F') && b.key.name().len() > 1;
             assert!(!bare || function_key, "{id} is bound to a bare {}", b.key.name());
             assert!(b.ctrl || b.alt || function_key, "{id} is bound to {} without Ctrl or Alt", b.key.name());
+        }
+    }
+
+    #[test]
+    fn no_two_actions_share_a_default_binding() {
+        let map = Keymap::defaults();
+        for (i, (a, x)) in map.bindings.iter().enumerate() {
+            for (b, y) in &map.bindings[i + 1..] {
+                assert!(a == b || x != y, "{a} and {b} share {x:?}");
+            }
         }
     }
 
