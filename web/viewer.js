@@ -1034,8 +1034,9 @@ export class Viewer {
           return { keep, total: dp.length ? Math.max(...dp) : 0 };
         };
         const dir = [1, -1].map((sg) => ({ sg, total: monotone(colsUp, sg).total + monotone(colsDown, sg).total })).sort((a, b) => b.total - a.total)[0].sg;
-        colsUp = monotone(colsUp, dir).keep;
-        colsDown = monotone(colsDown, dir).keep;
+        const best = (list) => { const a = monotone(list, dir), b = monotone(list, -dir); return (b.total > a.total ? b : a).keep; };
+        colsUp = best(colsUp);
+        colsDown = best(colsDown);
         const rowsKept = pick(rowAcc, () => 13, r.y + 8, r.y + r.h - 8, (k) => `${k}`);
         const onRuler = (bx) => rulerBoxes.some((q) => bx.x0 < q.x1 && bx.x1 > q.x0 && bx.y0 < q.y1 && bx.y1 > q.y0);
         const put = (it, x, y, kind, edge) => {

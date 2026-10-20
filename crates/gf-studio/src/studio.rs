@@ -16,6 +16,9 @@ use crate::script::write_png;
 use crate::viewer::{self, Layout, MODES};
 use crate::world::World;
 
+const RIGHT_GROUP_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 2.0;
+const CLIP_SLIDER_WIDTH: f32 = 230.0;
+
 pub struct UiState {
     pub keymap: Keymap,
     pub input: Box<dyn ShapeInput>,
@@ -225,7 +228,7 @@ impl Studio<'_> {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(3.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (l, icon, what) in [(Layout::Single, "square", "One viewport"), (Layout::Side, "columns-2", "Two viewports side by side"), (Layout::Quad, "layout-grid", "Four viewports")] {
                 let tip = self.tip(what, "layout").replace(&format!("({})", self.s.keymap.describe("layout")), &format!("({} cycles)", self.s.keymap.describe("layout")));
@@ -299,7 +302,10 @@ impl Studio<'_> {
             }
             let o = &mut self.world.state.opts;
             if o.clip[0].on {
-                ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).text("offset m").fixed_decimals(3));
+                ui.allocate_ui(egui::vec2(CLIP_SLIDER_WIDTH, 26.0), |ui| {
+                    ui.spacing_mut().slider_width = CLIP_SLIDER_WIDTH - 110.0;
+                    ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).text("offset m").fixed_decimals(3));
+                });
             }
             group_gap(ui);
             for (id, icon, what) in [("screenshot", "camera", "Save the active viewport as PNG"), ("screenshot_layout", "images", "Save the whole layout as PNG")] {
@@ -307,25 +313,30 @@ impl Studio<'_> {
                     self.act(id);
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                if icons::button(ui, "keyboard", self.s.show_help, &self.tip("Keys and mouse", "help")).clicked() {
-                    self.act("help");
-                }
-                let light = ui.ctx().theme() == egui::Theme::Light;
-                if icons::button(ui, if light { "sun" } else { "moon" }, false, &self.tip(if light { "Light interface: switch to dark" } else { "Dark interface: switch to light" }, "interface_theme")).clicked() {
-                    self.act("interface_theme");
-                }
-                let dark = self.world.state.opts.dark;
-                if icons::button(ui, "sun-moon", !dark, &self.tip(if dark { "Dark viewport: switch to light" } else { "Light viewport: switch to dark" }, "theme")).clicked() {
-                    self.act("theme");
-                }
-                if icons::button(ui, "gauge", self.world.hud.on, &self.tip("Timings overlay", "hud")).clicked() {
-                    self.act("hud");
-                }
-            });
+            if ui.available_size_before_wrap().x < RIGHT_GROUP_WIDTH {
+                ui.end_row();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.toolbar_right(ui));
         });
         ui.add_space(3.0);
+    }
+
+    fn toolbar_right(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let light = ui.ctx().theme() == egui::Theme::Light;
+        let dark = self.world.state.opts.dark;
+        let buttons = [
+            ("help", "keyboard", self.s.show_help, self.tip("Keys and mouse", "help")),
+            ("interface_theme", if light { "sun" } else { "moon" }, false,
+             self.tip(if light { "Light interface: switch to dark" } else { "Dark interface: switch to light" }, "interface_theme")),
+            ("theme", "sun-moon", !dark, self.tip(if dark { "Dark viewport: switch to light" } else { "Light viewport: switch to dark" }, "theme")),
+            ("hud", "gauge", self.world.hud.on, self.tip("Timings overlay", "hud")),
+        ];
+        for (id, icon, on, tip) in buttons {
+            if icons::button(ui, icon, on, &tip).clicked() {
+                self.act(id);
+            }
+        }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {

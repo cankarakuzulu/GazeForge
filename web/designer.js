@@ -1059,7 +1059,7 @@ function interaction() {
     if (code === "Digit7" || code === "Numpad7") { namedView(e.shiftKey ? "bottom" : "top"); return handled(); }
     if (code === "Digit9" || code === "Numpad9") { namedView("threequarter"); return handled(); }
     if (code === "Digit5" || code === "Numpad5" || k === "o" || k === "O") { toggleOrtho(); return handled(); }
-    if (k === "Home") { homeView(); return handled(); }
+    if (k === "Home" && !e.target.matches?.("input, select")) { homeView(); return handled(); }
     switch (k.toLowerCase()) {
       case "f": e.shiftKey ? frameSelection() : frameHead(); break;
       case "l": setLayout({ single: "side", side: "quad", quad: "single" }[V.layout]); break;
