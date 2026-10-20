@@ -79,6 +79,7 @@ fn content_type(name: &str) -> Option<&'static str> {
         "wasm" => "application/wasm",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
+        "glb" => "model/gltf-binary",
         "json" => "application/json",
         _ => return None,
     })

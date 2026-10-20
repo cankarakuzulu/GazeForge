@@ -200,3 +200,6 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .job.st-failed .job-state, .job.st-cancelled .job-state { color: var(--warn); }
 .store-table { width: 100%; border-collapse: collapse; margin: 2px 0 8px; font-size: 12px; }
 .store-table th, .store-table td { text-align: left; padding: 1px 4px; border-bottom: 1px solid var(--line); }
+.wizard.peek { background: transparent; pointer-events: none; align-items: flex-end; justify-content: flex-end; padding: 16px; }
+.wizard.peek .wz-box { pointer-events: auto; height: auto; width: min(360px, calc(100vw - 32px)); }
+.wizard.peek .wz-main, .wizard.peek .wz-foot { display: none; }

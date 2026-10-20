@@ -1,11 +1,33 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-export function createWizards({ api, root, toast, prepare, openSpec }) {
+export function readGlbMesh(buffer, preferred) {
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== 0x46546c67) throw new Error("not a glb");
+  const jsonLen = view.getUint32(12, true);
+  const doc = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLen)));
+  const binStart = 20 + jsonLen + 8;
+  const mesh = doc.meshes.find((m) => m.name === preferred) || doc.meshes[0];
+  const prim = mesh.primitives[0];
+  const read = (index) => {
+    const a = doc.accessors[index], bv = doc.bufferViews[a.bufferView], at = binStart + (bv.byteOffset || 0) + (a.byteOffset || 0);
+    const n = a.count * ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 })[a.type];
+    if (a.componentType === 5126) return new Float32Array(buffer.slice(at, at + n * 4));
+    if (a.componentType === 5125) return new Uint32Array(buffer.slice(at, at + n * 4));
+    if (a.componentType === 5123) return Uint32Array.from(new Uint16Array(buffer.slice(at, at + n * 2)));
+    throw new Error(`accessor ${index}: component type ${a.componentType}`);
+  };
+  const g = read(prim.attributes.POSITION), positions = new Float32Array(g.length);
+  for (let i = 0; i < g.length; i += 3) { positions[i] = g[i]; positions[i + 1] = -g[i + 2]; positions[i + 2] = g[i + 1]; }
+  return { name: mesh.name, positions, indices: read(prim.indices) };
+}
+
+export function createWizards({ api, root, toast, prepare, openSpec, showMesh }) {
   const W = { list: null, def: null, state: null, at: 0, polling: 0, busy: false, prepared: null, dev: false };
   const box = root;
 
   function close() {
     box.classList.add("hidden");
+    peek(false);
     clearTimeout(W.polling);
     W.def = null;
     W.state = null;
@@ -110,7 +132,23 @@ export function createWizards({ api, root, toast, prepare, openSpec }) {
     box.querySelector(".wz-back").disabled = i === 0;
     for (const b of box.querySelectorAll(".wz-upload")) b.addEventListener("click", () => upload(b.dataset.for));
     for (const b of box.querySelectorAll(".wz-open-spec")) b.addEventListener("click", () => openSpec?.(b.dataset.store, b.dataset.spec));
+    for (const b of box.querySelectorAll(".wz-show-glb")) b.addEventListener("click", () => showGlb(b.dataset.path).catch((e) => fail(e)));
     if (st.state === "running") poll();
+  }
+
+  async function showGlb(path) {
+    const r = await fetch(`/v1/wizard-file?run=${encodeURIComponent(W.state.run)}&path=${encodeURIComponent(path)}`);
+    if (!r.ok) throw new Error(`cannot read ${path}`);
+    const m = readGlbMesh(await r.arrayBuffer(), "Head_LOD0");
+    for (let i = 0; i < m.positions.length; i += 3) m.positions[i] += 0.3;
+    showMesh("export", { positions: m.positions, indices: m.indices, color: [0.62, 0.78, 0.92], label: `exported ${m.name} (+0.3 m x)` });
+    peek(true);
+    toast(`exported ${m.name}: ${m.indices.length / 3} triangles, drawn 0.3 m to the side`);
+  }
+
+  function peek(on) {
+    box.classList.toggle("peek", on);
+    box.querySelector(".wz-peek").textContent = on ? "back to the task" : "look";
   }
 
   function upload(inputId) {
@@ -148,7 +186,8 @@ export function createWizards({ api, root, toast, prepare, openSpec }) {
       }
       if (sh.kind === "glb" || sh.kind === "file") {
         const path = sh.from ? resolve(sh.from) : null;
-        return path ? `<div class="wz-file">wrote <code>${esc(path)}</code></div>` : "";
+        const look = sh.kind === "glb" && showMesh ? ` <button class="wz-show-glb" data-path="${esc(path)}" title="Read the exported file back (not the designer's mesh) and draw its finest level beside the character">show beside the character</button>` : "";
+        return path ? `<div class="wz-file">wrote <code>${esc(path)}</code>${look}</div>` : "";
       }
       return `<details open><summary>report</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
     });
@@ -216,6 +255,7 @@ export function createWizards({ api, root, toast, prepare, openSpec }) {
   }
 
   box.querySelector(".wz-close").addEventListener("click", close);
+  box.querySelector(".wz-peek").addEventListener("click", () => peek(!box.classList.contains("peek")));
   box.querySelector(".wz-run").addEventListener("click", run);
   box.querySelector(".wz-next").addEventListener("click", () => { W.at++; render(); });
   box.querySelector(".wz-back").addEventListener("click", () => { W.at--; render(); });

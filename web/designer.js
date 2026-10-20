@@ -930,6 +930,7 @@ function buildControls() {
   $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").classList.add("hidden"); });
   D.wizards = createWizards({
     api, root: $("wizard"), toast,
+    showMesh: (id, spec) => { V.setExtra(id, spec); renderVisibility(); request(false); },
     openSpec: (s, spec) => { const q = new URLSearchParams(location.search); q.set("store", s || store); q.set("spec", spec); location.search = q.toString(); },
     prepare: async () => ({
       project: P.name || "untitled",
