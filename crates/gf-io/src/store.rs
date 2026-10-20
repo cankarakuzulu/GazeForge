@@ -6,6 +6,7 @@ use gf_core::catalog::{
     BlobStore, CATALOG_FORMAT, CatalogEntry, CatalogManifest, GAME_FORMAT, GameLod, GameManifest, HeadOnlySettings, PACK_FORMAT,
     PackManifest, SparseTarget,
 };
+use gf_core::eyerig::{EyeRigManifest, FORMAT as EYERIG_FORMAT, Registration, Sides};
 use gf_core::hash;
 use gf_geom::decimate::{Decimated, Stats};
 use ndarray::{Array1, Array2};
@@ -20,7 +21,135 @@ pub struct Store {
     pub root: PathBuf,
 }
 
-pub const KINDS: [&str; 3] = ["packs", "catalogs", "game"];
+pub const KINDS: [&str; 4] = ["packs", "catalogs", "game", "eyerigs"];
+const HELPER_GROUPS: [&str; 3] = ["helper-l-eye", "helper-r-eye", "body"];
+const REGISTRATION_CELL: f64 = 0.004;
+const REGISTRATION_LIMIT_MM: f64 = 2.0;
+
+fn makehuman_axes(x: f64, y: f64, z: f64) -> [f64; 3] {
+    [x * 0.1 + 0.0, -z * 0.1 + 0.0, y * 0.1 + 0.0]
+}
+
+type Helpers = ([Vec<usize>; 3], Vec<[f64; 3]>);
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(0.0)
+}
+
+fn percentile(mut v: Vec<f64>, q: f64) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v.get(((v.len().max(1) - 1) as f64 * q).round() as usize).copied().unwrap_or(0.0)
+}
+
+fn register_skin(skin: &[[f64; 3]], dense: &[[f64; 3]]) -> Result<([f64; 3], usize, f64, f64), String> {
+    let cell = |p: [f64; 3]| p.map(|x| (x / REGISTRATION_CELL).floor() as i64);
+    let mut grid: std::collections::HashMap<[i64; 3], Vec<u32>> = std::collections::HashMap::new();
+    for (i, &p) in dense.iter().enumerate() {
+        grid.entry(cell(p)).or_default().push(i as u32);
+    }
+    let top = |pts: &[[f64; 3]]| pts.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max);
+    let bottom = dense.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
+    let mut shift = [0.0, 0.0, top(dense) - top(skin)];
+    let nearest = |q: [f64; 3]| -> Option<[f64; 3]> {
+        let c = cell(q);
+        let mut best: Option<(f64, [f64; 3])> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    for &i in grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]).map(Vec::as_slice).unwrap_or(&[]) {
+                        let p = dense[i as usize];
+                        let d = (0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f64>();
+                        if best.is_none_or(|(b, _)| d < b) {
+                            best = Some((d, p));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p)
+    };
+    let mut used = 0;
+    let mut gaps = Vec::new();
+    for _ in 0..8 {
+        let mut residual: [Vec<f64>; 3] = Default::default();
+        gaps.clear();
+        for &s in skin {
+            let q = [s[0] + shift[0], s[1] + shift[1], s[2] + shift[2]];
+            if q[2] < bottom + 0.02 {
+                continue;
+            }
+            if let Some(p) = nearest(q) {
+                for k in 0..3 {
+                    residual[k].push(p[k] - q[k]);
+                }
+                gaps.push((0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f64>().sqrt());
+            }
+        }
+        used = gaps.len();
+        if used < 1000 {
+            return Err(format!("only {used} MakeHuman skin vertices landed near the dense base; the registration has nothing to hold on to"));
+        }
+        let step = residual.map(median);
+        shift = [0, 1, 2].map(|k| shift[k] + step[k]);
+    }
+    let (p50, p95) = (percentile(gaps.clone(), 0.5) * 1000.0, percentile(gaps, 0.95) * 1000.0);
+    if p50 > REGISTRATION_LIMIT_MM {
+        return Err(format!("MakeHuman's skin registers to the dense base with p50 {p50:.2} mm (limit {REGISTRATION_LIMIT_MM} mm): is the catalog's pack MakeHuman at its macro_base, and is the macro definition the pack's?"));
+    }
+    Ok((shift, used, p50, p95))
+}
+
+fn read_helpers(obj: &Path) -> Result<Helpers, String> {
+    let text = std::fs::read_to_string(obj).map_err(io(obj))?;
+    let mut vertices = Vec::new();
+    let mut members: [std::collections::BTreeSet<usize>; 3] = Default::default();
+    let mut group: Option<usize> = None;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => {
+                let p: Vec<f64> = parts.take(3).map(|t| t.parse::<f64>().map_err(|e| format!("{}: {e}", obj.display()))).collect::<Result<_, _>>()?;
+                vertices.push([p[0], p[1], p[2]]);
+            }
+            Some("g") => group = parts.next().and_then(|g| HELPER_GROUPS.iter().position(|h| *h == g)),
+            Some("f") => {
+                if let Some(side) = group {
+                    for t in parts {
+                        let i: usize = t.split('/').next().unwrap_or("").parse().map_err(|e| format!("{}: face index {t}: {e}", obj.display()))?;
+                        members[side].insert(i - 1);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let [l, r, b] = members.map(|m| m.into_iter().collect::<Vec<_>>());
+    if l.is_empty() || r.is_empty() || b.is_empty() {
+        return Err(format!("{} lacks one of the groups {}", obj.display(), HELPER_GROUPS.join(", ")));
+    }
+    if l.iter().chain(&r).chain(&b).any(|&i| i >= vertices.len()) {
+        return Err(format!("{}: a face indexes past the vertices", obj.display()));
+    }
+    Ok(([l, r, b], vertices))
+}
+
+fn read_gz_target(path: &Path) -> Result<Vec<(usize, [f64; 3])>, String> {
+    use std::io::Read;
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).map_err(io(path))?).read_to_string(&mut text).map_err(io(path))?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 4 || line.starts_with('#') {
+            continue;
+        }
+        let i: usize = parts[0].parse().map_err(|e| format!("{}: {line:?}: {e}", path.display()))?;
+        let d: Vec<f64> = parts[1..].iter().map(|t| t.parse::<f64>().map_err(|e| format!("{}: {line:?}: {e}", path.display()))).collect::<Result<_, _>>()?;
+        out.push((i, [d[0], d[1], d[2]]));
+    }
+    Ok(out)
+}
 const PACK_ARRAYS: [&str; 4] = ["positions", "face_sizes", "corner_vertices", "corner_uvs"];
 const GAME_ARRAYS: [&str; 4] = ["kept", "owner", "triangles", "triangle_uvs"];
 
@@ -210,6 +339,102 @@ impl Store {
             return Err(format!("catalog {reference} has format {:?}", manifest.format));
         }
         Ok(manifest)
+    }
+
+    pub fn import_eyerig(&self, makehuman: &Path, catalog: &str, macro_definition: Option<&gf_core::macros::MacroDefinition>) -> Result<(String, EyeRigManifest), String> {
+        let catalog_manifest = self.load_catalog(catalog)?;
+        let (pack_manifest, dense) = self.load_pack(&catalog_manifest.pack)?;
+        let ([left, right, body], mut vertices) = read_helpers(&makehuman.join("3dobjs").join("base.obj"))?;
+        let mut macro_files_applied = 0;
+        let mut macro_files_missing = Vec::new();
+        let macro_mode = match &pack_manifest.macro_base {
+            Some(sliders) => {
+                let def = macro_definition.ok_or("the catalog's pack was baked at a macro_base: pass the macro definition (--macro) so the helpers can be put in that state")?;
+                let mode = gf_core::macros::Mode::parse("gf")?;
+                for (name, w) in gf_core::macros::target_weights(def, sliders, None, mode)? {
+                    let path = makehuman.join("targets").join(format!("{name}.target.gz"));
+                    if !path.is_file() {
+                        macro_files_missing.push(name);
+                        continue;
+                    }
+                    for (i, d) in read_gz_target(&path)? {
+                        if let Some(v) = vertices.get_mut(i) {
+                            *v = [0, 1, 2].map(|k| v[k] + w * d[k]);
+                        }
+                    }
+                    macro_files_applied += 1;
+                }
+                Some(mode.name().to_string())
+            }
+            None => None,
+        };
+        let skin: Vec<[f64; 3]> = body.iter().map(|&i| makehuman_axes(vertices[i][0], vertices[i][1], vertices[i][2])).collect();
+        let (shift, skin_vertices, skin_p50_mm, skin_p95_mm) = register_skin(&skin, &dense.positions)?;
+        let slot: BTreeMap<usize, (usize, usize)> = left.iter().enumerate().map(|(k, &i)| (i, (0, k))).chain(right.iter().enumerate().map(|(k, &i)| (i, (1, k)))).collect();
+        let base = |ids: &[usize]| {
+            ids.iter()
+                .map(|&i| {
+                    let p = makehuman_axes(vertices[i][0], vertices[i][1], vertices[i][2]);
+                    [p[0] + shift[0], p[1] + shift[1], p[2] + shift[2]]
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut targets = BTreeMap::new();
+        let mut missing = Vec::new();
+        for id in catalog_manifest.targets.keys() {
+            let path = makehuman.join("targets").join(format!("{id}.target.gz"));
+            if !path.is_file() {
+                missing.push(id.clone());
+                continue;
+            }
+            let mut sides = [vec![[0.0; 3]; left.len()], vec![[0.0; 3]; right.len()]];
+            for (i, d) in read_gz_target(&path)? {
+                if let Some(&(side, k)) = slot.get(&i) {
+                    sides[side][k] = makehuman_axes(d[0], d[1], d[2]);
+                }
+            }
+            let [l, r] = sides.map(|s| s.iter().any(|d| *d != [0.0; 3]).then_some(s));
+            if l.is_some() || r.is_some() {
+                targets.insert(id.clone(), Sides { left: l, right: r });
+            }
+        }
+        let manifest = EyeRigManifest {
+            format: EYERIG_FORMAT.into(),
+            catalog: catalog.to_string(),
+            source: format!("MakeHuman base.obj groups {} and {} (CC0) at the pack's macro_base, moved by each catalog target's MakeHuman file", HELPER_GROUPS[0], HELPER_GROUPS[1]),
+            axes: "metres, MakeHuman (x, -z, y) times 0.1, helpers translated by registration.shift_m into the dense base's frame".into(),
+            registration: Registration { shift_m: shift, skin_vertices, skin_p50_mm, skin_p95_mm, macro_mode, macro_files_applied, macro_files_missing },
+            helpers: Sides { left: base(&left), right: base(&right) },
+            targets,
+            missing,
+        };
+        Ok((self.put_manifest("eyerigs", &manifest)?, manifest))
+    }
+
+    pub fn load_eyerig(&self, reference: &str) -> Result<EyeRigManifest, String> {
+        let raw: Value = self.get_manifest("eyerigs", reference)?;
+        if raw["format"] != EYERIG_FORMAT {
+            return Err(format!("eye rig {reference} has format {}, this build reads {EYERIG_FORMAT}: import the rig again (store import-eyerig)", raw["format"]));
+        }
+        serde_json::from_value(raw).map_err(|e| format!("eye rig {reference}: {e}"))
+    }
+
+    pub fn find_eyerig(&self, catalog: &str) -> Result<Option<String>, String> {
+        let dir = self.root.join("eyerigs");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).map_err(io(&dir))? {
+            let path = entry.map_err(io(&dir))?.path();
+            let Some(hex) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else { continue };
+            let reference = hash::reference(hex);
+            if self.load_eyerig(&reference).is_ok_and(|m| m.catalog == catalog) {
+                found.push(reference);
+            }
+        }
+        found.sort();
+        if found.len() > 1 {
+            return Err(format!("the store holds {} eye rigs for catalog {catalog} ({}); name one", found.len(), found.join(", ")));
+        }
+        Ok(found.pop())
     }
 
     pub fn load_target(&self, catalog: &CatalogManifest, id: &str) -> Result<SparseTarget, String> {

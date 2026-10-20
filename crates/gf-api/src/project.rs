@@ -635,6 +635,7 @@ pub fn new(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 weights: BTreeMap::new(),
                 macros: None,
                 residual: None,
+                eyeballs: s.pointer("/start/eyeballs").and_then(|e| serde_json::from_value(e.clone()).ok()),
             }
         }
     };
@@ -776,6 +777,20 @@ pub fn load(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     };
     let extra: BTreeSet<String> = blobs.keys().cloned().collect();
     let (store, checked, source, resolved) = check_doc(&doc, input, &root, from_zip, &extra)?;
+    for c in doc["characters"].as_array().into_iter().flatten() {
+        if let Some(rig) = c.pointer("/spec/eyeballs").filter(|e| e["follow"] == gf_core::eyerig::FOLLOW_HELPER).and_then(|e| e["rig"].as_str()) {
+            let catalog = c.pointer("/spec/base/catalog").and_then(Value::as_str).unwrap_or_default();
+            let problem = match store.load_eyerig(rig) {
+                Ok(m) if m.catalog != catalog => Some(format!("it belongs to catalog {}, the character's catalog is {catalog}", m.catalog)),
+                Ok(_) => None,
+                Err(e) => Some(e),
+            };
+            if let Some(why) = problem {
+                return Err(ApiError::new(Code::NotFound, format!("{}: its eye rig {rig} cannot be used from this store ({why})", c["name"].as_str().unwrap_or("a character")))
+                    .hint("import the catalog's eye rig into this store (store import-eyerig), or open the project with the store it was made with"));
+            }
+        }
+    }
     if flag(input, "evaluate")
         && source.is_none()
         && let Some(c) = doc["characters"].as_array().into_iter().flatten().find(|c| c.pointer("/spec/macros").is_some_and(|m| !m.is_null()))
@@ -960,7 +975,7 @@ pub fn export(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let index = json!({"format": PORTABLE_FORMAT, "project": ZIP_PROJECT, "base": doc["base"], "resources": portable["resources"],
                        "blobs": blobs.iter().map(|(h, b)| (h.clone(), json!(b.len()))).collect::<serde_json::Map<String, Value>>(),
-                       "note": "no local paths: every outside resource is named by role, identity and file name, and project.load finds it from its options; the base (pack, catalog, game base) is not bundled and must be in the store the project is loaded with"});
+                       "note": "no local paths: every outside resource is named by role, identity and file name, and project.load finds it from its options; the base (pack, catalog, game base) and the eye rig of a character whose eyeballs follow are not bundled and must be in the store the project is loaded with"});
     let scan = res::scanner(&root);
     let mut hits = res::hits_with(&portable, &scan);
     hits.extend(res::hits_with(&index, &scan).into_iter().map(|h| res::Hit { pointer: format!("{ZIP_INDEX}#{}", h.pointer), ..h }));

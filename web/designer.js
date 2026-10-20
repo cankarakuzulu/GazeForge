@@ -33,7 +33,7 @@ const D = {
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
   panelHooks: new Map(), pendingVis: new Map(),
-  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [],
+  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [],
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
 };
 window.gfDesigner = D;
@@ -244,10 +244,11 @@ function anchorInput() {
   const input = { store, pack: D.base.pack, catalog: D.base.catalog, game: D.base.game, placement: D.start.placement, name: D.start.name, weights, residual: D.start.residual,
                   macros: { sliders: { ...D.macroW0 }, mode: D.start.macros?.mode || "gf", head_scale: D.start.macros?.head_scale ?? 1 }, macro: opt("macro") };
   if (opt("eyes")) input.eyes = opt("eyes");
+  if (D.eyeballs) input.eyeballs = D.eyeballs;
   return input;
 }
 function macroKey(name) {
-  if (D.keyW0 !== D.w0 || D.keyM0 !== D.macroW0) { D.keyW0 = D.w0; D.keyM0 = D.macroW0; D.anchorKeys = {}; }
+  if (D.keyW0 !== D.w0 || D.keyM0 !== D.macroW0 || D.keyE0 !== D.eyeballs) { D.keyW0 = D.w0; D.keyM0 = D.macroW0; D.keyE0 = D.eyeballs; D.anchorKeys = {}; }
   if (!(name in D.anchorKeys)) {
     const input = anchorInput();
     delete input.macros.sliders[name];
@@ -354,7 +355,16 @@ function settleInput() {
     input.macro = opt("macro");
   }
   if (opt("eyes")) input.eyes = opt("eyes");
+  if (D.eyeballs) input.eyeballs = D.eyeballs;
   return input;
+}
+
+function setEyeballs(spec, origin) {
+  D.eyeballs = spec ? JSON.parse(JSON.stringify(spec)) : null;
+  for (const cb of D.eyeListeners) { try { cb(origin); } catch (e) { console.error(e); } }
+  notify("slider");
+  scheduleDirty();
+  scheduleSettle();
 }
 
 function needUV() { return V.opts.seams || V.vp.some((s) => s.mode === MODE_INDEX.uv); }
@@ -416,6 +426,7 @@ async function settle(full) {
   D.settled = r;
   D.settledPositions = pos;
   D.settleCount++;
+  placeEyes(r.eyes);
   D.settling = false;
   const kind = r.approximate ? `${r.placement} draft (approximate, ${r.draft.rounds} of ${r.draft.full_rounds} fit rounds; save and export use the full placement)` : r.placement;
   setStatus(changed() ? "preview" : "settled", changed() ? "preview (approximate)" : `settled ${kind} ${rtt.toFixed(0)} ms`);
@@ -557,11 +568,11 @@ function buildSliders() {
   $("search").addEventListener("input", filter);
   cats.addEventListener("change", filter);
   $("reset").addEventListener("click", () => {
-    const before = D.w.slice(), mBefore = { ...D.macroW };
-    const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart };
-    const apply = (w, m) => setWeights(w.map((x, i) => [i, x]), m);
-    apply(after, mAfter);
-    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore), redo: () => apply(after, mAfter) });
+    const before = D.w.slice(), mBefore = { ...D.macroW }, eBefore = D.eyeballs;
+    const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart }, eAfter = D.start.eyeballs ?? null;
+    const apply = (w, m, e) => { setWeights(w.map((x, i) => [i, x]), m); if (JSON.stringify(e) !== JSON.stringify(D.eyeballs)) setEyeballs(e); };
+    apply(after, mAfter, eAfter);
+    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore, eBefore), redo: () => apply(after, mAfter, eAfter) });
   });
 }
 
@@ -1027,20 +1038,22 @@ function interaction() {
   });
 }
 
-function sphere(centre, radius, rings = 16, segs = 24) {
+function placeEyes(report) {
+  if (!D.eyeBase?.length) return;
   const pos = [], idx = [];
-  for (let i = 0; i <= rings; i++) {
-    const th = (Math.PI * i) / rings;
-    for (let j = 0; j <= segs; j++) {
-      const ph = (2 * Math.PI * j) / segs;
-      pos.push(centre[0] + radius * Math.sin(th) * Math.cos(ph), centre[1] + radius * Math.sin(th) * Math.sin(ph), centre[2] + radius * Math.cos(th));
+  for (const e of D.eyeBase) {
+    const t = (report || []).find((x) => x.side === e.side);
+    const o = pos.length / 3;
+    for (let k = 0; k < e.verts.length; k += 3) {
+      const p = [e.verts[k], e.verts[k + 1], e.verts[k + 2]];
+      if (!t) { pos.push(...p); continue; }
+      for (let i = 0; i < 3; i++) pos.push(t.scale * (t.rotation[i][0] * p[0] + t.rotation[i][1] * p[1] + t.rotation[i][2] * p[2]) + t.translation[i]);
     }
+    for (const x of e.tris) idx.push(x + o);
   }
-  for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
-    const a = i * (segs + 1) + j, b = a + segs + 1;
-    idx.push(a, b, a + 1, a + 1, b, b + 1);
-  }
-  return { pos, idx };
+  D.eyesPlaced = report || null;
+  V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes" }, "eyes");
+  request(false);
 }
 
 async function loadScene() {
@@ -1051,11 +1064,8 @@ async function loadScene() {
   const head = V.setHead(D.n, D.indices, sc.triangle_uvs_f32_b64 ? decodeF32(sc.triangle_uvs_f32_b64) : null);
   head.label = "head (LOD0)";
   for (const l of sc.lods) V.addHeadLod(decodeU32(l.triangles_u32_b64), decodeF32(l.triangle_uvs_f32_b64), `LOD ${l.target}`);
-  if (sc.eyes.length) {
-    const pos = [], idx = [];
-    for (const e of sc.eyes) { const s = sphere(e.centre, e.radius); const o = pos.length / 3; pos.push(...s.pos); idx.push(...s.idx.map((x) => x + o)); }
-    V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes (spheres)" }, "eyes");
-  }
+  D.eyeBase = sc.eyes.map((e) => ({ side: e.side, verts: decodeF32(e.vertices_f32_b64), tris: decodeU32(e.triangles_u32_b64) }));
+  placeEyes(D.settled?.eyes);
 }
 
 function gridTargets() { return D.targets.map((t) => t.id); }
@@ -1266,6 +1276,8 @@ function makeApi(panelId) {
     pushUndo,
     requestRender: () => request(false),
     grid: gridApi(),
+    eyes: { get: () => (D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null), set: setEyeballs, rig: () => D.eyerig, placed: () => D.eyesPlaced, hasEyes: () => !!D.eyeBase?.length,
+            onChange: (cb) => { if (typeof cb === "function") D.eyeListeners.push(cb); } },
     panel: panelId,
   };
 }
@@ -1779,6 +1791,8 @@ async function main() {
   const sl = await api("designer.sliders", { store, ...startFrom, macro: opt("macro") });
   D.base = { pack: sl.pack, catalog: sl.catalog, game: sl.game };
   D.start = sl.start;
+  D.eyeballs = sl.start.eyeballs ?? null;
+  D.eyerig = sl.eyerig ?? null;
   D.categories = sl.categories;
   D.macros = sl.macros;
   const order = [...sl.targets].sort((a, b) => a.category.localeCompare(b.category) || a.id.localeCompare(b.id));

@@ -3,6 +3,9 @@ use std::time::Instant;
 
 use gf_api::designer;
 use gf_api::{ApiError, Ctx};
+use gf_core::eyerig::{self as er, EyeballSpec};
+use gf_core::fit::Similarity;
+use gf_geom::lids::Eye;
 use serde_json::{Value, json};
 
 pub struct Lod {
@@ -143,6 +146,7 @@ pub struct Character {
     pub weights: BTreeMap<String, f64>,
     pub macros: Value,
     pub residual: Value,
+    pub eyeballs: Value,
 }
 
 pub struct SettleOut {
@@ -154,11 +158,26 @@ pub struct SettleOut {
     pub approximate: bool,
     pub ms: f64,
     pub server_ms: Value,
+    pub eyes: Vec<(usize, Similarity)>,
+    pub eyeballs: Option<EyeballSpec>,
+}
+
+fn placed_eye(v: &Value) -> Option<(usize, Similarity)> {
+    let side = match v["side"].as_str()? {
+        "left" => 0,
+        "right" => 1,
+        _ => return None,
+    };
+    let row = |i: usize| -> Option<[f64; 3]> { Some([v["rotation"][i][0].as_f64()?, v["rotation"][i][1].as_f64()?, v["rotation"][i][2].as_f64()?]) };
+    let t = &v["translation"];
+    Some((side, Similarity { scale: v["scale"].as_f64()?, rotation: [row(0)?, row(1)?, row(2)?], translation: [t[0].as_f64()?, t[1].as_f64()?, t[2].as_f64()?] }))
 }
 
 pub fn run_settle(input: &Value) -> Result<SettleOut, String> {
     let t = Instant::now();
     let s = designer::settle_mesh(input).map_err(err)?;
+    let eyes = s.eyes.as_ref().map(|e| e.iter().filter_map(placed_eye).collect()).unwrap_or_default();
+    let eyeballs = serde_json::from_value::<EyeballSpec>(input["eyeballs"].clone()).ok();
     let server_ms = json!({"load": s.seconds.load * 1000.0, "evaluate": (s.seconds.evaluated - s.seconds.placer) * 1000.0,
                            "prepare": (s.seconds.prepared - s.seconds.evaluated) * 1000.0, "place": (s.seconds.placed - s.seconds.prepared) * 1000.0,
                            "prepared_cached": s.prepared_cached, "cached": s.cached});
@@ -171,6 +190,8 @@ pub fn run_settle(input: &Value) -> Result<SettleOut, String> {
         approximate: s.approximate,
         ms: ms(t),
         server_ms,
+        eyes,
+        eyeballs,
     })
 }
 
@@ -199,31 +220,71 @@ pub struct EyeMesh {
     pub indices: Vec<u32>,
 }
 
-const EYE_RINGS: u32 = 24;
-const EYE_SEGMENTS: u32 = 48;
+pub struct EyeBase {
+    pub side: usize,
+    pub centre: [f64; 3],
+    pub gaze: [f64; 3],
+    pub first: usize,
+    pub positions: Vec<[f64; 3]>,
+    pub normals: Vec<[f64; 3]>,
+}
 
-pub fn eye_mesh(spheres: &[([f64; 3], f64)]) -> EyeMesh {
+pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
     let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
-    for &(c, r) in spheres {
-        let first = (positions.len() / 3) as u32;
-        for i in 0..=EYE_RINGS {
-            let theta = std::f64::consts::PI * i as f64 / EYE_RINGS as f64;
-            for j in 0..EYE_SEGMENTS {
-                let phi = std::f64::consts::TAU * j as f64 / EYE_SEGMENTS as f64;
-                let n = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
-                positions.extend((0..3).map(|k| (c[k] + r * n[k]) as f32));
-                normals.extend(n.iter().map(|&x| x as f32));
+    let mut bases = Vec::new();
+    for e in eyes {
+        let first = positions.len() / 3;
+        let mut n = vec![[0.0f64; 3]; e.vertices.len()];
+        for t in &e.triangles {
+            let [a, b, c] = t.map(|i| e.vertices[i as usize]);
+            let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+            let f = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            for &i in t {
+                for k in 0..3 {
+                    n[i as usize][k] += f[k];
+                }
             }
         }
-        let at = |i: u32, j: u32| first + i * EYE_SEGMENTS + j % EYE_SEGMENTS;
-        for i in 0..EYE_RINGS {
-            for j in 0..EYE_SEGMENTS {
-                let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
-                indices.extend([a, b, c, a, c, d]);
-            }
+        for (p, m) in e.vertices.iter().zip(n.iter_mut()) {
+            let out = [p[0] - e.centre[0], p[1] - e.centre[1], p[2] - e.centre[2]];
+            let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            let s = if m[0] * out[0] + m[1] * out[1] + m[2] * out[2] < 0.0 { -1.0 } else { 1.0 };
+            *m = if l > 0.0 { m.map(|x| s * x / l) } else { out };
+        }
+        positions.extend(e.vertices.iter().flatten().map(|&x| x as f32));
+        normals.extend(n.iter().flatten().map(|&x| x as f32));
+        indices.extend(e.triangles.iter().flatten().map(|&i| first as u32 + i));
+        bases.push(EyeBase { side: usize::from(e.centre[0] < 0.0), centre: e.centre, gaze: e.gaze(), first, positions: e.vertices.clone(), normals: n });
+    }
+    (EyeMesh { positions, normals, indices }, bases)
+}
+
+fn invert(t: &Similarity) -> Similarity {
+    let r = t.rotation;
+    let rt = [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]];
+    let inv = Similarity { scale: 1.0 / t.scale, rotation: rt, translation: [0.0; 3] };
+    let back = inv.apply(t.translation);
+    Similarity { translation: back.map(|x| -x), ..inv }
+}
+
+pub fn eye_display(base: &EyeBase, settled: Option<&Similarity>, settled_spec: Option<&EyeballSpec>, live: Option<&EyeballSpec>) -> Similarity {
+    let frame = er::eye_frame(base.centre, base.gaze);
+    let adjust = |s: Option<&EyeballSpec>| er::adjustment(&frame, &s.map(|s| if base.side == 0 { s.left } else { s.right }).unwrap_or_default());
+    let follows = |s: Option<&EyeballSpec>| s.is_some_and(EyeballSpec::follows);
+    match settled {
+        Some(t) if follows(live) && follows(settled_spec) => adjust(live).then(&invert(&adjust(settled_spec))).then(t),
+        _ => adjust(live),
+    }
+}
+
+pub fn place_eye_mesh(mesh: &mut EyeMesh, base: &EyeBase, t: &Similarity) {
+    for (k, (p, n)) in base.positions.iter().zip(&base.normals).enumerate() {
+        let (q, m) = (t.apply(*p), t.rotate(*n));
+        for c in 0..3 {
+            mesh.positions[(base.first + k) * 3 + c] = q[c] as f32;
+            mesh.normals[(base.first + k) * 3 + c] = m[c] as f32;
         }
     }
-    EyeMesh { positions, normals, indices }
 }
 
 pub struct Session {
@@ -239,6 +300,9 @@ pub struct Session {
     pub settled: Option<SettleInfo>,
     pub timings: BTreeMap<String, f64>,
     pub targets: usize,
+    pub eye_bases: Vec<EyeBase>,
+    pub settled_eyes: Vec<(usize, Similarity)>,
+    pub settled_eyeballs: Option<EyeballSpec>,
 }
 
 fn err(e: ApiError) -> String {
@@ -252,9 +316,12 @@ fn ms(t: Instant) -> f64 {
 impl Session {
     pub fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes_file: Option<&str>) -> Result<(Session, Value), String> {
         let ctx = Ctx::from_env();
-        let eyes = match eyes_file {
-            Some(p) => Some(eye_mesh(&gf_io::load_eyes(std::path::Path::new(p))?.iter().map(|e| (e.centre, e.radius)).collect::<Vec<_>>())),
-            None => None,
+        let (eyes, eye_bases) = match eyes_file {
+            Some(p) => {
+                let (mesh, bases) = eye_meshes(&gf_io::load_eyes(std::path::Path::new(p))?);
+                (Some(mesh), bases)
+            }
+            None => (None, Vec::new()),
         };
         let mut timings = BTreeMap::new();
         let t = Instant::now();
@@ -276,6 +343,7 @@ impl Session {
             weights: st["weights"].as_object().map(|m| m.iter().filter_map(|(k, v)| v.as_f64().map(|x| (k.clone(), x))).collect()).unwrap_or_default(),
             macros: st["macros"].clone(),
             residual: st["residual"].clone(),
+            eyeballs: st["eyeballs"].clone(),
         };
         let t = Instant::now();
         let scene = designer::scene_mesh(&json!({"store": store, "pack": pack, "catalog": catalog, "game": game})).map_err(err)?;
@@ -304,6 +372,9 @@ impl Session {
             settled: None,
             timings,
             targets,
+            eye_bases,
+            settled_eyes: Vec::new(),
+            settled_eyeballs: None,
         };
         s.settle()?;
         Ok((s, sl))
@@ -314,6 +385,9 @@ impl Session {
                                "name": c.name, "weights": c.weights, "residual": c.residual});
         if let Some(e) = &self.eyes_file {
             input["eyes"] = json!(e);
+        }
+        if !c.eyeballs.is_null() {
+            input["eyeballs"] = c.eyeballs.clone();
         }
         if !c.macros.is_null() {
             input["macros"] = c.macros.clone();
@@ -360,11 +434,24 @@ impl Session {
             h.wind = winding_sign(&h.positions, &h.lods[0].indices);
         }
         self.settled = Some(SettleInfo { revision: s.revision.clone(), placement: s.placement.clone(), approximate: s.approximate, ms: s.ms, server_ms: s.server_ms.clone() });
+        self.settled_eyes = s.eyes.clone();
+        self.settled_eyeballs = s.eyeballs.clone();
+        let live = self.settled_eyeballs.clone();
+        self.preview_eyes(live.as_ref());
         Ok(())
     }
 
+    pub fn preview_eyes(&mut self, live: Option<&EyeballSpec>) {
+        let Some(mesh) = self.head.eyes.as_mut() else { return };
+        for base in &self.eye_bases {
+            let settled = self.settled_eyes.iter().find(|(s, _)| *s == base.side).map(|(_, t)| t);
+            let t = eye_display(base, settled, self.settled_eyeballs.as_ref(), live);
+            place_eye_mesh(mesh, base, &t);
+        }
+    }
+
     pub fn reference_input(&self) -> Value {
-        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, ..self.start.clone() };
+        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, ..self.start.clone() };
         let mut input = self.settle_input(&neutral, false);
         input.as_object_mut().map(|o| o.remove("residual"));
         input
@@ -450,23 +537,77 @@ mod tests {
         (flags, boundary, seams / 2)
     }
 
+    fn eye_file(centres: &[[f64; 3]]) -> Vec<Eye> {
+        let (rings, segments, r) = (12usize, 24usize, 0.012);
+        let eyes: Vec<Value> = centres
+            .iter()
+            .map(|c| {
+                let mut v = vec![[c[0], c[1], c[2] + r]];
+                for i in 1..rings {
+                    let p = std::f64::consts::PI * i as f64 / rings as f64;
+                    for j in 0..segments {
+                        let a = std::f64::consts::TAU * j as f64 / segments as f64;
+                        v.push([c[0] + r * p.sin() * a.cos(), c[1] + r * p.sin() * a.sin(), c[2] + r * p.cos()]);
+                    }
+                }
+                v.push([c[0], c[1], c[2] - r]);
+                let last = v.len() - 1;
+                let ring = |i: usize, j: usize| 1 + (i - 1) * segments + j % segments;
+                let mut t = Vec::new();
+                for j in 0..segments {
+                    t.push([0, ring(1, j), ring(1, j + 1)]);
+                    t.push([last, ring(rings - 1, j + 1), ring(rings - 1, j)]);
+                }
+                for i in 1..rings - 1 {
+                    for j in 0..segments {
+                        t.push([ring(i, j), ring(i + 1, j), ring(i + 1, j + 1)]);
+                        t.push([ring(i, j), ring(i + 1, j + 1), ring(i, j + 1)]);
+                    }
+                }
+                json!({"centre": c, "radius": r, "gaze": [0.0, -1.0, 0.0], "vertices": v, "triangles": t})
+            })
+            .collect();
+        gf_geom::lids::eyes_from_json(&json!({"eyes": eyes}).to_string()).unwrap()
+    }
+
     #[test]
-    fn eye_spheres_are_closed_outward_and_on_their_radius() {
-        let spheres = [([0.03, -0.11, 1.5], 0.015), ([-0.03, -0.11, 1.5], 0.012)];
-        let m = eye_mesh(&spheres);
-        let per = ((EYE_RINGS + 1) * EYE_SEGMENTS) as usize;
-        assert_eq!(m.positions.len(), 2 * per * 3);
-        assert_eq!(m.indices.len(), 2 * (EYE_RINGS * EYE_SEGMENTS * 6) as usize);
-        for (k, &(c, r)) in spheres.iter().enumerate() {
-            let idx: Vec<u32> = m.indices[k * m.indices.len() / 2..(k + 1) * m.indices.len() / 2].to_vec();
-            assert_eq!(winding_sign(&m.positions, &idx), 1.0);
-            for v in k * per..(k + 1) * per {
-                let d: Vec<f64> = (0..3).map(|i| m.positions[v * 3 + i] as f64 - c[i]).collect();
-                let len = d.iter().map(|x| x * x).sum::<f64>().sqrt();
-                assert!((len - r).abs() < 1e-6, "{len} vs {r}");
+    fn the_eye_mesh_is_the_eye_file_mesh_with_outward_normals() {
+        let eyes = eye_file(&[[0.03, -0.11, 1.5], [-0.03, -0.11, 1.5]]);
+        let (m, bases) = eye_meshes(&eyes);
+        assert_eq!(m.positions.len(), (eyes[0].vertices.len() + eyes[1].vertices.len()) * 3);
+        assert_eq!(bases.iter().map(|b| b.side).collect::<Vec<_>>(), vec![0, 1]);
+        for (e, b) in eyes.iter().zip(&bases) {
+            for (k, p) in e.vertices.iter().enumerate() {
+                let v = b.first + k;
+                let d: Vec<f64> = (0..3).map(|i| m.positions[v * 3 + i] as f64 - e.centre[i]).collect();
+                assert!((0..3).all(|i| (m.positions[v * 3 + i] as f64 - p[i]).abs() < 1e-6));
                 assert!((0..3).map(|i| d[i] * m.normals[v * 3 + i] as f64).sum::<f64>() > 0.0);
             }
         }
+    }
+
+    #[test]
+    fn the_displayed_eye_is_the_settled_one_until_an_adjustment_moves_it() {
+        let eyes = eye_file(&[[0.03, -0.11, 1.5], [-0.03, -0.11, 1.5]]);
+        let (_, bases) = eye_meshes(&eyes);
+        let a = 0.2_f64;
+        let settled = Similarity { scale: 1.1, rotation: [[a.cos(), -a.sin(), 0.0], [a.sin(), a.cos(), 0.0], [0.0, 0.0, 1.0]], translation: [0.001, 0.002, -0.003] };
+        let mut spec = EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(format!("sha256:{}", "0".repeat(64))), left: Default::default(), right: Default::default() };
+        spec.left.offset_mm = [1.0, 0.0, 0.0];
+        let same = eye_display(&bases[0], Some(&settled), Some(&spec), Some(&spec));
+        let c = bases[0].centre;
+        let gap = |p: [f64; 3], q: [f64; 3]| (0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f64>().sqrt();
+        assert!(gap(same.apply(c), settled.apply(c)) < 1e-12);
+        let mut live = spec.clone();
+        live.left.offset_mm = [1.0, 2.0, 0.0];
+        let moved = eye_display(&bases[0], Some(&settled), Some(&spec), Some(&live));
+        assert!((gap(moved.apply(c), settled.apply(c)) - 0.0022).abs() < 1e-9, "the 2 mm up offset rides on the settled scale 1.1");
+        assert!(gap(eye_display(&bases[1], None, None, None).apply(bases[1].centre), bases[1].centre) < 1e-15);
+        let off = eye_display(&bases[0], Some(&settled), Some(&spec), None);
+        assert!(gap(off.apply(c), c) < 1e-15, "a live character without eyeballs shows the eyes file's eye, not the last settled follow");
+        let still = EyeballSpec { follow: er::FOLLOW_NONE.into(), ..spec.clone() };
+        let shown = eye_display(&bases[0], Some(&settled), Some(&spec), Some(&still));
+        assert!((gap(shown.apply(c), c) - 0.001).abs() < 1e-12, "follow none keeps only the 1 mm adjustment");
     }
 
     #[test]

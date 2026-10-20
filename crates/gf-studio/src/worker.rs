@@ -29,7 +29,7 @@ pub enum Job {
 
 pub enum Done {
     Loaded { epoch: u64, result: Result<Box<Opened>, String>, ms: f64 },
-    Settled { epoch: u64, generation: u64, sent: Values, result: Result<SettleOut, String>, queued_ms: f64 },
+    Settled { epoch: u64, generation: u64, sent: Box<Values>, result: Result<Box<SettleOut>, String>, queued_ms: f64 },
     Slope { epoch: u64, name: String, key: String, result: Result<MacroSlope, String>, ms: f64 },
     Samples { epoch: u64, id: u64, name: String, key: String, result: Result<Option<MacroSamples>, String>, ms: f64 },
     Reference { epoch: u64, result: Result<Vec<f32>, String> },
@@ -309,7 +309,7 @@ impl Jobs {
                             out.flags = out.uvs.as_ref().map(|u| idx.flags(u));
                             out.server_ms["edge_flags"] = json!(ms(t));
                         }
-                        let sent = Done::Settled { epoch: req.epoch, generation: req.generation, sent: req.sent, result, queued_ms };
+                        let sent = Done::Settled { epoch: req.epoch, generation: req.generation, sent: Box::new(req.sent), result: result.map(Box::new), queued_ms };
                         let gone = done.send(sent).is_err();
                         if let Ok(mut s) = slot.0.lock() {
                             s.running = false;

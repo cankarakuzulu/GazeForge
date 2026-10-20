@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::SparseTarget;
+use crate::eyerig::EyeballSpec;
 use crate::hash;
 use crate::head::HEAD_SCALE_RANGE;
 use crate::macros::{self, Mode};
@@ -56,6 +57,8 @@ pub struct Spec {
     pub macros: Option<MacroSpec>,
     #[serde(default)]
     pub residual: Option<ResidualRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyeballs: Option<EyeballSpec>,
 }
 
 pub fn round_weight(w: f64) -> f64 {
@@ -67,6 +70,7 @@ impl Spec {
     pub fn canonical(&self) -> Spec {
         let mut out = self.clone();
         out.weights = self.weights.iter().map(|(k, &w)| (k.clone(), round_weight(w))).filter(|(_, w)| *w != 0.0).collect();
+        out.eyeballs = self.eyeballs.as_ref().map(EyeballSpec::canonical);
         out
     }
 
@@ -126,6 +130,9 @@ impl Spec {
                 out.push("residual needs vertices > 0 and a positive quantum".into());
             }
         }
+        if let Some(e) = &self.eyeballs {
+            out.extend(e.canonical().problems());
+        }
         out
     }
 }
@@ -162,6 +169,7 @@ mod tests {
             weights: [("nose/x".to_string(), 0.1234567891), ("nose/y".to_string(), 1e-8)].into(),
             macros: None,
             residual: None,
+            eyeballs: None,
         }
     }
 

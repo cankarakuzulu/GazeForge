@@ -132,6 +132,23 @@ impl HeadOnly {
         (out, coef)
     }
 
+    pub fn pin_points(&self, points: &[[f64; 3]], delta: &[[f64; 3]], coef: &[f64; 7], head_scale: f64) -> Vec<[f64; 3]> {
+        points
+            .iter()
+            .zip(delta)
+            .map(|(&p, &d)| {
+                let xv = [p[0] - self.centre[0], p[1] - self.centre[1], p[2] - self.centre[2]];
+                let s = ((p[2] - self.seam_top) / (self.pin_top - self.seam_top)).clamp(0.0, 1.0);
+                let r = s * s * (3.0 - 2.0 * s);
+                let c = columns(xv);
+                std::array::from_fn(|k| {
+                    let fitted: f64 = (0..7).map(|i| coef[i] * c[i][k]).sum();
+                    (d[k] - fitted) * r + (head_scale - 1.0) * r * xv[k]
+                })
+            })
+            .collect()
+    }
+
     pub fn add_head_scale(&self, scale: f64, into: &mut [[f64; 3]]) -> Result<(), String> {
         if !(scale.is_finite() && (HEAD_SCALE_RANGE[0]..=HEAD_SCALE_RANGE[1]).contains(&scale)) {
             return Err(format!("head_scale {scale} is outside [{}, {}]", HEAD_SCALE_RANGE[0], HEAD_SCALE_RANGE[1]));

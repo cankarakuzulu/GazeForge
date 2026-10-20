@@ -3,7 +3,9 @@ use std::path::Path;
 
 use gf_core::catalog::{BlobStore, CatalogManifest, PackManifest};
 use gf_core::character::{MacroSpec, ResidualRef, Spec};
+use gf_core::eyerig::{self, MacroTrace, PlacedEye};
 use gf_core::hash;
+use gf_geom::lids::Eye;
 use gf_core::head::{self, HeadOnly};
 use gf_core::macros::{MacroDefinition, Mode};
 use gf_core::residual;
@@ -83,6 +85,13 @@ pub fn problems(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
             Some(_) => {}
         }
     }
+    if let Some(r) = spec.eyeballs.as_ref().filter(|e| e.follows()).and_then(|e| e.rig.as_ref()) {
+        match store.load_eyerig(r) {
+            Ok(rig) if rig.catalog != spec.base.catalog => out.push(format!("eyeballs.rig {r} belongs to catalog {}, not to base.catalog", rig.catalog)),
+            Ok(_) => {}
+            Err(e) => out.push(format!("eyeballs.rig: {e}")),
+        }
+    }
     if let Some(r) = &spec.residual {
         if r.vertices != pack.vertices {
             out.push(format!("residual has {} vertices, the pack {}", r.vertices, pack.vertices));
@@ -96,8 +105,17 @@ pub fn problems(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
     (out, Some(Resolved { pack, dense, catalog }))
 }
 
+pub type Pin = (MacroTrace, HeadOnly);
+pub type Traced = (Vec<[f64; 3]>, Value, Option<Pin>);
+pub type TracedWithBase = (Vec<[f64; 3]>, Vec<[f64; 3]>, Value, Option<Pin>);
+
 pub fn parametric(store: &Store, resolved: &Resolved, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Value), String> {
+    parametric_traced(store, resolved, spec, macro_source).map(|(p, r, _)| (p, r))
+}
+
+pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<Traced, String> {
     let spec = spec.canonical();
+    let mut pin = None;
     let mut loaded = Vec::new();
     for (id, &w) in &spec.weights {
         loaded.push((w, store.load_target(&resolved.catalog, id)?));
@@ -123,9 +141,10 @@ pub fn parametric(store: &Store, resolved: &Resolved, spec: &Spec, macro_source:
         report["macros"] = json!({"mode": mode.name(), "targets_changed": changes.len(), "similarity_stripped": coef,
                                   "seam_top_m": frame.seam_top, "pin_top_m": frame.pin_top, "head_scale": m.head_scale});
         layers.push(pinned);
+        pin = Some((MacroTrace { changes, coef, head_scale: m.head_scale }, frame));
     }
     let refs: Vec<&[[f64; 3]]> = layers.iter().map(|l| l.as_slice()).collect();
-    Ok((gf_core::character::evaluate_dense(&resolved.dense.positions, &terms, &refs)?, report))
+    Ok((gf_core::character::evaluate_dense(&resolved.dense.positions, &terms, &refs)?, report, pin))
 }
 
 pub fn evaluate(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Value), String> {
@@ -135,12 +154,36 @@ pub fn evaluate(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) 
 pub type Evaluated = (Vec<[f64; 3]>, Vec<[f64; 3]>, Value);
 
 pub fn evaluate_with_base(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<Evaluated, String> {
+    evaluate_traced(store, spec, macro_source).map(|(dense, base, report, _)| (dense, base, report))
+}
+
+pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>) -> Result<(Vec<Eye>, Option<Vec<PlacedEye>>), String> {
+    let spec = spec.canonical();
+    let Some(eb) = spec.eyeballs.as_ref() else {
+        return Ok((eyes, None));
+    };
+    let rig = match (eb.follows(), eb.rig.as_deref()) {
+        (true, Some(r)) => {
+            let rig = store.load_eyerig(r)?;
+            if rig.catalog != spec.base.catalog {
+                return Err(format!("eye rig {r} belongs to catalog {}, not {}", rig.catalog, spec.base.catalog));
+            }
+            Some(rig)
+        }
+        _ => None,
+    };
+    let weights = spec.canonical().weights;
+    let (placed, report) = eyerig::place_eyes(eb, rig.as_ref(), &weights, pin.map(|(t, h)| (t, h)), &eyes)?;
+    Ok((placed, Some(report)))
+}
+
+pub fn evaluate_traced(store: &Store, spec: &Spec, macro_source: Option<&MacroSource>) -> Result<TracedWithBase, String> {
     let (problems, resolved) = problems(store, spec, macro_source);
     if !problems.is_empty() {
         return Err(format!("the spec does not validate: {}", problems.join("; ")));
     }
     let resolved = resolved.expect("validated specs resolve");
-    let (mut dense, mut report) = parametric(store, &resolved, spec, macro_source)?;
+    let (mut dense, mut report, pin) = parametric_traced(store, &resolved, spec, macro_source)?;
     if let Some(r) = &spec.residual {
         let (values, _) = residual::decode(&store.get_ref(&r.blob)?)?;
         if values.len() != dense.len() {
@@ -153,7 +196,7 @@ pub fn evaluate_with_base(store: &Store, spec: &Spec, macro_source: Option<&Macr
         }
         report["residual"] = json!({"vertices": values.len(), "bytes": r.bytes});
     }
-    Ok((dense, resolved.dense.positions, report))
+    Ok((dense, resolved.dense.positions, report, pin))
 }
 
 pub fn capture_residual(store: &Store, parametric: &[[f64; 3]], target: &[[f64; 3]], quantum_m: f64) -> Result<(ResidualRef, Value), String> {
