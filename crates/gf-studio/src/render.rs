@@ -5,7 +5,6 @@ use crate::session::Head;
 use crate::viewer::{self, Camera, Matrices, Rect, SlotState, V3, ViewerState, add, cross, dot, mul, norm, sub};
 
 pub const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-pub const COLOR_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SAMPLES: u32 = 4;
 const UFLOATS: usize = 152;
@@ -129,7 +128,7 @@ struct SlotTarget {
 
 pub struct Composite {
     pub texture: wgpu::Texture,
-    pub srgb_view: wgpu::TextureView,
+    pub view: wgpu::TextureView,
     pub w: u32,
     pub h: u32,
     pub generation: u64,
@@ -185,6 +184,7 @@ pub struct Renderer {
     pub sources: Vec<Source>,
     pub dpr: f64,
     generation: u64,
+    epoch: u64,
 }
 
 fn f32_bytes(v: &[f32]) -> Vec<u8> {
@@ -308,11 +308,23 @@ impl Renderer {
             sources: (0..4).map(|_| Source::Native).collect(),
             dpr: 1.0,
             generation: 0,
+            epoch: 0,
         }
     }
 
     pub fn clear_head(&mut self) {
         self.head = None;
+    }
+
+    pub fn sync_world(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world: &mut crate::world::World) {
+        if world.epoch != self.epoch {
+            self.clear_head();
+            self.epoch = world.epoch;
+        }
+        if let Some(s) = &world.session {
+            self.sync_head(device, queue, &s.head, world.uvs_dirty);
+            world.uvs_dirty = false;
+        }
     }
 
     pub fn sync_head(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, head: &Head, uvs_changed: bool) {
@@ -415,11 +427,11 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: COLOR,
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[COLOR_SRGB],
+            view_formats: &[],
         });
-        let srgb_view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(COLOR_SRGB), ..Default::default() });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.generation += 1;
-        self.composite = Some(Composite { texture, srgb_view, w, h, generation: self.generation });
+        self.composite = Some(Composite { texture, view, w, h, generation: self.generation });
     }
 
     fn base_uniforms(st: &ViewerState, slot: SlotState, m: &Matrices, wind: f32, has_ref: bool, rect: &Rect, canvas_h: u32) -> [f32; UFLOATS] {
@@ -724,36 +736,40 @@ impl Renderer {
 
     pub fn read_rgba(&self, device: &wgpu::Device, queue: &wgpu::Queue, x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, String> {
         let comp = self.composite.as_ref().ok_or("nothing rendered yet")?;
-        let row = (w * 4).div_ceil(256) * 256;
-        let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: &comp.texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        queue.submit([enc.finish()]);
-        let slice = buf.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
-        rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e}"))?;
-        let data = slice.get_mapped_range();
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for r in 0..h {
-            let at = (r * row) as usize;
-            out.extend_from_slice(&data[at..at + (w * 4) as usize]);
-        }
-        drop(data);
-        buf.unmap();
-        Ok(out)
+        read_texture(device, queue, &comp.texture, x, y, w, h)
     }
 
     pub fn wait(&self, device: &wgpu::Device) -> Result<(), String> {
         device.poll(wgpu::PollType::wait_indefinitely()).map(|_| ()).map_err(|e| format!("poll: {e}"))
     }
+}
+
+pub fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture, x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let row = (w * 4).div_ceil(256) * 256;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
+    rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e}"))?;
+    let data = slice.get_mapped_range();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for r in 0..h {
+        let at = (r * row) as usize;
+        out.extend_from_slice(&data[at..at + (w * 4) as usize]);
+    }
+    drop(data);
+    buf.unmap();
+    Ok(out)
 }
 
 pub fn background(dark: bool) -> [f64; 3] {

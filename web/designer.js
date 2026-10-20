@@ -1,4 +1,5 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
+import { ViewCube, elementName, elementDir, yawPitch } from "./cube.js";
 
 const params = new URLSearchParams(location.search);
 let store = params.get("store");
@@ -31,7 +32,7 @@ const D = {
   stats: { frames: [], used: [], intervals: [], settles: [], errors: [], flips: [] }, measure: params.get("measure") === "1",
   dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
-  link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
+  link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
   panelHooks: new Map(), pendingVis: new Map(),
   grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [],
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
@@ -44,13 +45,14 @@ const SHORTCUTS = [
   ["Ctrl+Z", "undo"], ["Ctrl+Y / Ctrl+Shift+Z", "redo"], ["F", "frame the head (active view)"], ["Shift+F", "frame the selection (last slider's region, else the last picked point)"],
   ["double-click", "set the orbit pivot on the surface point"], ["left drag", "orbit"], ["right / middle / Shift+left drag", "pan"], ["wheel", "zoom (Alt+wheel moves clip plane 1)"],
   ["O or 5", "perspective / orthographic (matched framing)"], ["1 / Shift+1", "front / back view"], ["3 / Shift+3", "left / right side view"], ["7 / Shift+7", "top / bottom view"], ["9", "three-quarter view"],
+  ["Home", "home view of the active viewport, framed"], ["view cube", "top right of each viewport: click a face, edge or corner to look from there, drag it to orbit"],
   ["[ / ]", "narrower / wider field of view (framing kept)"], ["L", "layout: single, side by side, quad"], ["N", "next viewport"], ["M / Shift+M", "next / previous render mode"], [", / .", "coarser / finer level of detail"],
   ["W", "wireframe overlay"], ["X", "hidden edges through the surface (x-ray wire)"], ["P", "vertex points"], ["B", "back-face highlight"], ["E", "seams and boundary edges"],
   ["C", "clip plane 1 on / off"], ["G", "light gizmo"], ["H / Alt+H", "hide the head / show everything"], ["I", "isolate the head"], ["K / Shift+K", "PNG of the active view / the whole layout"],
   ["T", "face grid: cells fixed to the topology (same cell = same vertices on every character)"], ["R", "millimetre grid (axis-aligned ortho views; a back plane in perspective)"],
   ["Q / Alt+click", "probe mode (a click shows the address) / probe once in any mode"], ["J", "go to an address (a cell, dense N, game vN or a GF@ line)"],
   ["Ctrl+N / Ctrl+O", "new / open project"], ["Ctrl+S / Ctrl+Shift+S", "save / save the project as"],
-  ["?", "this help"], ["Esc", "close the help"],
+  ["D", "dark / light interface"], ["?", "this help"], ["Esc", "close the help"],
 ];
 D.shortcuts = SHORTCUTS;
 
@@ -76,7 +78,7 @@ function saveSettings() {
   D.saveTimer = setTimeout(() => {
     try {
       const { hiddenRegions, box, ...opts } = V.opts;
-      localStorage.setItem(SKEY, JSON.stringify({ opts, layout: V.layout, vp: V.vp, link: D.link, refSource: D.refSource, tab: D.tab, preset: D.preset,
+      localStorage.setItem(SKEY, JSON.stringify({ opts, layout: V.layout, vp: V.vp, link: D.link, refSource: D.refSource, tab: D.tab, preset: D.preset, theme: D.theme,
         cams: V.cams.map((c) => ({ fov: c.goal.fov, ortho: c.ortho })) }));
     } catch {}
   }, 300);
@@ -98,6 +100,16 @@ function applySettings(s) {
   if (["start", "neutral", "snapshot"].includes(s.refSource)) D.refSource = s.refSource;
   if (typeof s.tab === "string") D.tab = s.tab;
   if (typeof s.preset === "string") D.preset = s.preset;
+  if (s.theme === "light" || s.theme === "dark") setTheme(s.theme, false);
+}
+
+function setTheme(name, save = true) {
+  D.theme = name === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = D.theme;
+  const use = $("theme-btn")?.querySelector("use");
+  if (use) use.setAttribute("href", D.theme === "light" ? "#i-sun" : "#i-moon");
+  if (V) request(false);
+  if (save && V) saveSettings();
 }
 
 function views() {
@@ -319,6 +331,7 @@ function frame(ts) {
   }
   const dt = D.lastTs ? Math.max(0, (ts - D.lastTs) / 1000) : 0.016;
   const moving = V.render(dt);
+  if (D.cube) D.cube.update();
   if (D.measure) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
   const t1 = performance.now();
   if (D.dragging) {
@@ -652,6 +665,37 @@ function namedView(name) {
   refreshToolbar();
   request(false);
 }
+const HOME = [["perspective", 0, 0.08], ["front", 0, 0], ["side", Math.PI / 2, 0], ["top", 0, Math.PI / 2]];
+function homeView() {
+  const r = V.rects(), cam = V.cams[(r[V.active] || r[0]).cam], h = HOME[V.cams.indexOf(cam)] || HOME[0];
+  cam.view(h[1], h[2]);
+  cam.name = h[0];
+  frameHead();
+  refreshToolbar();
+}
+function cubeSnap(slot, bits) {
+  V.active = slot;
+  const name = elementName(bits);
+  if (NAMED[name]) { namedView(name); return; }
+  const [yaw, pitch] = yawPitch(elementDir(bits)), cam = V.activeCam();
+  cam.view(yaw, pitch);
+  cam.name = name;
+  V.pivotFlash = 0.4;
+  refreshToolbar();
+}
+const cubeActions = {
+  activate: (slot) => { V.active = slot; refreshToolbar(); },
+  orbit: (slot, dx, dy) => {
+    const r = V.rects().find((x) => x.slot === slot), cam = V.cams[r.cam];
+    cam.set({ yaw: cam.goal.yaw - dx * 0.008, pitch: cam.goal.pitch + dy * 0.008 });
+    if (cam.name !== "perspective") cam.name = "free";
+    V.pivotFlash = 0.4;
+    request(false);
+  },
+  snap: cubeSnap,
+  home: (slot) => { V.active = slot; homeView(); },
+  three: (slot) => { V.active = slot; namedView("threequarter"); },
+};
 function toggleOrtho() {
   const cam = V.activeCam();
   cam.ortho = !cam.ortho;
@@ -852,8 +896,9 @@ function refreshToolbar() {
   const st = V.activeVp(), cam = V.activeCam();
   $("mode").value = String(st.mode);
   $("lod").value = String(st.lod);
-  $("layout").value = V.layout;
-  $("proj").textContent = cam.ortho ? "ortho" : "persp";
+  document.querySelectorAll("#layout button").forEach((b) => b.classList.toggle("on", b.dataset.layout === V.layout));
+  $("proj").querySelector("span").textContent = cam.ortho ? "ortho" : "persp";
+  $("proj").classList.toggle("on", cam.ortho);
   $("fov").value = cam.goal.fov;
   $("fov-val").textContent = `${cam.goal.fov.toFixed(0)}°`;
   $("link").checked = D.link;
@@ -867,9 +912,14 @@ function buildControls() {
   const lod = $("lod"), head = V.meshes.get("head");
   head.lods.forEach((l, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = `LOD${i} · ${l.tri} tris`; lod.appendChild(o); });
   lod.addEventListener("input", () => setLod(Number(lod.value)));
-  $("layout").addEventListener("input", (e) => setLayout(e.target.value));
+  document.querySelectorAll("#layout button").forEach((b) => b.addEventListener("click", () => setLayout(b.dataset.layout)));
+  let wantLayout = V.layout;
+  Object.defineProperty($("layout"), "value", { get: () => V.layout, set: (v) => { wantLayout = v; } });
+  $("layout").addEventListener("input", () => setLayout(wantLayout));
   $("proj").addEventListener("click", toggleOrtho);
-  $("named").addEventListener("input", (e) => { if (e.target.value) namedView(e.target.value); e.target.value = ""; });
+  $("three").addEventListener("click", () => namedView("threequarter"));
+  $("home").addEventListener("click", homeView);
+  $("theme-btn").addEventListener("click", () => setTheme(D.theme === "light" ? "dark" : "light"));
   $("frame").addEventListener("click", frameHead);
   $("frame-sel").addEventListener("click", frameSelection);
   $("shot").addEventListener("click", (e) => screenshot(e.shiftKey ? "layout" : "viewport"));
@@ -1009,6 +1059,7 @@ function interaction() {
     if (code === "Digit7" || code === "Numpad7") { namedView(e.shiftKey ? "bottom" : "top"); return handled(); }
     if (code === "Digit9" || code === "Numpad9") { namedView("threequarter"); return handled(); }
     if (code === "Digit5" || code === "Numpad5" || k === "o" || k === "O") { toggleOrtho(); return handled(); }
+    if (k === "Home" && !e.target.matches?.("input, select")) { homeView(); return handled(); }
     switch (k.toLowerCase()) {
       case "f": e.shiftKey ? frameSelection() : frameHead(); break;
       case "l": setLayout({ single: "side", side: "quad", quad: "single" }[V.layout]); break;
@@ -1025,6 +1076,7 @@ function interaction() {
       case "i": isolate("mesh", "head"); break;
       case "k": screenshot(e.shiftKey ? "layout" : "viewport"); break;
       case "t": toggleOpt("faceGrid", "face grid"); break;
+      case "d": setTheme(D.theme === "light" ? "dark" : "light"); toast(`${D.theme} interface`); break;
       case "r": toggleOpt("normalGrid", "millimetre grid"); break;
       case "q": setProbeMode(!D.probeMode); break;
       case "j": $("addr").classList.remove("hidden"); $("goto").focus(); $("goto").select(); break;
@@ -1305,7 +1357,7 @@ function gridControls() {
   $("goto-btn").addEventListener("click", go);
   $("goto").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } if (e.key === "Escape") e.target.blur(); });
   const c = gl.canvas, view = $("view");
-  const control = (el) => el !== c && !!el.closest("button, input, select, textarea, label, a, summary, [contenteditable]");
+  const control = (el) => el !== c && !!el.closest("button, input, select, textarea, label, a, summary, [contenteditable], .vcube");
   let down = null;
   view.addEventListener("pointerdown", (e) => { down = e.button === 0 && !control(e.target) ? { x: e.clientX, y: e.clientY, alt: e.altKey } : null; }, true);
   view.addEventListener("pointerup", (e) => {
@@ -1819,6 +1871,7 @@ async function main() {
   buildControls();
   interaction();
   gridControls();
+  D.cube = new ViewCube($("cubes"), V, cubeActions);
   $("out").value = opt("out") || "";
   $("save").addEventListener("click", save);
   D.pack = pack;
@@ -1836,7 +1889,7 @@ async function main() {
   buildProjectControls();
   if (P.loadUnresolved?.length) $("p-status").textContent = `not found, kept as typed: ${unresolvedText(P.loadUnresolved)}`;
   else if (P.relinked) $("p-status").textContent = "resources relinked: save to keep the new locations";
-  D.ui = { setMode, setLod, setLayout, namedView, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
+  D.ui = { setMode, setLod, setLayout, namedView, homeView, setTheme, cube: { snap: cubeSnap, pointOf: (slot, name) => D.cube.pointOf(slot, name), buttonOf: (slot, act) => D.cube.buttonOf(slot, act) }, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
            setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"), macroReady: (name) => !!macroSampled(name),
            grid: { ensureGrid, probeAt, goTo, describeAt, pointOf, toLod0, setProbeMode, headPos },
            project: { save: saveProject, saveAs: saveProjectAs, open: openProject, newProject, autosave, viewerState, applyViewerState, panelStates, projectSig, updateDirty, dialog } };
@@ -1847,4 +1900,5 @@ async function main() {
   offerRecovery();
 }
 
+setTheme(D.theme, false);
 main().catch((e) => { setStatus("preview", `error: ${e.message}`); D.error = e.message; console.error(e); });

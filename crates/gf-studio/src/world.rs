@@ -618,6 +618,12 @@ impl World {
                 st.named_view(&name, instant);
                 format!("{name} view")
             }
+            "view_home" => {
+                st.home_view(instant);
+                self.frame_head(instant);
+                "home view".into()
+            }
+            "eyes" => toggle(st, "eyes", "eye meshes")?,
             "ortho" => {
                 let cam = st.active_cam();
                 cam.ortho = !cam.ortho;

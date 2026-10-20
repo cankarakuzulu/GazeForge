@@ -32,6 +32,8 @@ pub const NAMED_VIEWS: [(&str, f64, f64); 7] = [
     ("threequarter", 0.61, 0.14),
 ];
 
+pub const HOME: [(&str, bool, f64, f64); 4] = [("perspective", false, 0.0, 0.08), ("front", true, 0.0, 0.0), ("side", true, PI / 2.0, 0.0), ("top", true, 0.0, PI / 2.0)];
+
 pub type V3 = [f64; 3];
 
 pub fn sub(a: V3, b: V3) -> V3 {
@@ -601,12 +603,7 @@ pub struct ViewerState {
 impl Default for ViewerState {
     fn default() -> ViewerState {
         ViewerState {
-            cams: vec![
-                Camera::new("perspective", false, 0.0, 0.08),
-                Camera::new("front", true, 0.0, 0.0),
-                Camera::new("side", true, PI / 2.0, 0.0),
-                Camera::new("top", true, 0.0, PI / 2.0),
-            ],
+            cams: HOME.iter().map(|&(name, ortho, yaw, pitch)| Camera::new(name, ortho, yaw, pitch)).collect(),
             layout: Layout::Single,
             active: 0,
             vp: [SlotState { mode: 0, lod: 0 }; 4],
@@ -641,6 +638,25 @@ impl ViewerState {
         cam.view(yaw, pitch, instant);
         cam.name = if name == "threequarter" { "three-quarter".into() } else { name.into() };
         true
+    }
+
+    pub fn active_cam_index(&self) -> usize {
+        let slots = self.layout.slots();
+        slots[self.active.min(slots.len() - 1)]
+    }
+
+    pub fn home_view(&mut self, instant: bool) {
+        let i = self.active_cam_index();
+        let (name, _, yaw, pitch) = HOME[i];
+        let cam = &mut self.cams[i];
+        cam.view(yaw, pitch, instant);
+        cam.name = name.into();
+    }
+
+    pub fn view_dir(&mut self, name: &str, yaw: f64, pitch: f64, instant: bool) {
+        let cam = self.active_cam();
+        cam.view(yaw, pitch, instant);
+        cam.name = name.into();
     }
 
     pub fn set_fov(&mut self, f: f64, instant: bool) {

@@ -1,6 +1,9 @@
 mod app;
+mod cube;
 mod godot;
 mod hud;
+mod icon_data;
+mod icons;
 mod input;
 mod keymap;
 mod preview;
@@ -8,6 +11,8 @@ mod render;
 mod script;
 mod session;
 mod shape;
+mod studio;
+mod ui_script;
 mod viewer;
 mod worker;
 mod world;
