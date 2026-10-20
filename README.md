@@ -32,7 +32,8 @@ The workspace is layered, and every edge points down: `gf-geom` (pure maths: no 
 `wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
 catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
 `gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
-`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only.
+`gf-wasm` (the designer's preview kernel) depends on `gf-geom` only. `gf-studio` (the native studio,
+binary `gazeforge-studio`) is another front door: it links `gf-api` in-process and nothing depends on it.
 `python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
 against an allow-list, clippy bans on file, thread, process, network and clock calls in `gf-geom` and `gf-core` with
 `-D warnings`, the wasm32 build, and a build of `gf-core`, `gf-io` and `gf-api` in a copy of the workspace without its
@@ -414,7 +415,10 @@ target's exact delta at the game vertices, computed in WebAssembly (`gf-wasm`, w
 On release (150 ms debounce) the server settles the character (weights and macros -> dense -> the spec's placement ->
 game mesh), and the settled mesh replaces the preview and becomes the base of the next one. Under the default placement
 the settled mesh can differ from the preview, because the placement re-fits game vertices along the surface. Macro
-sliders preview with a one-sided slope fetched when the drag starts (`designer.macro_delta`).
+sliders preview from samples: after each settle the page fetches, in the background, the settled game mesh at a few
+values of the age and gender sliders (every part boundary of the slider plus a 0.25 grid, `designer.macro_delta` with
+`sampled`), and a drag interpolates between them. Until a slider's samples exist its drag uses a one-sided slope, and the
+status line says so.
 
 Everything heavy stays on the server: the dense pack, the catalog and the placement never reach the browser. The page
 downloads one preview pack per target set (game triangles plus each target's i16 delta at the game vertices and a scale,
@@ -505,6 +509,156 @@ enforced: a stitch that fails them is drawn in red with the failed gates listed,
 other than 1 shows the scaled head through `setPose`; while the character changes, the body is marked stale (or
 re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
 moves and refits after the settle.
+
+### Native client
+
+`gazeforge-studio` is a native designer (Rust, wgpu and egui; Windows and macOS) that runs the core in the same process:
+loading a store and settling a character call the registry's typed cores directly (`designer::scene_mesh`,
+`designer::settle_mesh`), so no mesh crosses HTTP, JSON or base64. The browser designer stays as the other client.
+
+```
+cargo build --release -p gf-studio
+gazeforge-studio --store DIR [--spec FILE] [--macro FILE] [--eyes FILE] [--keymap FILE] [--input sliders] [--godot-config FILE]
+gazeforge-studio --script STEPS.json --out DIR
+gazeforge-studio --write-keymap FILE
+```
+
+The viewport ports the browser viewer: the same twelve render modes (clay by default) and overlays (wireframe, hidden
+edges, vertex points, back faces, seams and boundaries, clip planes with capped sections, a clip box, light gizmo),
+the same orbit, pan, zoom, pivot, focus, perspective and orthographic cameras, named views, the single, side-by-side and
+quad layouts and the LOD switch. Each viewport slot takes its pixels from a frame source: the built-in renderer, or an
+external source that hands back RGBA frames for the slot's camera and size.
+
+`--eyes` takes the same eyes file as the browser designer: its eyeballs are drawn as spheres in the built-in renderer
+(the `eyes` toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. The
+spheres stay where the file puts them; a target that moves the eye sockets does not move them.
+
+Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
+weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the
+first input: a tab for the macro sliders (when a macro definition is given), one per target category and one with every
+target; search across all targets; reset; right click for a slider's start value. Targets that are opposites of each
+other (`decr`/`incr`, `down`/`up`, `in`/`out`, `backward`/`forward`, `concave`/`convex`, `compress`/`uncompress` on the
+same name) share one slider from -1 (full first) through 0 to 1 (full second), which sets one of the two and clears the
+other; a character that has both set shows the difference and names both in the slider's tooltip until the slider is
+moved. Another input can replace it without touching the preview, the settle or the history.
+
+While a slider moves, the preview is the last settled mesh plus the weight changes times each target's sparse deltas
+on the game vertices (macro sliders interpolate settled samples taken in the background, or use the macro's local slope
+until those exist, which the overlay reports), with normals recomputed and uploaded every frame. A
+commit settles in-process on a worker thread with the spec's placement; the settled mesh replaces the preview. A settle
+still queued when a newer one arrives is dropped before it starts; one already running stops at the placement's next
+safe point (between solver iterations and fit rounds) when a newer commit arrives or a slider drag begins, and never
+publishes a partial mesh. A settle stopped by a drag runs again once the drag ends, so the preview has the cores while a
+slider moves and the settle has all of them otherwise; a settle that completes is identical to `designer.settle`. Every
+shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings overlay (`Alt+H`) shows the
+present rate, frame times, input-to-preview latency, settle latency, the macro slope and sample costs.
+`GAZEFORGE_SETTLE_THREADS` (default: all cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+
+`--bench-window SECONDS` orbits and previews continuously and prints the frame rate; `--bench-idle SECONDS` waits for
+the app to go idle and counts the frames it draws with nothing changing (none expected). When the operating system
+reports the window hidden (a minimized window, or a desktop with no display attached), the windowing layer repaints at
+most every 100 ms and the bench says so in `paced_by`. `GAZEFORGE_LOG=warn` (or `info`, `debug`) prints the GPU
+driver's and the windowing layer's log to stderr; a window whose GPU setup fails exits with a JSON error naming the
+backend.
+
+The key map is a JSON file (`--write-keymap` writes the defaults; edit and pass it with `--keymap`, or place it at the
+default location printed by `--help`): every action takes a list of bindings such as `"Alt+W"`, `"Ctrl+Shift+Z"` or
+`"Ctrl+Alt+1"`, and an empty list unbinds it. No default is a bare letter or digit: view toggles use `Alt`, editing
+uses `Ctrl` (`Ctrl+Z` undo, `Ctrl+Y` or `Ctrl+Shift+Z` redo, `Ctrl+S` save) and `F1` lists the keys.
+
+`--script` runs a list of steps against an offscreen GPU target with no window and prints one JSON report (also
+written to `DIR/report.json`): `load`, `layout`, `active`, `mode`, `lod`, `view`, `ortho`, `camera`, `orbit`, `pan`,
+`zoom`, `fov`, `focus`, `action` (any key-map action, including `undo` and `redo`), `option` (viewer options by name,
+such as `wire` or `clip.0.offset`), `weights` (target weights and macro values committed through the input layer, then
+the settle awaited), `edit` (the same as a preview change, optionally committed without waiting), `drag` (a slider moved
+over a number of rendered frames, then released: input-to-preview latency per frame, frame times during the drag and
+during the settle, release-to-settled latency), `settle`, `wait`, `save`, `dump_settle` (the settled positions and the
+exact settle input), `hud`, `source`, `screenshot` (PNG of the layout or the active viewport), `frames` (frame timings),
+`dump_positions`, `keymap` and `summary`, plus the Godot render mode's steps below. A step that fails stops the run
+with a non-zero exit code.
+
+#### Godot render mode
+
+Any viewport slot can be drawn by Godot's renderer instead of the built-in one (the toolbar's renderer choice, or the
+`source` step with `"kind": "godot"`), so a character can be looked at under a game's own materials, environment and
+lights without leaving the client. The frames are shown in the viewport like any other; the client's camera drives
+Godot's. The mode is off until it is chosen.
+
+How it works: choosing the mode starts Godot 4.7 as a child process on the render host project in `clients/godot-render`
+(GDScript only). The host keeps its main window minimized with the render loop off and draws on request into one
+offscreen viewport per slot. The two talk over one localhost TCP connection with a small binary protocol (protocol
+version 2, little endian; every message has a 16-byte header: magic `GFRH`, version, type, payload length; a host that
+speaks another version is refused with the reason):
+
+| Message | Direction | Payload |
+|---|---|---|
+| `HELLO` / `HELLO_ACK` | app -> host -> app | protocol version; the host answers with its Godot version and GPU |
+| `CONFIG` / `CONFIG_ACK` | app -> host -> app | JSON: material, environment, scene, background; the host answers what loaded and what did not |
+| `MESH` / `MESH_ACK` | app -> host | once per topology: positions, normals, UVs (game vertices split at UV seams, one vertex set shared by every LOD) and each LOD's triangle indices |
+| `POSITIONS` / `POSITIONS_ACK` | app -> host | every new head revision (each settle, and each preview frame while a slider moves, when the host is free): positions and normals |
+| `RENDER` / `FRAME` | app -> host -> app | request number, slot, size, perspective field of view or orthographic height, near, far, camera transform, LOD; the host answers with the request number, RGBA8 pixels and its render and readback times, always in request order |
+| `READBACK` / `VERTS` | app -> host -> app | the positions the host's mesh holds, the LOD it draws and that LOD's index count (for checks) |
+| `ERROR`, `BYE` | either | a message, or the end of the session |
+
+The host reads each frame back asynchronously (`RenderingDevice.texture_get_data_async`): the copy is queued behind
+the frame's draw and delivered a couple of draws later, so the host can draw the next request while the previous frame
+is still on its way. The client keeps at most two requests in flight and pairs every frame with the request number it
+answers, so a frame is always shown with the camera, size, LOD and head revision it was drawn for. TCP and not shared
+memory: GDScript has no shared-memory API (it would need a native extension), and loopback TCP is not the bottleneck
+(a 1280x800 frame, 4 MB, arrives in about 2 to 3 ms). On an RTX 4090 with the client pacing 144 frames a second, a
+full-size orbit shows about 106 to 114 Godot frames a second at 1280x800 and at 1920x1080, where the synchronous
+readback this replaced reached 30 to 66. `--sync-readback` in `host_args` switches the host back to the synchronous
+`get_image` path; both give byte-identical frames. While the camera moves the host renders at a reduced size
+(`orbit_scale`, default 0.5; 1.0 keeps full size) and the client scales the frame up; once the camera has been still
+for `still_ms` (default 120) the slot is rendered at full size. Only the newest camera of each slot is rendered, so a
+slow host shows fewer frames but never a backlog. A frame that has not changed is not uploaded to the GPU again.
+
+The client never waits for Godot: the connection runs on its own thread, and a slot without a current Godot frame is
+drawn by the built-in renderer. A missing binary or project, a host that does not connect within `start_timeout_ms`,
+does not answer a frame within `frame_timeout_ms`, exits or is killed, puts the mode into a failed state with the
+reason shown in the slot's label, and the slot falls back to the built-in renderer until the mode is chosen again.
+
+Settings live in a JSON file (`--godot-config FILE`, or `studio-godot.json` next to the key map; `--help` prints the
+default path); `GAZEFORGE_GODOT` and `GAZEFORGE_GODOT_PROJECT` give the binary and project when the file does not:
+
+```json
+{
+  "godot": "path/to/Godot_v4.7-stable_win64_console.exe",
+  "project": "path/to/clients/godot-render",
+  "script": "res://host.gd",
+  "material": "res://materials/skin.tres",
+  "environment": "res://environments/studio.tres",
+  "scene": "res://lighting/key_fill_rim.tscn",
+  "orbit_scale": 0.5,
+  "still_ms": 120,
+  "start_timeout_ms": 30000,
+  "frame_timeout_ms": 3000,
+  "visible": false
+}
+```
+
+Without `material`, `environment` and `scene` the host uses a neutral studio clay that matches the client's own clay
+mode with its default studio lights: a warm grey two-sided material with wrapped diffuse and no specular, the three
+studio lights (key, fill, back) following the camera, a sky-to-ground hemisphere ambient and the viewport's background
+colour (mean difference to the client's clay under 1 of 255 per channel on the head). To use your own look, point `project` at
+your own Godot project, set `script` to the absolute path of `clients/godot-render/host.gd`, and name `res://` paths in
+that project: `material` (any `Material`, applied to the character), `environment` (an `Environment`) and `scene` (a
+`PackedScene`, instanced in place of the default lights; put your lights, probes or props in it). The project must have
+been opened in the Godot editor once so its resources are imported. Paths that do not load are reported and the
+defaults stay.
+
+Limits: the character is the game mesh with its UVs at the slot's LOD; the slot's render mode and overlays (wireframe,
+clip planes, points and the rest) do not apply to Godot frames, and the default look does not follow edits to the
+client's lights; morph targets, skeletons and eyes are not sent; the host
+renders one slot at a time, so in the quad layout the four slots share its frame rate. `visible: true` shows the host's
+window, for debugging only.
+
+Scripted steps for the mode: `source` with `"kind": "godot"` (optional `godot` settings object or `config` file,
+`restart`), `godot_wait` (until every Godot slot shows a full-size frame of the current camera and head, or the mode
+failed), `godot_status` (state, host info and the frame, latency and transfer timings; `reset` clears them),
+`godot_readback` (writes the positions Godot holds, the client's positions and the vertex map), `godot_marker` (a marker
+sphere at a vertex, with the vertex's projected pixel in every slot), `godot_track` (orbits and checks every new
+Godot frame's marker against the camera that frame says it was drawn for), `godot_kill` and `godot_stop`.
 
 ### Projects
 
@@ -841,6 +995,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
+| Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development
 

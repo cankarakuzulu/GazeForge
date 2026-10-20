@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gf-geom", "crates/gf-core", "crates/gf-io", "crates/gf-api", "crates/gf-cli", "crates/gf-wasm"]
+members = ["crates/gf-geom", "crates/gf-core", "crates/gf-io", "crates/gf-api", "crates/gf-cli", "crates/gf-wasm", "crates/gf-studio"]
 
 [workspace.package]
 version = "0.2.0"
