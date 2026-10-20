@@ -16,7 +16,7 @@ pub fn generate_input() -> Value {
         json!({"store": {"type": "string", "minLength": 1},
                "catalog": {"type": "string", "minLength": 1, "description": "the catalog whose eye rig places the eyes"},
                "rig": {"type": "string", "minLength": 1, "description": "an eye rig reference; default: the store's rig for the catalog"},
-               "radius_mm": {"type": "number", "exclusiveMinimum": 0, "description": "eyeball radius, default 12"},
+               "radius_mm": {"type": "number", "minimum": 5, "maximum": 20, "description": "eyeball radius in mm, 5 to 20, default 12"},
                "helper_radius": {"type": "boolean", "description": "use the radius of MakeHuman's helper eyeball instead of radius_mm"},
                "model": {"type": "string", "minLength": 1, "description": "an eye model of the inventory (eyes.inventory); its proportions are used unless shape is given, and the file records the model"},
                "shape": {"type": "object", "description": "eyeball shape: cornea_curvature (cornea radius of curvature over the eyeball radius, 0.65), limbus (limbus diameter over the radius, 0.96), iris_depth (iris plane behind the cornea apex, over the radius, 0.24), pupil (pupil radius over the limbus radius, 0.3), segments (32), rings (16)"},

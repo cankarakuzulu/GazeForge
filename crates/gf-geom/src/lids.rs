@@ -142,7 +142,7 @@ impl Eye {
                 if l <= 0.0 {
                     return unit(out);
                 }
-                let s = if dot(m, out) < 0.0 { -1.0 / l } else { 1.0 / l };
+                let s = if self.parts.is_empty() && dot(m, out) < 0.0 { -1.0 / l } else { 1.0 / l };
                 m.map(|x| x * s)
             })
             .collect()
@@ -797,5 +797,28 @@ mod tests {
         let stats = clear_game(&mut game, &mesh, &[false; 3], &[eye], |_| -0.002, &settings);
         assert_eq!(stats.short_before, 0);
         assert_eq!(game, start);
+    }
+
+    #[test]
+    fn a_parted_eyes_vertex_normals_follow_the_winding_even_where_they_face_the_centre() {
+        let c = [0.03, -0.1, 1.5];
+        let mesh = crate::eyeball::EyeballShape::default().mesh().unwrap().placed(c, [0.0, -1.0, 0.0]).unwrap();
+        let eye = eye_from_mesh(c, 0.012, [0.0, -1.0, 0.0], &mesh).unwrap();
+        let n = eye.vertex_normals();
+        let mut facing_in = 0;
+        for t in &eye.triangles {
+            let [a, b, d] = t.map(|i| eye.vertices[i as usize]);
+            let f = cross(sub(b, a), sub(d, a));
+            if length(f) < 1e-18 {
+                continue;
+            }
+            for &i in t {
+                assert!(dot(f, n[i as usize]) > 0.0);
+            }
+            if dot(f, sub(a, c)) < 0.0 {
+                facing_in += 1;
+            }
+        }
+        assert!(facing_in > 0, "the chamber disc faces the centre, so the test reaches the case");
     }
 }

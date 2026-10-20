@@ -432,7 +432,11 @@ gazeforge call jobs.submit --input '{"command": "export.obj", "input": {"dense":
 ```
 
 Every front door and the job records parse JSON with a correctly rounded float parser, so a number reaches the command
-with the bits it was written with, and a job's result reads back unchanged.
+with the bits it was written with, and a job's result reads back unchanged (input nesting up to 128 levels, as before).
+A twin's JSON option (`sliders`, `macro_base`) is handed to the command as text and parsed the way the argv option is,
+so a 17-digit number there can still move by one ulp, exactly as it does on the command line. A field the chosen
+placement does not read (or `lids_*` without `lids: auto`, `body_*` without `body`) passes the schema and is refused when
+the job runs.
 
 `character.measure` evaluates a spec and reports straight-line distances in millimetres between landmark vertices of
 the dense base, with the base's value and the difference: nose width at the alae, nose length (nasion to tip), nose
@@ -472,7 +476,9 @@ set when `ok` is false. A client configuration:
 
 **Jobs.** `jobs.submit {"command": NAME, "input": {...}}` runs a command in a worker process and returns at once;
 `jobs.status {"id", "wait_s"}` reads its record (`queued`, `running`, `done`, `failed`, `cancelled`, with the result
-when done); `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
+when done); while a job runs, `progress` holds the stage, done, total and message its command last reported (export
+stages, path steps, photo-pipeline stages; at most one write every 200 ms within a stage), and a failed or cancelled
+job keeps it to show where it stopped; `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
 Object that is killed as a whole and closed on exit; the record's `worker_processes_left` is the job object's own count
 after the kill. Elsewhere the worker gets its own process group, which is killed, and that count is null. Jobs live in
 `GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled

@@ -265,7 +265,7 @@ pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
         for (p, m) in e.vertices.iter().zip(n.iter_mut()) {
             let out = [p[0] - e.centre[0], p[1] - e.centre[1], p[2] - e.centre[2]];
             let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
-            let s = if m[0] * out[0] + m[1] * out[1] + m[2] * out[2] < 0.0 { -1.0 } else { 1.0 };
+            let s = if e.parts.is_empty() && m[0] * out[0] + m[1] * out[1] + m[2] * out[2] < 0.0 { -1.0 } else { 1.0 };
             *m = if l > 0.0 { m.map(|x| s * x / l) } else { out };
         }
         positions.extend(e.vertices.iter().flatten().map(|&x| x as f32));

@@ -657,7 +657,13 @@ pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
             Some(i) => read_vec3(&doc, bin, i)?,
             None => Vec::new(),
         };
-        let indices = read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?;
+        let mut indices = read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?;
+        for other in mesh["primitives"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().skip(1) {
+            if other["attributes"] != primitive["attributes"] {
+                return Err(format!("mesh {}: its primitives do not share their vertices", mesh["name"].as_str().unwrap_or("")));
+            }
+            indices.extend(read_indices(&doc, bin, other["indices"].as_u64().ok_or("a primitive has no indices")?)?);
+        }
         let mut morphs = Vec::new();
         for target in primitive["targets"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let p = read_vec3(&doc, bin, target["POSITION"].as_u64().ok_or("a morph target has no POSITION")?)?;

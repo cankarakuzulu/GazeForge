@@ -7,6 +7,7 @@ use serde_json::Value;
 
 fn fixture(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("gazeforge-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
     let dense = root.join("dense");
     let base = root.join("base");
     std::fs::create_dir_all(&dense).unwrap();

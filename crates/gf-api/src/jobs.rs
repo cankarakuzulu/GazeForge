@@ -19,12 +19,17 @@ static PROGRESS: OnceLock<Progress> = OnceLock::new();
 
 pub struct Progress {
     file: PathBuf,
+    every: Duration,
     last: Mutex<Option<(String, Instant)>>,
 }
 
 impl Progress {
     pub fn new(dir: &Path) -> Progress {
-        Progress { file: dir.join("progress.json"), last: Mutex::new(None) }
+        Progress::every(dir, PROGRESS_EVERY)
+    }
+
+    pub fn every(dir: &Path, every: Duration) -> Progress {
+        Progress { file: dir.join("progress.json"), every, last: Mutex::new(None) }
     }
 
     pub fn report(&self, stage: &str, done: u64, total: u64, message: &str) {
@@ -33,7 +38,7 @@ impl Progress {
         if let Some((previous, at)) = last.as_ref()
             && previous == stage
             && done < total
-            && now.duration_since(*at) < PROGRESS_EVERY
+            && now.duration_since(*at) < self.every
         {
             return;
         }
@@ -50,7 +55,10 @@ pub fn progress(stage: &str, done: u64, total: u64, message: &str) {
 }
 
 fn with_progress(dir: &Path, mut record: Value) -> Value {
-    if let Some(p) = std::fs::read_to_string(dir.join("progress.json")).ok().and_then(|t| crate::exactjson::text(&t).ok()) {
+    if record.get("state").and_then(Value::as_str) == Some("done") {
+        return record;
+    }
+    if let Some(p) = std::fs::read_to_string(dir.join("progress.json")).ok().and_then(|t| crate::exactjson::record(&t).ok()) {
         record["progress"] = p;
     }
     record
@@ -91,7 +99,7 @@ pub fn read_record(dir: &Path) -> Result<Value, ApiError> {
     let path = dir.join("job.json");
     let mut last = String::new();
     for _ in 0..50 {
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| crate::exactjson::text(&t)) {
+        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| crate::exactjson::record(&t)) {
             Ok(v) => return Ok(v),
             Err(e) => last = e,
         }
@@ -154,7 +162,7 @@ pub fn cancel(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let dir = job_dir(&ctx.jobs_dir, text(input, "id"))?;
     let record = read_record(&dir)?;
     if terminal(&record) {
-        return Ok(record);
+        return Ok(with_progress(&dir, record));
     }
     std::fs::write(dir.join("cancel"), b"cancel").map_err(|e| ApiError::internal(e.to_string()))?;
     let record = wait_for(&dir, input.get("wait_s").and_then(Value::as_f64).unwrap_or(10.0))?;
@@ -216,7 +224,7 @@ pub fn supervise(jobs_dir: &Path, id: &str) -> Result<(), String> {
             guard.terminate();
             record["worker_processes_left"] = json!(guard.wait_empty(Duration::from_secs(5)));
             record["worker_exit"] = json!(status.code());
-            match std::fs::read_to_string(dir.join("result.json")).ok().and_then(|t| crate::exactjson::text(&t).ok()) {
+            match std::fs::read_to_string(dir.join("result.json")).ok().and_then(|t| crate::exactjson::record(&t).ok()) {
                 Some(result) => {
                     let ok = result.get("ok") == Some(&Value::Bool(true));
                     record["state"] = json!(if ok { "done" } else { "failed" });
@@ -271,7 +279,7 @@ mod tests {
     fn progress_is_written_on_a_new_stage_and_at_the_end_and_throttled_between() {
         let dir = std::env::temp_dir().join(format!("gf-progress-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let p = Progress::new(&dir);
+        let p = Progress::every(&dir, Duration::from_secs(3600));
         let read = || crate::exactjson::text(&std::fs::read_to_string(dir.join("progress.json")).unwrap()).unwrap();
         p.report("place", 1, 10, "");
         assert_eq!(read()["done"], 1);
@@ -283,6 +291,8 @@ mod tests {
         assert_eq!(read()["stage"], "write");
         let record = with_progress(&dir, json!({"state": "running"}));
         assert_eq!(record["progress"]["message"], "glb");
+        assert!(with_progress(&dir, json!({"state": "done"})).get("progress").is_none());
+        assert_eq!(with_progress(&dir, json!({"state": "failed"}))["progress"]["stage"], "write");
         assert!(with_progress(&dir.join("none"), json!({})).get("progress").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

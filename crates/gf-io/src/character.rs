@@ -167,6 +167,7 @@ pub fn model_eyes(store: &Store, spec: &Spec) -> Result<Option<Vec<Eye>>, String
 }
 
 pub fn model_eyes_for(store: &Store, catalog: &str, eb: &gf_core::eyerig::EyeballSpec) -> Result<Option<Vec<Eye>>, String> {
+    let eb = eb.canonical();
     let Some(choice) = eb.model.as_ref() else { return Ok(None) };
     let rig_ref = eb.rig.as_deref().ok_or("eyeballs.model needs eyeballs.rig")?;
     let rig = store.load_eyerig(rig_ref)?;
