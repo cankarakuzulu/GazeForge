@@ -13,7 +13,7 @@ export async function loadLocale(lang) {
   table = fallback;
   const want = (lang || "en").toLowerCase().split("-")[0];
   if (want !== "en") {
-    try { table = { ...fallback, ...(await read(want)) }; } catch { table = fallback; }
+    try { table = { ...fallback, ...(await read(want)) }; } catch (e) { console.warn(`i18n: no usable table for ${want} (${e.message}); English shown`); table = fallback; }
   }
   document.documentElement.lang = table === fallback ? "en" : want;
   return table;

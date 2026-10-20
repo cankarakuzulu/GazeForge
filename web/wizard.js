@@ -135,7 +135,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const named = new Set((s.fields || []).map((f) => f.name));
     const common = visible.filter((f) => f.common), advanced = visible.filter((f) => !f.common);
     const rest = Object.keys(s.input_schema?.properties || {}).filter((n) => !named.has(n));
-    const hidden = (s.fields || []).filter((f) => f.hidden).map((f) => `<div class="wz-row wz-bound"><label>${esc(f.name)}</label><code>${esc(JSON.stringify(current(i, f.name) ?? null))}</code></div>`);
+    const hidden = (s.fields || []).filter((f) => f.hidden).map((f) => `<div class="wz-row wz-bound"><label>${esc(tr(`wizard.field.${f.name}`, null, humanize(f.name)))}</label><code>${esc(JSON.stringify(current(i, f.name) ?? null))}</code></div>`);
     box.querySelector(".wz-body").innerHTML = `
       <p class="wz-help">${esc(tr(`wizard.${W.def.id}.${s.id}.help`, null, s.help || s.summary || ""))}</p>
       ${s.command ? `<p class="wz-cmd">${tr("wizard.runs", { command: `<code>${esc(s.command)}</code>`, kind: esc(s.kind) })}</p>` : ""}

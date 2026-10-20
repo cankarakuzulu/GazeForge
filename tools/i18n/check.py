@@ -17,6 +17,7 @@ Refused:
   unused   a table key no code names (keys under a dynamic prefix such as mode.* are exempt, see DYNAMIC)
   case     a value that starts with a lower-case letter, outside fragments (a key holding ".frag.", or under unit.); a value
            starting with a placeholder, digit or punctuation is not judged
+  escape   a value holding a backslash followed by n or t (the newline was escaped twice, so it shows literally)
   locale   a key in another locale that en.json lacks, or a placeholder set that differs from en.json's
 
 Limits (what this does NOT see): a literal assigned to a variable first and shown later; text built by string
@@ -72,7 +73,7 @@ KEY_USE = [
 ]
 PREFIX_USE = [
     re.compile(r"\btrf?\(\s*`([A-Za-z0-9_.\-]+\.)\$\{"),
-    re.compile(r"\btrf?\(\s*&format!\(\"([A-Za-z0-9_.\-]+\.)\{"),
+    re.compile(r"\b(?:trf?|tr_or)\(\s*&format!\(\"([A-Za-z0-9_.\-]+\.)\{"),
 ]
 
 
@@ -222,6 +223,8 @@ def check():
         first = value.lstrip()[:1]
         if first.isalpha() and first.islower() and not (key.startswith("unit.") or ".frag." in key):
             problems.append({"kind": "case", "key": key, "text": value[:60]})
+        if "\\n" in value or "\\t" in value:
+            problems.append({"kind": "escape", "key": key, "text": "an escaped \\n or \\t; JSON wants the character itself"})
     loc = os.path.dirname(EN)
     for n in sorted(os.listdir(loc)):
         if n.endswith(".json") and n != "en.json":

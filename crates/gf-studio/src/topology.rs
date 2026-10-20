@@ -391,7 +391,7 @@ impl Studio<'_> {
             }
             ui.horizontal(|ui| {
                 let running = self.world.topo.running();
-                let tip = format!("{} ({})", tr("topology.improve_title"), self.s.keymap.describe("topology_improve"));
+                let tip = self.tip(tr("topology.improve_title"), "topology_improve");
                 if ui.add_enabled_ui(!running, |ui| icons::button(ui, "wand-sparkles", running, &tip)).inner.clicked() {
                     self.act("topology_improve");
                 }

@@ -834,7 +834,7 @@ function renderRegions() {
     row.className = "region";
     const hidden = (V.opts.hiddenRegions >>> i) & 1;
     row.innerHTML = `<input type="checkbox" ${hidden ? "" : "checked"}> ${escapeHtml(tr(`category.${name}`, null, name))} <span class="muted">${D.regions.counts[i]}</span>`;
-    row.querySelector("input").addEventListener("change", (e) => setRegionMask(e.target.checked ? V.opts.hiddenRegions & ~(1 << i) : V.opts.hiddenRegions | (1 << i), e.target.checked ? tr("designer.undo.show_region", { name }) : tr("designer.undo.hide_region", { name })));
+    row.querySelector("input").addEventListener("change", (e) => setRegionMask(e.target.checked ? V.opts.hiddenRegions & ~(1 << i) : V.opts.hiddenRegions | (1 << i), e.target.checked ? tr("designer.undo.show_region", { name: tr(`category.${name}`, null, name) }) : tr("designer.undo.hide_region", { name: tr(`category.${name}`, null, name) })));
     box.appendChild(row);
   });
 }
@@ -848,7 +848,7 @@ function bindOpt(el) {
   const write = () => {
     const v = holder()[key];
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
-    if (out) out.textContent = el.dataset.fmt === "mm" ? `${(Number(v) * 1000).toFixed(1)} mm` : Number.isFinite(Number(v)) && el.type === "range" ? Number(v).toFixed(Number(el.step) < 0.1 ? 2 : 0) : "";
+    if (out) out.textContent = el.dataset.fmt === "mm" ? `${(Number(v) * 1000).toFixed(1)} ${tr("unit.mm")}` : Number.isFinite(Number(v)) && el.type === "range" ? Number(v).toFixed(Number(el.step) < 0.1 ? 2 : 0) : "";
   };
   const isBox = path[0] === "box";
   let boxBefore = null;
@@ -1307,7 +1307,7 @@ async function goTo(text) {
   let warn = "";
   if (/^GF@/.test(t)) {
     const r = await api("grid.resolve", { store, ...D.base, targets: gridTargets(), address: t, accept_inconsistent: true });
-    if (r.warnings && r.warnings.length) warn = ` - WARNING, the line disagrees with itself: ${r.warnings.join("; ")}`;
+    if (r.warnings && r.warnings.length) warn = tr("designer.frag.goto_warning", { warnings: r.warnings.join("; ") });
   }
   if (lm && Number(lm[1]) < head.lods.length && Number(lm[2]) < head.lods[Number(lm[1])].tri) {
     const b1 = Number(lm[3]), b2 = Number(lm[4]);
@@ -1316,9 +1316,9 @@ async function goTo(text) {
   } else {
     const r = await api("grid.resolve", { store, ...D.base, targets: gridTargets(), address: t });
     const g = r.nearest_game ?? r.game;
-    if (g == null) throw new Error(`${t}: ${r.note || "no game vertex there"} (cell ${r.cell})`);
+    if (g == null) throw new Error(tr("designer.goto_none", { address: t, note: r.note || tr("designer.goto_no_vertex"), cell: r.cell }));
     target = headPos(g);
-    what = r.kind === "vertex" ? `game v${g} = dense ${r.dense} (${r.cell})` : `${r.cell}: ${r.game_count} game vertices, centre near game v${g}`;
+    what = r.kind === "vertex" ? `game v${g} = dense ${r.dense} (${r.cell})` : tr("designer.goto_cell", { cell: r.cell, count: r.game_count, game: g });
     if (r.kind !== "vertex") {
       let ext = 0;
       for (const v of r.game_vertices) { const q = headPos(v); ext = Math.max(ext, Math.hypot(q[0] - target[0], q[1] - target[1], q[2] - target[2])); }
@@ -1828,7 +1828,7 @@ function buildProjectControls() {
   $("p-chars").addEventListener("click", async (e) => {
     const li = e.target.closest("li");
     if (!li || !P.doc || Number(li.dataset.i) === P.active) return;
-    if (!(await confirmDiscard("switching the character"))) return;
+    if (!(await confirmDiscard(tr("designer.frag.switching")))) return;
     leave(projectUrl(P.name, { character: li.dataset.i }));
   });
   $("p-restore").addEventListener("click", () => { $("p-recover").classList.add("hidden"); leave(projectUrl(slotName(), { recovery: 1, ...(P.name ? {} : { store }) })); });
