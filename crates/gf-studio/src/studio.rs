@@ -33,6 +33,7 @@ pub struct UiState {
     texture: Option<egui::TextureId>,
     texture_generation: u64,
     drag: Option<(usize, bool, f32)>,
+    skin_rect: Option<viewer::Rect>,
     pub render_ms: f64,
     pub frame_ms: f64,
     pub show_help: bool,
@@ -72,6 +73,7 @@ impl UiState {
             texture: None,
             texture_generation: 0,
             drag: None,
+            skin_rect: None,
             render_ms: 0.0,
             frame_ms: 0.0,
             show_help: false,
@@ -436,6 +438,7 @@ impl Studio<'_> {
         self.project_panel(ui);
         self.topology_panel(ui);
         self.face_rig_panel(ui);
+        self.skin_panel(ui);
         self.stitch_panel(ui);
         self.timeline_panel(ui);
         if let Some(s) = &self.world.session {
@@ -506,7 +509,48 @@ impl Studio<'_> {
             rects.iter().copied().find(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).unwrap_or(rects[0])
         };
         let (shift, alt, secondary, middle) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.pointer.button_down(egui::PointerButton::Secondary), i.pointer.button_down(egui::PointerButton::Middle)));
+        let local = |p: egui::Pos2, r: &viewer::Rect| (((p.x - rect.min.x) * ppp - r.x as f32) as f64, ((p.y - rect.min.y) * ppp - r.y as f32) as f64);
+        let tool = self.world.skin.tool;
+        self.world.skin.hover = match (tool, resp.hover_pos()) {
+            (crate::skin::Tool::Brush, Some(p)) => {
+                let r = at(p);
+                let (px, py) = local(p, &r);
+                self.world.skin_pick(&r, px, py).map(|h| h.2)
+            }
+            _ => None,
+        };
+        let skin_button = !(secondary || middle || shift);
+        if tool == crate::skin::Tool::Brush && skin_button {
+            if (resp.drag_started() || resp.clicked())
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                let r = at(p);
+                let (px, py) = local(p, &r);
+                if self.world.skin_paint_begin(&r, px, py) {
+                    self.s.skin_rect = Some(r);
+                }
+            }
+            if let (true, Some(r), Some(p)) = (resp.dragged(), self.s.skin_rect, resp.interact_pointer_pos()) {
+                let (px, py) = local(p, &r);
+                self.world.skin_paint_to(&r, px, py);
+            }
+            if resp.drag_stopped() || resp.clicked() || (self.s.skin_rect.is_some() && !self.world.skin_painting()) {
+                self.world.skin_paint_end();
+                self.s.skin_rect = None;
+            }
+        }
+        if tool == crate::skin::Tool::Stamp
+            && skin_button
+            && resp.clicked()
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            let r = at(p);
+            let (px, py) = local(p, &r);
+            self.world.skin_place_stamp(&r, px, py);
+        }
+        let skin_owns_drag = self.s.skin_rect.is_some() || self.world.skin_painting();
         if resp.drag_started()
+            && !skin_owns_drag
             && let Some(p) = resp.interact_pointer_pos()
         {
             let r = at(p);
@@ -614,6 +658,7 @@ impl Studio<'_> {
             }
         }
         self.face_rig_paint(&painter, rect, ppp, w, h);
+        self.skin_overlay(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
         if self.world.hud.on {
             let mut lines = self.world.hud.lines();

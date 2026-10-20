@@ -155,7 +155,7 @@ impl World {
 
     pub fn character_input(&self) -> Option<Value> {
         let s = self.session.as_ref()?;
-        let character = self.shape.as_ref().map_or_else(|| s.character.clone(), |sh| sh.character(&s.start, &sh.live));
+        let character = self.shape.as_ref().map_or_else(|| s.character.clone(), |sh| sh.character(&s.base(), &sh.live));
         let mut c = s.settle_input(&character, false);
         if let Some(o) = c.as_object_mut() {
             for k in ["store", "eyes", "uvs", "fast"] {

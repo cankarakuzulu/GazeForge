@@ -15,6 +15,8 @@ mod rig_panel;
 mod script;
 mod session;
 mod shape;
+mod skin;
+mod skin_panel;
 mod stitch;
 mod studio;
 mod timeline;

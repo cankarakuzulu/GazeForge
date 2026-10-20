@@ -34,7 +34,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EN = os.path.join(ROOT, "web", "locales", "en.json")
 FRAGMENTS = (".frag.", "unit.")
-DYNAMIC = ("shortcut_key.",)
+DYNAMIC = ("shortcut_key.", "skin.kind.", "skin.style.", "skin.add.", "skin.preset.", "skin.variant.")
 ALLOW = {
     "web/designer.js": ["pushUndo needs { label, undo(), redo() }", "registerPanel needs { id, title, order, mount(rootEl, api) }", "setPose needs "],
     "web/viewer.js": ["shader: ", "program: "],

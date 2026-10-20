@@ -327,6 +327,12 @@ pub struct Session {
     eye_generation: u64,
 }
 
+impl Session {
+    pub fn base(&self) -> Character {
+        Character { skin: self.character.skin.clone(), ..self.start.clone() }
+    }
+}
+
 fn eye_key(eyeballs: Option<&EyeballSpec>, eyes_file: Option<&str>) -> String {
     match eyeballs.and_then(|e| e.model.as_ref().map(|m| (e, m))) {
         Some((e, m)) => format!("model|{}|{}|{}", e.rig.as_deref().unwrap_or_default(), m.id, m.radius_mm),

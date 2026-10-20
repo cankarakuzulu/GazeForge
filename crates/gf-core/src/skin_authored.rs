@@ -184,6 +184,13 @@ impl Grid {
     }
 }
 
+pub fn region_texels(grid: &Grid, texels: &[Option<Texel>], region: ([f32; 3], [f32; 3])) -> Vec<u32> {
+    grid.within(region.0, region.1)
+        .into_iter()
+        .filter(|&k| texels[k as usize].as_ref().is_some_and(|t| (0..3).all(|j| t.mm[j] >= region.0[j] && t.mm[j] <= region.1[j])))
+        .collect()
+}
+
 fn key(p: [f32; 3], cell: f32) -> (i32, i32, i32) {
     ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32, (p[2] / cell).floor() as i32)
 }
@@ -439,6 +446,22 @@ mod tests {
             }
         }
         assert!(inside > 100);
+    }
+
+    #[test]
+    fn region_texels_are_exactly_the_texels_inside_the_box_not_the_whole_grid_cells() {
+        let t = plane();
+        let grid = Grid::new(&t, 4.0);
+        let region = ([9.2, -1.0, 6.1], [10.9, 1.0, 7.9]);
+        let got: std::collections::BTreeSet<u32> = region_texels(&grid, &t, region).into_iter().collect();
+        let want: std::collections::BTreeSet<u32> = t
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.as_ref().is_some_and(|x| (0..3).all(|j| x.mm[j] >= region.0[j] && x.mm[j] <= region.1[j])))
+            .map(|(k, _)| k as u32)
+            .collect();
+        assert_eq!(got, want);
+        assert!(grid.within(region.0, region.1).len() > want.len(), "the cells hold more than the box, which is what made the brush paint bars");
     }
 
     #[test]
