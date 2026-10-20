@@ -29,6 +29,7 @@ pub struct TopologyUi {
     after: Option<Look>,
     before: Option<Look>,
     after_revision: u64,
+    session_epoch: u64,
     pub showing_after: bool,
     pub after_game: String,
 }
@@ -57,6 +58,7 @@ impl Default for TopologyUi {
             after: None,
             before: None,
             after_revision: 0,
+            session_epoch: 0,
             showing_after: false,
             after_game: String::new(),
         }
@@ -139,6 +141,10 @@ impl TopologyUi {
     }
 
     pub fn sync(&mut self, world: &mut World, show: bool) {
+        if self.session_epoch != world.epoch {
+            self.session_epoch = world.epoch;
+            self.reset();
+        }
         let Some(s) = world.session.as_mut() else {
             self.flagged = None;
             return;

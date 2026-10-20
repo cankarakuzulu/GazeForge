@@ -423,7 +423,8 @@ scored shape; the manifest's `build.topology` keeps the summary and each triangl
 improve that made it. `export-obj --quads on` writes clean triangle pairs as quads: pairs are chosen on the base's rest
 shape and texture (planar within 10 degrees, convex in 3D and in texture space, corners between 45 and 135 degrees, not
 across a seam), so the characters of one base share them, and a pair that is not clean on the written mesh is written as
-its two triangles. glTF has no quads: `export-glb` stays triangles, and `--quads` is off by default.
+its two triangles. glTF has no quads: `export-glb` stays triangles, and `--quads` is off by default. `gates game` reads
+triangle OBJs only, so gate the triangle export of the same mesh.
 
 ### One registry, three front doors
 
