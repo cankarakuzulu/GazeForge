@@ -160,6 +160,12 @@ export runs with `--lids auto`; and MakeHuman moves its helper eyeball different
 (`head-scale-vert`, `head-angle`, the eye translation targets, `head-scale-horiz-decr`, old age), so a following eye can
 sit up to about 5 mm deep in its lids there (measured with the eyes file used for testing, which was fitted to another
 face; the per-eye adjustments correct a character).
+`eyes.generate` writes an eyes file for a catalog's base head: a procedural eyeball (a sclera sphere, a cornea cap
+meeting it at the limbus, a recessed iris and a pupil, as separate parts with UVs, from human proportions: a 12 mm
+radius by default, the cornea's radius of curvature 0.65 of it, the limbus 0.96 of it across) centred on each of
+MakeHuman's helper eyeballs where the eye rig puts them on the dense base; `helper_radius: true` uses MakeHuman's
+helper radius instead, and `shape` sets the proportions. The eyelid clearance reads only the outer parts (sclera and
+cornea) of an eyes file that names its parts, and only triangles facing forward, which gives the same surface table.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

@@ -16,6 +16,23 @@ struct EyeEntry {
     gaze: [f64; 3],
     vertices: Vec<[f64; 3]>,
     triangles: Vec<[u32; 3]>,
+    #[serde(default)]
+    parts: Vec<crate::eyeball::Part>,
+}
+
+const SURFACE_PARTS: [&str; 2] = ["sclera", "cornea"];
+
+impl EyeEntry {
+    fn surface(&self) -> Vec<[u32; 3]> {
+        if self.parts.is_empty() {
+            return self.triangles.clone();
+        }
+        self.parts
+            .iter()
+            .filter(|p| SURFACE_PARTS.contains(&p.name.as_str()))
+            .flat_map(|p| self.triangles.iter().skip(p.first_triangle).take(p.triangles).copied())
+            .collect()
+    }
 }
 
 const POLAR_STEPS: usize = 180;
@@ -87,11 +104,12 @@ impl Eye {
         let side = unit(cross(gaze, helper));
         let up = cross(gaze, side);
         let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone() };
+        let front: Vec<[u32; 3]> = entry.surface().into_iter().filter(|t| t.iter().any(|&i| dot(sub(entry.vertices[i as usize], entry.centre), gaze) >= 0.0)).collect();
         let mut table = vec![0.0; (POLAR_STEPS + 1) * AZIMUTH_STEPS];
         for i in 0..=POLAR_STEPS {
             for j in 0..AZIMUTH_STEPS {
                 let dir = eye.direction(i as f64 * 90.0 / POLAR_STEPS as f64, j as f64 * 360.0 / AZIMUTH_STEPS as f64);
-                table[i * AZIMUTH_STEPS + j] = outermost(entry.centre, dir, &entry.vertices, &entry.triangles).unwrap_or(entry.radius);
+                table[i * AZIMUTH_STEPS + j] = outermost(entry.centre, dir, &entry.vertices, &front).unwrap_or(entry.radius);
             }
         }
         eye.table = table;
@@ -640,7 +658,7 @@ mod tests {
                 triangles.push([ring(r, s), ring(r + 1, s + 1), ring(r, s + 1)]);
             }
         }
-        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles }
+        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles, parts: Vec::new() }
     }
 
     #[test]
@@ -689,6 +707,7 @@ mod tests {
             gaze: rot(entry.gaze),
             vertices: entry.vertices.iter().map(|&p| place(p)).collect(),
             triangles: entry.triangles.clone(),
+            parts: Vec::new(),
         })
         .unwrap();
         assert_eq!(moved.centre, place(entry.centre));

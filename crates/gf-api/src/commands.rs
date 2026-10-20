@@ -11,7 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, grid, jobs, photo, photo_fit, photo_gate, project, registry};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -121,6 +121,15 @@ pub static REGISTRY: &[CommandDef] = &[
         input: designer::scene_input,
         output: designer::scene_output,
         run: designer::scene,
+    },
+    CommandDef {
+        name: "eyes.generate",
+        kind: Kind::Mutation,
+        summary: "Write an eyes file for a catalog's base head: a procedural eyeball (sclera, a cornea cap at the limbus, a recessed iris and a pupil, as separate parts with UVs) centred on each of MakeHuman's helper eyeballs as the catalog's eye rig places them, 12 mm in radius by default.",
+        limits: "Overwrites the file at out. The eyes are placed for the base head; a character's eyeballs field moves them for the character. helper_radius uses MakeHuman's helper radius (about 15.75 mm).",
+        input: eyes::generate_input,
+        output: eyes::generate_output,
+        run: eyes::generate,
     },
     CommandDef {
         name: "grid.chart",

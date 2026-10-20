@@ -9,6 +9,7 @@ pub mod body;
 mod commands;
 pub mod designer;
 pub mod exactjson;
+pub mod eyes;
 pub mod error;
 pub mod grid;
 pub mod jobs;
