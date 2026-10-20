@@ -1273,6 +1273,16 @@ The repository follows gitflow: `main` holds releases, each tagged `vX.Y.Z`; wor
 `feature/*` and `bugfix/*` branches; releases go through `release/*` and urgent fixes to a release through `hotfix/*`.
 Releases and the gates each one leaves open: [CHANGELOG.md](CHANGELOG.md).
 
+**Interface text and translations.** Every string either client shows comes from one table per language,
+`web/locales/<lang>.json` (flat keys, `{name}` placeholders, `en.json` complete, other languages any subset of its keys).
+The browser picks the language from `?lang=` or the browser's own, falling back to English per key; the studio embeds
+`en.json` and overlays the file named by `GAZEFORGE_LOCALE`. Labels, buttons, tabs and menu items are in sentence case.
+What agents read stays English on purpose: command summaries, limits and errors, job stages, and the wizard
+definitions, which both clients look up as `wizard.<id>...` keys with the server's text as the fallback, so a
+translation can cover them without a second copy in English. `tools/i18n/check.py` (also the `ui-text` gate of
+`tools/dep_gate/dep_gate.py`) refuses a literal UI string in either client, a key the table lacks, an unused key, a
+value in lower case and a translation whose placeholders differ from English; its docstring lists what it cannot see.
+
 ## Licensing and provenance
 
 GazeForge is released under the [MIT License](LICENSE).

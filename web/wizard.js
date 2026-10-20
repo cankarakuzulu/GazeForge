@@ -1,5 +1,9 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+import { tr } from "./i18n.js";
+
+const humanize = (n) => { const s = n.replace(/_/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
+
 export function readGlbMesh(buffer, preferred) {
   const view = new DataView(buffer);
   if (view.getUint32(0, true) !== 0x46546c67) throw new Error("not a glb");
@@ -44,13 +48,13 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   function renderList() {
     const groups = [...new Set(W.list.map((w) => w.group))];
-    box.querySelector(".wz-body").innerHTML = `<label class="wz-dev" title="tasks that serve building GazeForge itself: macro tools, raw dense-base gates"><input type="checkbox" ${W.dev ? "checked" : ""}> developer tasks</label>` + groups.map((g) => `<div class="wz-group"><b>${esc(g)}</b>${W.list.filter((w) => w.group === g).map((w) =>
-      `<button class="wz-pick" data-id="${esc(w.id)}"><span>${esc(w.title)}</span><small>${esc(w.summary)}</small></button>`).join("")}</div>`).join("") || `<div class="note">no wizards</div>`;
+    box.querySelector(".wz-body").innerHTML = `<label class="wz-dev" title="${tr("wizard.dev_title")}"><input type="checkbox" ${W.dev ? "checked" : ""}> ${tr("wizard.dev")}</label>` + groups.map((g) => `<div class="wz-group"><b>${esc(tr(`wizard.group.${g}`, null, g))}</b>${W.list.filter((w) => w.group === g).map((w) =>
+      `<button class="wz-pick" data-id="${esc(w.id)}"><span>${esc(tr(`wizard.${w.id}.title`, null, w.title))}</span><small>${esc(tr(`wizard.${w.id}.summary`, null, w.summary))}</small></button>`).join("")}</div>`).join("") || `<div class="note">${tr("wizard.none")}</div>`;
     if (W.runs?.length) {
-      box.querySelector(".wz-body").innerHTML += `<div class="wz-group"><b>Recent runs in ${esc(W.project)}</b>${W.runs.map((r) =>
-        `<button class="wz-resume" data-run="${esc(r.run)}" data-wizard="${esc(r.wizard)}"><span>${esc(r.title)} <code>${esc(r.run)}</code></span><small>${esc(r.started || "")} · ${r.steps.map((s) => `${esc(s.id)} ${esc(s.state)}`).join(", ")}</small></button>`).join("")}</div>`;
+      box.querySelector(".wz-body").innerHTML += `<div class="wz-group"><b>${esc(tr("wizard.recent", { project: W.project }))}</b>${W.runs.map((r) =>
+        `<button class="wz-resume" data-run="${esc(r.run)}" data-wizard="${esc(r.wizard)}"><span>${esc(tr(`wizard.${r.wizard}.title`, null, r.title))} <code>${esc(r.run)}</code></span><small>${esc(r.started || "")} · ${r.steps.map((s) => `${esc(s.id)} ${esc(tr(`wizard.state.${s.state}`, null, s.state))}`).join(", ")}</small></button>`).join("")}</div>`;
     }
-    box.querySelector(".wz-title").textContent = "Tasks";
+    box.querySelector(".wz-title").textContent = tr("ui.wz-title");
     box.querySelector(".wz-steps").innerHTML = "";
     for (const b of box.querySelectorAll(".wz-pick")) b.addEventListener("click", () => begin(b.dataset.id).catch((e) => fail(e)));
     for (const b of box.querySelectorAll(".wz-resume")) b.addEventListener("click", () => resume(b.dataset.wizard, b.dataset.run).catch((e) => fail(e)));
@@ -69,7 +73,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: ctx.values });
     W.prepared = await ctx.after(W.state.dir);
     W.at = 0;
-    box.querySelector(".wz-title").textContent = W.def.title;
+    box.querySelector(".wz-title").textContent = tr(`wizard.${W.def.id}.title`, null, W.def.title);
     render();
   }
 
@@ -79,7 +83,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     W.prepared = {};
     const open = W.state.steps.findIndex((s) => s.state !== "done");
     W.at = open < 0 ? W.state.steps.length - 1 : open;
-    box.querySelector(".wz-title").textContent = W.def.title;
+    box.querySelector(".wz-title").textContent = tr(`wizard.${W.def.id}.title`, null, W.def.title);
     render();
   }
 
@@ -102,7 +106,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const v = current(i, name);
     const id = `wz-f-${i}-${name}`;
     const tip = esc(schema.description || "");
-    const lab = `<label for="${id}" title="${tip}">${esc(label || name)}</label>`;
+    const lab = `<label for="${id}" title="${tip}">${esc(tr(`wizard.${W.def.id}.${stepDef(i).id}.${name}`, null, label || name))}</label>`;
     if (Array.isArray(schema.enum)) {
       return `<div class="wz-row">${lab}<select id="${id}" data-name="${esc(name)}" data-kind="enum"><option value=""></option>${schema.enum.map((o) =>
         `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>`;
@@ -115,16 +119,16 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     if (!schema.type || schema.type === "object" || schema.type === "array") {
       return `<div class="wz-row">${lab}<textarea id="${id}" data-name="${esc(name)}" data-kind="json" data-strict="${schema.type ? 1 : 0}" rows="2">${esc(v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v))}</textarea></div>`;
     }
-    const hint = f?.widget ? `${f.widget.replace("_", " ")}${f.ext ? ` ${f.ext}` : ""}` : "";
+    const hint = f?.widget ? `${tr(`wizard.widget.${f.widget}`, null, f.widget)}${f.ext ? ` ${f.ext}` : ""}` : "";
     const accept = [...new Set((f?.ext || "").split(/\s+/).filter(Boolean).map((e) => `.${e.split(".").pop()}`))].join(",");
-    const pick = f?.widget === "file_open" ? `<button class="small wz-upload" data-for="${id}" data-field="${esc(name)}" data-accept="${esc(accept)}" title="Choose a file on this computer; it is copied into the run">browse…</button>` : "";
+    const pick = f?.widget === "file_open" ? `<button class="small wz-upload" data-for="${id}" data-field="${esc(name)}" data-accept="${esc(accept)}" title="${tr("wizard.browse_title")}">${tr("wizard.browse")}</button>` : "";
     return `<div class="wz-row">${lab}<div class="wz-file-in"><input id="${id}" type="text" data-name="${esc(name)}" data-kind="text" placeholder="${esc(hint)}" value="${esc(v ?? "")}">${pick}</div></div>`;
   }
 
   function render() {
     const steps = W.def.steps;
     box.querySelector(".wz-steps").innerHTML = steps.map((s, i) =>
-      `<button class="wz-step ${i === W.at ? "now" : ""} st-${esc(stepState(i).state)}" data-i="${i}">${i + 1}. ${esc(s.title)}<small>${esc(stepState(i).state)}${s.optional ? " · optional" : ""}</small></button>`).join("");
+      `<button class="wz-step ${i === W.at ? "now" : ""} st-${esc(stepState(i).state)}" data-i="${i}">${i + 1}. ${esc(tr(`wizard.${W.def.id}.${s.id}.title`, null, s.title))}<small>${esc(tr(`wizard.state.${stepState(i).state}`, null, stepState(i).state))}${s.optional ? ` · ${tr("wizard.optional")}` : ""}</small></button>`).join("");
     for (const b of box.querySelectorAll(".wz-step")) b.addEventListener("click", () => { W.at = +b.dataset.i; render(); });
     const i = W.at, s = stepDef(i), st = stepState(i);
     const visible = (s.fields || []).filter((f) => !f.hidden);
@@ -133,18 +137,18 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const rest = Object.keys(s.input_schema?.properties || {}).filter((n) => !named.has(n));
     const hidden = (s.fields || []).filter((f) => f.hidden).map((f) => `<div class="wz-row wz-bound"><label>${esc(f.name)}</label><code>${esc(JSON.stringify(current(i, f.name) ?? null))}</code></div>`);
     box.querySelector(".wz-body").innerHTML = `
-      <p class="wz-help">${esc(s.help || s.summary || "")}</p>
-      ${s.command ? `<p class="wz-cmd">runs <code>${esc(s.command)}</code> (${esc(s.kind)})</p>` : ""}
+      <p class="wz-help">${esc(tr(`wizard.${W.def.id}.${s.id}.help`, null, s.help || s.summary || ""))}</p>
+      ${s.command ? `<p class="wz-cmd">${tr("wizard.runs", { command: `<code>${esc(s.command)}</code>`, kind: esc(s.kind) })}</p>` : ""}
       <div class="wz-form">${common.map((f) => widget(i, f.name, f.label, fieldSchema(s, f), f)).join("")}</div>
-      ${advanced.length || rest.length ? `<details class="wz-adv"><summary>advanced (${advanced.length + rest.length})</summary>
+      ${advanced.length || rest.length ? `<details class="wz-adv"><summary>${tr("wizard.advanced", { n: advanced.length + rest.length })}</summary>
         ${advanced.map((f) => widget(i, f.name, f.label, fieldSchema(s, f), f)).join("")}
-        ${rest.map((n) => widget(i, n, n, fieldSchema(s, n), null)).join("")}</details>` : ""}
-      ${hidden.length ? `<details class="wz-adv"><summary>from earlier steps (${hidden.length})</summary>${hidden.join("")}</details>` : ""}
+        ${rest.map((n) => widget(i, n, tr(`wizard.field.${n}`, null, humanize(n)), fieldSchema(s, n), null)).join("")}</details>` : ""}
+      ${hidden.length ? `<details class="wz-adv"><summary>${tr("wizard.earlier", { n: hidden.length })}</summary>${hidden.join("")}</details>` : ""}
       <div class="wz-result">${result(i)}</div>`;
     const status = box.querySelector(".wz-status");
     status.className = `wz-status st-${st.state}`;
-    status.textContent = st.state === "stale" ? "an earlier step changed: run this step again" : st.state;
-    box.querySelector(".wz-run").textContent = s.command ? (st.state === "done" ? "run again" : "run") : "use these";
+    status.textContent = st.state === "stale" ? tr("wizard.stale_note") : tr(`wizard.state.${st.state}`, null, st.state);
+    box.querySelector(".wz-run").textContent = s.command ? (st.state === "done" ? tr("wizard.run_again") : tr("ui.wz-run")) : tr("wizard.use");
     box.querySelector(".wz-run").disabled = W.busy;
     box.querySelector(".wz-cancel").classList.toggle("hidden", st.state !== "running" || !st.job);
     box.querySelector(".wz-next").disabled = i >= steps.length - 1 || !(st.state === "done" || s.optional);
@@ -157,17 +161,17 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   async function showGlb(path) {
     const r = await fetch(`/v1/wizard-file?run=${encodeURIComponent(W.state.run)}&path=${encodeURIComponent(path)}`);
-    if (!r.ok) throw new Error(`cannot read ${path}`);
+    if (!r.ok) throw new Error(tr("wizard.cannot_read", { path }));
     const m = readGlbMesh(await r.arrayBuffer(), "Head_LOD0");
     for (let i = 0; i < m.positions.length; i += 3) m.positions[i] += 0.3;
-    if (!showMesh("export", { positions: m.positions, indices: m.indices, color: [0.62, 0.78, 0.92], label: `exported ${m.name} (+0.3 m x)` })) throw new Error("no viewport to draw it in: open the designer with a store");
+    if (!showMesh("export", { positions: m.positions, indices: m.indices, color: [0.62, 0.78, 0.92], label: tr("wizard.exported_label", { name: m.name }) })) throw new Error(tr("wizard.no_viewport"));
     peek(true);
-    toast(`exported ${m.name}: ${m.indices.length / 3} triangles, drawn 0.3 m to the side`);
+    toast(tr("wizard.exported_toast", { name: m.name, triangles: m.indices.length / 3 }));
   }
 
   function peek(on) {
     box.classList.toggle("peek", on);
-    box.querySelector(".wz-peek").textContent = on ? "back to the task" : "look";
+    box.querySelector(".wz-peek").textContent = on ? tr("wizard.back_to_task") : tr("ui.wz-peek");
   }
 
   function upload(inputId, field, accept) {
@@ -181,7 +185,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
       try {
         const r = await fetch(`/v1/upload?run=${encodeURIComponent(W.state.run)}&name=${encodeURIComponent(name)}`, { method: "POST", body: file });
         const env = await r.json();
-        if (!env.ok) throw new Error(env.error?.message || "upload failed");
+        if (!env.ok) throw new Error(env.error?.message || tr("wizard.upload_failed"));
         box.querySelector(`#${CSS.escape(inputId)}`).value = env.result.path;
       } catch (e) { fail(e); }
     });
@@ -191,8 +195,8 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   function result(i) {
     const s = stepDef(i), st = stepState(i);
     if (st.error) return `<div class="wz-err"><b>${esc(st.error.code)}</b> ${esc(st.error.message)}${st.error.hint ? `<br><small>${esc(st.error.hint)}</small>` : ""}
-      ${st.error.details && Object.keys(st.error.details).length ? `<details><summary>report</summary><pre>${esc(JSON.stringify(st.error.details, null, 1))}</pre></details>` : ""}</div>`;
-    if (!st.result) return st.state === "running" ? `<div class="wz-progress"><div class="bar"><i style="width:0%"></i></div><span class="msg">submitted</span></div>` : "";
+      ${st.error.details && Object.keys(st.error.details).length ? `<details><summary>${tr("wizard.report")}</summary><pre>${esc(JSON.stringify(st.error.details, null, 1))}</pre></details>` : ""}</div>`;
+    if (!st.result) return st.state === "running" ? `<div class="wz-progress"><div class="bar"><i style="width:0%"></i></div><span class="msg">${tr("wizard.submitted")}</span></div>` : "";
     const shows = (s.shows || []).map((sh) => {
       if (sh.kind === "images") {
         const list = (sh.from ? resolve(sh.from) : null) || [];
@@ -201,14 +205,14 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
       }
       if (sh.kind === "spec") {
         const spec = sh.from ? resolve(sh.from) : null, store = sh.store ? resolveRun(sh.store) : null;
-        return spec ? `<div class="wz-file">wrote <code>${esc(spec)}</code> <button class="wz-open-spec" data-spec="${esc(spec)}" data-store="${esc(store ?? "")}">open in the designer</button></div>` : "";
+        return spec ? `<div class="wz-file">${tr("wizard.wrote", { path: `<code>${esc(spec)}</code>` })} <button class="wz-open-spec" data-spec="${esc(spec)}" data-store="${esc(store ?? "")}">${tr("wizard.open_spec")}</button></div>` : "";
       }
       if (sh.kind === "glb" || sh.kind === "file") {
         const path = sh.from ? resolve(sh.from) : null;
-        const look = sh.kind === "glb" && canShow?.() ? ` <button class="wz-show-glb" data-path="${esc(path)}" title="Read the exported file back (not the designer's mesh) and draw its finest level beside the character">show beside the character</button>` : "";
-        return path ? `<div class="wz-file">wrote <code>${esc(path)}</code>${look}</div>` : "";
+        const look = sh.kind === "glb" && canShow?.() ? ` <button class="wz-show-glb" data-path="${esc(path)}" title="${tr("wizard.show_glb_title")}">${tr("wizard.show_glb")}</button>` : "";
+        return path ? `<div class="wz-file">${tr("wizard.wrote", { path: `<code>${esc(path)}</code>` })}${look}</div>` : "";
       }
-      return `<details open><summary>report</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
+      return `<details open><summary>${tr("wizard.report")}</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
     });
     return shows.join("") || `<pre>${esc(JSON.stringify(st.result, null, 1))}</pre>`;
   }
@@ -237,7 +241,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
       if (kind === "number" || kind === "integer") input[n] = Number(v);
       else if (kind === "json") {
         try { input[n] = JSON.parse(v); } catch {
-          if (el.dataset.strict === "1" || /^[[{]/.test(v)) throw new Error(`${n}: not JSON (${v.slice(0, 40)})`);
+          if (el.dataset.strict === "1" || /^[[{]/.test(v)) throw new Error(tr("wizard.not_json", { field: n, text: v.slice(0, 40) }));
           input[n] = v;
         }
       }

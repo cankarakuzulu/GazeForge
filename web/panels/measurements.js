@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const signed = (x) => `${x >= 0 ? "+" : ""}${x.toFixed(2)}`;
 
 function boxLines(p) {
@@ -14,8 +16,8 @@ window.GF.registerPanel({
   title: "Measurements (mm, settled)",
   order: 10,
   mount(root, api) {
-    root.innerHTML = `<table><thead><tr><th>measure</th><th>mm</th><th>change</th></tr></thead><tbody></tbody></table>
-      <label class="line"><input type="checkbox" class="bbox"> head bounding box overlay</label>
+    root.innerHTML = `<table><thead><tr><th>${tr("measure.col.measure")}</th><th>${tr("unit.mm")}</th><th>${tr("measure.col.change")}</th></tr></thead><tbody></tbody></table>
+      <label class="line"><input type="checkbox" class="bbox"> ${tr("measure.bbox")}</label>
       <div class="note size"></div><div class="note lods"></div>`;
     const body = root.querySelector("tbody"), toggle = root.querySelector(".bbox"), size = root.querySelector(".size");
     let positions = null;
@@ -24,12 +26,12 @@ window.GF.registerPanel({
       if (!on || !positions) { api.setOverlay("bounding-box", null); size.textContent = ""; return; }
       const b = boxLines(positions);
       api.setOverlay("bounding-box", { lines: new Float32Array(b.lines), color: "#e0a030" });
-      size.textContent = `box ${b.size.map((x) => x.toFixed(1)).join(" x ")} mm (x, y, z)`;
+      size.textContent = tr("measure.box", { size: b.size.map((x) => x.toFixed(1)).join(" x ") });
     };
     api.onCharacterChange((state, info) => {
       if (info.kind !== "settle") return;
       body.innerHTML = Object.entries(info.measurements || {})
-        .map(([k, x]) => `<tr title="${x.what || ""}"><td>${k}</td><td>${x.mm.toFixed(2)}</td><td>${signed(x.delta_mm)}</td></tr>`)
+        .map(([k, x]) => `<tr title="${tr(`measure.${k}.what`, null, x.what || "")}"><td>${tr(`measure.${k}`, null, k)}</td><td>${x.mm.toFixed(2)}</td><td>${signed(x.delta_mm)}</td></tr>`)
         .join("");
       positions = info.positions;
       if (toggle.checked) show(true);
@@ -37,11 +39,11 @@ window.GF.registerPanel({
     toggle.addEventListener("change", () => {
       const on = toggle.checked;
       show(on);
-      api.pushUndo({ label: `${on ? "show" : "hide"} the bounding box`, undo: () => show(!on), redo: () => show(on) });
+      api.pushUndo({ label: on ? tr("measure.undo_show") : tr("measure.undo_hide"), undo: () => show(!on), redo: () => show(on) });
     });
     const c = api.character();
     api.call("designer.scene", { store: c.store, pack: c.pack, catalog: c.catalog, game: c.game })
-      .then((r) => { root.querySelector(".lods").textContent = `levels of detail: ${[r.triangles, ...r.lods.map((l) => l.triangles)].join(" / ")} triangles`; })
-      .catch((e) => { root.querySelector(".lods").textContent = `levels of detail unavailable: ${e.message}`; });
+      .then((r) => { root.querySelector(".lods").textContent = tr("measure.lods", { list: [r.triangles, ...r.lods.map((l) => l.triangles)].join(" / ") }); })
+      .catch((e) => { root.querySelector(".lods").textContent = tr("measure.lods_failed", { error: e.message }); });
   },
 });

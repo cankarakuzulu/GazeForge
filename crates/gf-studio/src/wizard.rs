@@ -7,6 +7,8 @@ use eframe::egui;
 use gf_api::Ctx;
 use serde_json::{Map, Value, json};
 
+use crate::i18n::{tr, tr_or, trf};
+
 const POLL: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
@@ -74,6 +76,12 @@ fn call(name: &str, input: Value) -> Result<Value, String> {
     } else {
         Err(env["error"]["message"].as_str().unwrap_or("the command failed").to_string())
     }
+}
+
+fn humanize(name: &str) -> String {
+    let s = name.replace('_', " ");
+    let mut c = s.chars();
+    c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
 }
 
 fn shown(v: &Value) -> String {
@@ -153,12 +161,12 @@ impl Wizards {
             .map(|f| {
                 let name = f["name"].as_str().unwrap_or_default().to_string();
                 let schema = props.get(&name).cloned().or_else(|| f.get("schema").cloned()).unwrap_or_else(|| json!({"type": "string"}));
-                (name.clone(), f["label"].as_str().unwrap_or(&name).to_string(), f["common"] == Value::Bool(true), schema)
+                (name.clone(), tr_or(&format!("wizard.{}.{}.{name}", self.def.as_ref().map_or("", |d| d["id"].as_str().unwrap_or("")), s["id"].as_str().unwrap_or("")), f["label"].as_str().unwrap_or(&name)).to_string(), f["common"] == Value::Bool(true), schema)
             })
             .collect();
         for (name, schema) in props {
             if !defined.iter().any(|f| f["name"] == name.as_str()) {
-                out.push((name.clone(), name, false, schema));
+                out.push((name.clone(), tr_or(&format!("wizard.field.{name}"), &humanize(&name)).to_string(), false, schema));
             }
         }
         out
@@ -198,9 +206,9 @@ impl Wizards {
             let structured = t.starts_with('{') || t.starts_with('[');
             let v = match schema["type"].as_str() {
                 _ if schema["enum"].is_array() => json!(t),
-                Some("number") | Some("integer") => json!(t.parse::<f64>().map_err(|_| format!("{name}: not a number ({t})"))?),
-                Some("object") | Some("array") => gf_api::exactjson::text(&t).map_err(|e| format!("{name}: not JSON ({e})"))?,
-                None if structured => gf_api::exactjson::text(&t).map_err(|e| format!("{name}: not JSON ({e})"))?,
+                Some("number") | Some("integer") => json!(t.parse::<f64>().map_err(|_| trf("wizard.not_number", &[("field", &name), ("text", &t)]))?),
+                Some("object") | Some("array") => gf_api::exactjson::text(&t).map_err(|e| trf("wizard.not_json", &[("field", &name), ("text", &e)]))?,
+                None if structured => gf_api::exactjson::text(&t).map_err(|e| trf("wizard.not_json", &[("field", &name), ("text", &e)]))?,
                 None => gf_api::exactjson::text(&t).unwrap_or(json!(t)),
                 _ => json!(t),
             };
@@ -211,7 +219,7 @@ impl Wizards {
 
     pub fn submit_step(&mut self) -> Result<(), String> {
         if self.pending.is_some() {
-            return Err("a step is already running".into());
+            return Err(tr("wizard.already_running").into());
         }
         let run = self.state.as_ref().ok_or("no run")?["run"].clone();
         let id = self.step_def(self.at)["id"].clone();
@@ -241,7 +249,7 @@ impl Wizards {
             Err(TryRecvError::Empty) => Ok(()),
             Err(TryRecvError::Disconnected) => {
                 self.pending = None;
-                Err("the step's worker thread ended without an answer".into())
+                Err(tr("wizard.thread_lost").into())
             }
         }
     }
@@ -323,10 +331,10 @@ impl Wizards {
             Err(e) => self.error = Some(e),
         }
         let mut open = self.open;
-        let title = self.def.as_ref().and_then(|d| d["title"].as_str()).unwrap_or("Tasks").to_string();
-        egui::Window::new("Tasks").id(egui::Id::new("wizards")).title_bar(true).open(&mut open).resizable(true).default_width(720.0).default_height(560.0).show(ui_ctx, |ui| {
+        let title = self.def.as_ref().map_or_else(|| tr("ui.wz-title").to_string(), |d| tr_or(&format!("wizard.{}.title", d["id"].as_str().unwrap_or("")), d["title"].as_str().unwrap_or("")).to_string());
+        egui::Window::new(tr("ui.wz-title")).id(egui::Id::new("wizards")).title_bar(true).open(&mut open).resizable(true).default_width(720.0).default_height(560.0).show(ui_ctx, |ui| {
             ui.horizontal(|ui| {
-                if self.def.is_some() && self.pending.is_none() && ui.button("all tasks").clicked() {
+                if self.def.is_some() && self.pending.is_none() && ui.button(tr("wizard.all")).clicked() {
                     self.def = None;
                     self.state = None;
                     self.runs = None;
@@ -347,7 +355,7 @@ impl Wizards {
     }
 
     fn list_ui(&mut self, ui: &mut egui::Ui, world: &crate::world::World, project: &str) {
-        if ui.checkbox(&mut self.developer, "developer tasks").on_hover_text("tasks that serve building GazeForge itself: macro tools, raw dense-base gates").changed() {
+        if ui.checkbox(&mut self.developer, tr("wizard.dev")).on_hover_text(tr("wizard.dev_title")).changed() {
             self.list = None;
         }
         if self.list.is_none() {
@@ -358,9 +366,11 @@ impl Wizards {
         }
         let mut chosen = None;
         for w in self.list.clone().unwrap_or_default() {
-            ui.label(egui::RichText::new(w["group"].as_str().unwrap_or_default()).weak());
-            let r = ui.add(egui::Button::new(egui::RichText::new(w["title"].as_str().unwrap_or_default()).strong()).min_size(egui::vec2(ui.available_width(), 28.0)));
-            ui.label(egui::RichText::new(w["summary"].as_str().unwrap_or_default()).weak());
+            let wid = w["id"].as_str().unwrap_or_default();
+            let group = w["group"].as_str().unwrap_or_default();
+            ui.label(egui::RichText::new(tr_or(&format!("wizard.group.{group}"), group)).weak());
+            let r = ui.add(egui::Button::new(egui::RichText::new(tr_or(&format!("wizard.{wid}.title"), w["title"].as_str().unwrap_or_default())).strong()).min_size(egui::vec2(ui.available_width(), 28.0)));
+            ui.label(egui::RichText::new(tr_or(&format!("wizard.{wid}.summary"), w["summary"].as_str().unwrap_or_default())).weak());
             if r.clicked() {
                 chosen = w["id"].as_str().map(str::to_string);
             }
@@ -378,10 +388,10 @@ impl Wizards {
         let runs = self.runs.clone().unwrap_or_default();
         if !runs.is_empty() {
             ui.separator();
-            ui.label(egui::RichText::new(format!("Recent runs in {project}")).weak());
+            ui.label(egui::RichText::new(trf("wizard.recent", &[("project", &project)])).weak());
             for r in &runs {
-                let steps: Vec<String> = r["steps"].as_array().into_iter().flatten().map(|s| format!("{} {}", shown(&s["id"]), shown(&s["state"]))).collect();
-                if ui.button(format!("{}  {}", shown(&r["title"]), shown(&r["run"]))).on_hover_text(format!("{} · {}", shown(&r["started"]), steps.join(", "))).clicked() {
+                let steps: Vec<String> = r["steps"].as_array().into_iter().flatten().map(|s| format!("{} {}", shown(&s["id"]), tr_or(&format!("wizard.state.{}", shown(&s["state"])), &shown(&s["state"])))).collect();
+                if ui.button(format!("{}  {}", tr_or(&format!("wizard.{}.title", shown(&r["wizard"])), &shown(&r["title"])), shown(&r["run"]))).on_hover_text(format!("{} · {}", shown(&r["started"]), steps.join(", "))).clicked() {
                     resumed = Some((shown(&r["wizard"]), shown(&r["run"])));
                 }
             }
@@ -392,8 +402,8 @@ impl Wizards {
             self.error = Some(e);
         }
         ui.separator();
-        egui::CollapsingHeader::new("Jobs").id_salt("wz_jobs").show(ui, |ui| self.jobs_ui(ui));
-        egui::CollapsingHeader::new("Store").id_salt("wz_store").show(ui, |ui| self.store_ui(ui, world));
+        egui::CollapsingHeader::new(tr("panel.jobs")).id_salt("wz_jobs").show(ui, |ui| self.jobs_ui(ui));
+        egui::CollapsingHeader::new(tr("panel.store")).id_salt("wz_store").show(ui, |ui| self.store_ui(ui, world));
     }
 
     fn jobs_ui(&mut self, ui: &mut egui::Ui) {
@@ -409,13 +419,13 @@ impl Wizards {
         let listed = self.jobs_cache.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
         let jobs = listed["jobs"].as_array().cloned().unwrap_or_default();
         if jobs.is_empty() {
-            ui.label(egui::RichText::new(format!("no jobs in {}", shown(&listed["jobs_dir"]))).weak());
+            ui.label(egui::RichText::new(trf("jobs.none_in", &[("dir", &shown(&listed["jobs_dir"]))])).weak());
         }
         let live = jobs.iter().any(|j| matches!(j["state"].as_str(), Some("running") | Some("queued")));
         egui::Grid::new("wz_jobs_grid").num_columns(4).striped(true).show(ui, |ui| {
             for j in &jobs {
                 ui.label(shown(&j["command"]));
-                ui.label(shown(&j["state"]));
+                ui.label(tr_or(&format!("job.state.{}", shown(&j["state"])), &shown(&j["state"])));
                 let p = &j["progress"];
                 match (p["done"].as_f64(), p["total"].as_f64()) {
                     (Some(d), Some(t)) if t > 0.0 && j["state"] == "running" => {
@@ -425,7 +435,7 @@ impl Wizards {
                         ui.label(egui::RichText::new(shown(&j["error"])).weak());
                     }
                 }
-                if matches!(j["state"].as_str(), Some("running") | Some("queued")) && ui.small_button("cancel").clicked()
+                if matches!(j["state"].as_str(), Some("running") | Some("queued")) && ui.small_button(tr("jobs.cancel")).clicked()
                     && let Err(e) = call("jobs.cancel", json!({"id": j["id"]}))
                 {
                     self.error = Some(e);
@@ -440,10 +450,10 @@ impl Wizards {
 
     fn store_ui(&mut self, ui: &mut egui::Ui, world: &crate::world::World) {
         let Some(s) = &world.session else {
-            ui.label("open a store first");
+            ui.label(tr("studio.load_first"));
             return;
         };
-        let refresh = ui.small_button("refresh").clicked();
+        let refresh = ui.small_button(tr("store.refresh")).clicked();
         if refresh || self.store_cache.as_ref().is_none_or(|(path, _)| *path != s.store) {
             match call("store.list", json!({"store": s.store})) {
                 Ok(r) => self.store_cache = Some((s.store.clone(), r)),
@@ -457,10 +467,10 @@ impl Wizards {
         let short = |v: &Value| shown(v).trim_start_matches("sha256:").chars().take(12).collect::<String>();
         let day = |v: &Value| shown(v).chars().take(16).collect::<String>().replace('T', " ");
         for (title, key, id, used, cols) in [
-            ("Dense packs", "packs", "pack", s.pack.clone(), vec!["vertices", "macro_base"]),
-            ("Target catalogs", "catalogs", "catalog", s.catalog.clone(), vec!["targets"]),
-            ("Game bases", "game_bases", "game", s.game.clone(), vec!["vertices", "triangles", "lods"]),
-            ("Eye rigs", "eyerigs", "eyerig", String::new(), vec!["format"]),
+            (tr("store.packs"), "packs", "pack", s.pack.clone(), vec!["vertices", "macro_base"]),
+            (tr("store.catalogs"), "catalogs", "catalog", s.catalog.clone(), vec!["targets"]),
+            (tr("store.games"), "game_bases", "game", s.game.clone(), vec!["vertices", "triangles", "lods"]),
+            (tr("store.eyerigs"), "eyerigs", "eyerig", String::new(), vec!["format"]),
         ] {
             ui.strong(title);
             egui::Grid::new(("wz_store", key)).num_columns(cols.len() + 2).striped(true).show(ui, |ui| {
@@ -475,7 +485,7 @@ impl Wizards {
                 }
             });
         }
-        ui.label(egui::RichText::new("● in use; the store is content-addressed and shared, so nothing is deleted here").weak());
+        ui.label(egui::RichText::new(tr("store.note_short")).weak());
     }
 
     fn run_ui(&mut self, ui: &mut egui::Ui) {
@@ -484,7 +494,10 @@ impl Wizards {
             ui.vertical(|ui| {
                 ui.set_width(170.0);
                 for i in 0..self.steps() {
-                    let (title, state) = (self.step_def(i)["title"].as_str().unwrap_or_default().to_string(), self.step_state(i)["state"].as_str().unwrap_or_default().to_string());
+                    let (wid, sid) = (self.def.as_ref().map_or(String::new(), |d| shown(&d["id"])), shown(&self.step_def(i)["id"]));
+                    let title = tr_or(&format!("wizard.{wid}.{sid}.title"), self.step_def(i)["title"].as_str().unwrap_or_default()).to_string();
+                    let raw = self.step_state(i)["state"].as_str().unwrap_or_default().to_string();
+                    let state = tr_or(&format!("wizard.state.{raw}"), &raw).to_string();
                     if ui.selectable_label(i == self.at, format!("{}. {title}\n    {state}", i + 1)).clicked() {
                         self.at = i;
                         self.shown_for = None;
@@ -496,10 +509,11 @@ impl Wizards {
                 let s = self.step_def(self.at).clone();
                 let st = self.step_state(self.at).clone();
                 if let Some(h) = s["help"].as_str() {
-                    ui.label(egui::RichText::new(h).weak());
+                    let wid = self.def.as_ref().map_or(String::new(), |d| shown(&d["id"]));
+                    ui.label(egui::RichText::new(tr_or(&format!("wizard.{wid}.{}.help", shown(&s["id"])), h)).weak());
                 }
                 if let Some(c) = s["command"].as_str() {
-                    ui.label(egui::RichText::new(format!("runs {c} ({})", s["kind"].as_str().unwrap_or_default())).weak().monospace());
+                    ui.label(egui::RichText::new(trf("wizard.runs", &[("command", &c), ("kind", &s["kind"].as_str().unwrap_or_default())])).weak().monospace());
                 }
                 let fields = self.fields(self.at);
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -510,7 +524,7 @@ impl Wizards {
                     });
                     let advanced: Vec<_> = fields.iter().filter(|f| !f.2).collect();
                     if !advanced.is_empty() {
-                        egui::CollapsingHeader::new(format!("advanced ({})", advanced.len())).id_salt(("wz_adv", self.at)).show(ui, |ui| {
+                        egui::CollapsingHeader::new(trf("wizard.advanced", &[("n", &advanced.len())])).id_salt(("wz_adv", self.at)).show(ui, |ui| {
                             egui::Grid::new(("wz_advanced", self.at)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
                                 for (name, label, _, schema) in advanced {
                                     self.field_ui(ui, name, label, schema);
@@ -524,7 +538,7 @@ impl Wizards {
                     if self.pending.is_some() {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label("running the step");
+                            ui.label(tr("wizard.running_step"));
                         });
                     }
                     if st["state"] == "running" {
@@ -537,7 +551,7 @@ impl Wizards {
                     }
                     if !st["result"].is_null() {
                         self.shows_ui(ui, &s);
-                        egui::CollapsingHeader::new("report").id_salt(("wz_report", self.at)).default_open(true).show(ui, |ui| {
+                        egui::CollapsingHeader::new(tr("wizard.report")).id_salt(("wz_report", self.at)).default_open(true).show(ui, |ui| {
                             ui.label(egui::RichText::new(serde_json::to_string_pretty(&st["result"]).unwrap_or_default()).monospace().small());
                         });
                     }
@@ -545,25 +559,25 @@ impl Wizards {
                 ui.separator();
                 ui.horizontal(|ui| {
                     let state = st["state"].as_str().unwrap_or_default();
-                    ui.label(if state == "stale" { "an earlier step changed: run this step again" } else { state });
+                    ui.label(if state == "stale" { tr("wizard.stale_note") } else { tr_or(&format!("wizard.state.{state}"), state) });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let last = self.at + 1 >= self.steps();
-                        if ui.add_enabled(!last && (state == "done" || s["optional"] == Value::Bool(true)), egui::Button::new("next")).clicked() {
+                        if ui.add_enabled(!last && (state == "done" || s["optional"] == Value::Bool(true)), egui::Button::new(tr("ui.wz-next"))).clicked() {
                             self.at += 1;
                             self.shown_for = None;
                         }
-                        let label = if s["command"].is_null() { "use these" } else if state == "done" { "run again" } else { "run" };
+                        let label = if s["command"].is_null() { tr("wizard.use") } else if state == "done" { tr("wizard.run_again") } else { tr("ui.wz-run") };
                         if ui.add_enabled(state != "running" && self.pending.is_none(), egui::Button::new(label)).clicked()
                             && let Err(e) = self.submit_step()
                         {
                             self.error = Some(e);
                         }
-                        if state == "running" && st["job"].is_string() && ui.button("cancel").on_hover_text("Cancel the running job of this step").clicked()
+                        if state == "running" && st["job"].is_string() && ui.button(tr("ui.wz-cancel")).on_hover_text(tr("ui.wz-cancel.title")).clicked()
                             && let Err(e) = self.cancel_job()
                         {
                             self.error = Some(e);
                         }
-                        if ui.add_enabled(self.at > 0, egui::Button::new("back")).clicked() {
+                        if ui.add_enabled(self.at > 0, egui::Button::new(tr("ui.wz-back"))).clicked() {
                             self.at -= 1;
                             self.shown_for = None;
                         }
@@ -605,7 +619,7 @@ impl Wizards {
                                         ui.image((t.id(), egui::vec2(w, w * size.y / size.x.max(1.0))));
                                     }
                                     None => {
-                                        ui.label(format!("cannot read {path}"));
+                                        ui.label(trf("wizard.cannot_read", &[("path", &path)]));
                                     }
                                 }
                                 ui.label(egui::RichText::new(shown(&item[sh["label"].as_str().unwrap_or("name")])).weak());
@@ -618,8 +632,8 @@ impl Wizards {
                     let store = sh["store"].as_str().map(|b| self.resolve(b)).unwrap_or(Value::Null);
                     if let Some(spec) = spec.as_str() {
                         ui.horizontal(|ui| {
-                            ui.label(format!("wrote {spec}"));
-                            if ui.button("open in the designer").clicked() {
+                            ui.label(trf("wizard.wrote", &[("path", &spec)]));
+                            if ui.button(tr("wizard.open_spec")).clicked() {
                                 self.open_spec = Some((shown(&store), spec.to_string()));
                             }
                         });
@@ -627,7 +641,7 @@ impl Wizards {
                 }
                 Some("glb") | Some("file") => {
                     if let Some(path) = sh["from"].as_str().map(|b| self.resolve(b)).and_then(|v| v.as_str().map(str::to_string)) {
-                        ui.label(format!("wrote {path}"));
+                        ui.label(trf("wizard.wrote", &[("path", &path)]));
                     }
                 }
                 _ => {}
@@ -641,7 +655,7 @@ impl Wizards {
         if let Some(options) = schema["enum"].as_array() {
             let cur = self.text.entry(name.to_string()).or_default();
             egui::ComboBox::from_id_salt(("wz_enum", name)).selected_text(cur.clone()).show_ui(ui, |ui| {
-                ui.selectable_value(cur, String::new(), "(default)");
+                ui.selectable_value(cur, String::new(), tr("wizard.default"));
                 for o in options {
                     let o = shown(o);
                     ui.selectable_value(cur, o.clone(), o);

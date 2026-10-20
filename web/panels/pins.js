@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const valid = (p) => p && Number.isInteger(p.n) && Number.isInteger(p.tri) && Array.isArray(p.bary) && p.bary.length === 3 && p.bary.every(Number.isFinite);
 
@@ -8,8 +10,8 @@ window.GF.registerPanel({
   mount(root, api) {
     const G = api.grid;
     root.innerHTML = `<div class="pins">
-      <p class="note">A pin sits on the topology (a finest-level triangle and barycentrics), so it follows sliders, characters and levels of detail. Probe a point (Q, or Alt+click) and press pin on the address card.</p>
-      <div class="buttons"><button class="add">pin the last probe</button><button class="export">export pins</button></div>
+      <p class="note">${tr("pins.note")}</p>
+      <div class="buttons"><button class="add">${tr("pins.add")}</button><button class="export">${tr("pins.export")}</button></div>
       <div class="list"></div><div class="note status"></div></div>`;
     let pins = [];
     let next = 1;
@@ -20,9 +22,9 @@ window.GF.registerPanel({
       list.innerHTML = pins.map((p, i) => {
         const d = describe(p);
         return `<div class="pinrow" data-i="${i}"><b>${p.n}</b><span title="${esc(d ? d.address : "")}">${d ? `${esc(d.cell)} · ${esc(d.region)}` : "…"}</span>
-          <button class="small go">go</button><button class="small del" title="delete">×</button>
-          <input type="text" class="pnote" placeholder="note" value="${esc(p.note || "")}" style="grid-column: 1 / -1"></div>`;
-      }).join("") || `<div class="note">no pins</div>`;
+          <button class="small go">${tr("pins.go")}</button><button class="small del" title="${tr("pins.delete")}">×</button>
+          <input type="text" class="pnote" placeholder="${tr("pins.note_placeholder")}" value="${esc(p.note || "")}" style="grid-column: 1 / -1"></div>`;
+      }).join("") || `<div class="note">${tr("pins.none")}</div>`;
     };
     const sync = () => {
       G.setMarkers("pins", pins.length ? markers : null);
@@ -39,15 +41,15 @@ window.GF.registerPanel({
       api.pushUndo({ label, undo: () => restore(before), redo: () => restore(after) });
     };
     const add = (probe) => {
-      if (!probe?.lod0) { status.textContent = "probe a point first (Q, or Alt+click)"; return null; }
+      if (!probe?.lod0) { status.textContent = tr("pins.probe_first"); return null; }
       const d = G.describe(probe.lod0.tri, probe.lod0.bary);
       const n = next;
-      edit(`pin ${n} at ${d.cell}`, () => {
+      edit(tr("pins.undo_add", { n, cell: d.cell }), () => {
         pins.push({ n, tri: probe.lod0.tri, bary: probe.lod0.bary.map((x) => +x.toFixed(6)), dense: d.dense, game: d.game, note: "",
                     ...(probe.lod > 0 ? { from_lod: probe.lod, lod0_error_mm: +(probe.lod0.err_mm || 0).toFixed(4) } : {}) });
         next = n + 1;
       });
-      status.textContent = `pin ${n}: ${d.address}${probe.lod > 0 ? ` (placed on LOD${probe.lod}: stored at the closest LOD0 surface point, ${(probe.lod0.err_mm || 0).toFixed(3)} mm away)` : ""}`;
+      status.textContent = tr("pins.added", { n, address: d.address }) + (probe.lod > 0 ? tr("pins.added_lod", { level: probe.lod, mm: (probe.lod0.err_mm || 0).toFixed(3) }) : "");
       return n;
     };
     const exportDoc = async () => {
@@ -74,7 +76,7 @@ window.GF.registerPanel({
       a.download = "gazeforge-pins.json";
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
-      status.textContent = `exported ${doc.pins.length} pins`;
+      status.textContent = tr("pins.exported", { n: doc.pins.length });
     });
     list.addEventListener("click", (e) => {
       const row = e.target.closest(".pinrow");
@@ -84,12 +86,12 @@ window.GF.registerPanel({
         const d = describe(p);
         G.goTo(d ? d.address : `game v${p.game}`).catch((err) => { status.textContent = err.message; });
       }
-      if (e.target.classList.contains("del")) edit(`delete pin ${p.n}`, () => { pins = pins.filter((x) => x !== p); });
+      if (e.target.classList.contains("del")) edit(tr("pins.undo_delete", { n: p.n }), () => { pins = pins.filter((x) => x !== p); });
     });
     list.addEventListener("change", (e) => {
       if (!e.target.classList.contains("pnote")) return;
       const p = pins[Number(e.target.closest(".pinrow").dataset.i)];
-      edit(`note on pin ${p.n}`, () => { p.note = e.target.value; });
+      edit(tr("pins.undo_note", { n: p.n }), () => { p.note = e.target.value; });
     });
     root.gfPins = { add, exportDoc, pins: () => JSON.parse(JSON.stringify(pins)) };
     render();

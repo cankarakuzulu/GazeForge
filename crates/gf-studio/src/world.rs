@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::hud::Hud;
+use crate::i18n::{tr, tr_or, trf};
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
 use crate::session::{EdgePairs, Session};
 use crate::shape::{ShapeEvent, ShapeModel, Values};
@@ -151,17 +152,17 @@ impl World {
 
     pub fn busy_text(&self) -> Option<String> {
         if let Some(t) = self.loading {
-            return Some(format!("loading {:.1} s", t.elapsed().as_secs_f64()));
+            return Some(trf("studio.busy.loading", &[("s", &format!("{:.1}", t.elapsed().as_secs_f64()))]));
         }
         if let (Some(_), Some(t)) = (self.settle_wanted, self.settle_release) {
-            return Some(format!("settling {:.0} ms", ms(t.elapsed())));
+            return Some(trf("studio.busy.settling", &[("ms", &format!("{:.0}", ms(t.elapsed())))]));
         }
         if !self.slope_wanted.is_empty() {
-            return Some("preparing the macro preview".into());
+            return Some(tr("studio.busy.macro").into());
         }
         if let Some(f) = self.last_preview["slope_fallback"].as_array().filter(|a| !a.is_empty()) {
             let names: Vec<&str> = f.iter().filter_map(Value::as_str).collect();
-            return Some(format!("macro preview approximate: single slope for {} (samples pending)", names.join(", ")));
+            return Some(trf("studio.busy.macro_slope", &[("names", &names.join(", "))]));
         }
         None
     }
@@ -235,7 +236,7 @@ impl World {
                         self.anchor_release = None;
                         self.reference_wanted = false;
                         self.hud.settle_latency.clear();
-                        self.note(format!("loaded in {load_ms:.0} ms"));
+                        self.note(trf("studio.note.loaded", &[("ms", &format!("{load_ms:.0}"))]));
                         self.load_result = Some(Ok(summary));
                         if self.state.vp.iter().any(|v| v.mode == DISPLACEMENT) {
                             self.want_reference();
@@ -244,7 +245,7 @@ impl World {
                         self.prefetch_samples();
                     }
                     Err(e) => {
-                        self.note(format!("load failed: {e}"));
+                        self.note(trf("studio.note.load_failed", &[("error", &e)]));
                         self.load_result = Some(Err(e));
                     }
                 }
@@ -261,7 +262,7 @@ impl World {
                             self.settle_wanted = None;
                         }
                         self.settle_error = Some(e.clone());
-                        self.note(format!("settle failed: {e}"));
+                        self.note(trf("designer.status.settle_failed", &[("error", &e)]));
                         return;
                     }
                 };
@@ -288,7 +289,7 @@ impl World {
                     if let Some(l) = latency {
                         self.hud.settle_latency.push(l);
                     }
-                    self.note(format!("settled {} in {:.0} ms", out.placement, latency.unwrap_or(out.ms)));
+                    self.note(trf("studio.settled", &[("placement", &out.placement), ("ms", &format!("{:.0}", latency.unwrap_or(out.ms)))]));
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {
@@ -311,7 +312,7 @@ impl World {
                             }
                         }
                     }
-                    Err(e) => self.note(format!("macro preview for {name} failed: {e}")),
+                    Err(e) => self.note(trf("studio.note.macro_failed", &[("name", &name), ("error", &e)])),
                 }
             }
             Done::Samples { epoch, id, name, key, result, ms: samples_ms } => {
@@ -334,7 +335,7 @@ impl World {
                         self.mark_ready("samples_ready", &name, now);
                         self.prefetch_samples();
                     }
-                    Err(e) => self.note(format!("macro samples for {name} failed: {e}")),
+                    Err(e) => self.note(trf("studio.note.samples_failed", &[("name", &name), ("error", &e)])),
                 }
             }
             Done::Reference { epoch, result } => {
@@ -348,7 +349,7 @@ impl World {
                             s.head.reference = Some(r);
                         }
                     }
-                    Err(e) => self.note(format!("reference failed: {e}")),
+                    Err(e) => self.note(trf("designer.reference_failed", &[("error", &e)])),
                 }
             }
             Done::Trace(t) => {
@@ -356,8 +357,8 @@ impl World {
             }
             Done::Saved { result } => {
                 match &result {
-                    Ok(v) => self.note(format!("saved {}", v["out"].as_str().unwrap_or(""))),
-                    Err(e) => self.note(format!("save failed: {e}")),
+                    Ok(v) => self.note(trf("studio.saved", &[("path", &v["out"].as_str().unwrap_or(""))])),
+                    Err(e) => self.note(trf("designer.save_failed", &[("error", &e)])),
                 }
                 self.saved = Some(result);
             }
@@ -550,11 +551,11 @@ impl World {
         self.preview_dirty = true;
         self.edit_at.get_or_insert_with(Instant::now);
         self.request_settle();
-        Some(format!("{} {label}", if redo { "redo" } else { "undo" }))
+        Some(if redo { trf("designer.redone", &[("what", &label)]) } else { trf("designer.undone", &[("what", &label)]) })
     }
 
     pub fn save(&mut self, out: &str) -> Result<(), String> {
-        let mut input = self.settle_input().ok_or("nothing is loaded")?;
+        let mut input = self.settle_input().ok_or(tr("studio.nothing_loaded"))?;
         input["out"] = json!(out);
         input.as_object_mut().map(|o| o.remove("uvs"));
         self.saved = None;
@@ -588,76 +589,76 @@ impl World {
 
     pub fn action(&mut self, id: &str, instant: bool) -> Result<String, String> {
         let st = &mut self.state;
-        let toggle = |st: &mut ViewerState, path: &str, label: &str| st.opts.toggle(path).map(|on| format!("{label} {}", if on { "on" } else { "off" }));
+        let toggle = |st: &mut ViewerState, path: &str, label: &str| st.opts.toggle(path).map(|on| trf(if on { "designer.on" } else { "designer.off" }, &[("what", &label)]));
         Ok(match id {
             "frame" => {
                 self.frame_head(instant);
-                "framed the head".into()
+                tr("studio.framed").into()
             }
             "layout" => {
                 st.layout = st.layout.next();
                 st.active = st.active.min(st.layout.slots().len() - 1);
-                format!("layout {}", st.layout.name())
+                trf("studio.layout_status", &[("name", &tr(&format!("studio.layout.{}", st.layout.name())))])
             }
             "next_viewport" => {
                 st.active = (st.active + 1) % st.layout.slots().len();
                 st.pivot_flash = 0.4;
-                format!("viewport {}", st.active + 1)
+                trf("studio.viewport_n", &[("n", &(st.active + 1))])
             }
             "mode_next" | "mode_prev" => {
                 let slot = st.active.min(st.layout.slots().len() - 1);
                 let now = st.vp[slot].mode;
                 let next = if id == "mode_next" { (now + 1) % MODES.len() } else { (now + MODES.len() - 1) % MODES.len() };
                 self.set_mode(slot, next);
-                MODES[next].1.to_string()
+                tr(&format!("mode.{}", MODES[next])).to_string()
             }
-            "wire" => toggle(st, "wire", "wireframe")?,
-            "xray" => toggle(st, "xray", "hidden edges")?,
-            "points" => toggle(st, "points", "vertex points")?,
-            "back_faces" => toggle(st, "backHi", "back-face highlight")?,
-            "seams" => toggle(st, "seams", "seams and boundaries")?,
-            "clip" => toggle(st, "clip.0.on", "clip plane 1")?,
-            "light_gizmo" => toggle(st, "lightGizmo", "light gizmo")?,
-            "theme" => toggle(st, "dark", "dark viewport")?,
-            "bad_triangles" => toggle(st, "badTriangles", "bad triangles")?,
+            "wire" => toggle(st, "wire", tr("designer.opt.wire"))?,
+            "xray" => toggle(st, "xray", tr("designer.opt.xray"))?,
+            "points" => toggle(st, "points", tr("designer.opt.points"))?,
+            "back_faces" => toggle(st, "backHi", tr("designer.opt.back"))?,
+            "seams" => toggle(st, "seams", tr("designer.opt.seams"))?,
+            "clip" => toggle(st, "clip.0.on", tr("designer.opt.clip"))?,
+            "light_gizmo" => toggle(st, "lightGizmo", tr("designer.opt.gizmo"))?,
+            "theme" => toggle(st, "dark", tr("studio.opt.dark"))?,
+            "bad_triangles" => toggle(st, "badTriangles", tr("studio.opt.bad"))?,
             "fov_down" | "fov_up" => {
                 let f = st.active_cam().goal.fov + if id == "fov_up" { 5.0 } else { -5.0 };
                 st.set_fov(f, instant);
-                format!("field of view {:.0}", st.active_cam().goal.fov)
+                trf("studio.fov", &[("deg", &format!("{:.0}", st.active_cam().goal.fov))])
             }
             "lod_coarser" | "lod_finer" => {
                 let n = self.lods();
                 let s = self.state.active_slot();
                 s.lod = if id == "lod_coarser" { (s.lod + 1).min(n - 1) } else { s.lod.saturating_sub(1) };
-                format!("LOD {}", s.lod)
+                trf("studio.lod_status", &[("n", &s.lod)])
             }
             "view_front" | "view_back" | "view_left" | "view_right" | "view_top" | "view_bottom" | "view_three_quarter" => {
                 let name = id.trim_start_matches("view_").replace('_', "");
                 st.named_view(&name, instant);
-                format!("{name} view")
+                trf("studio.view_status", &[("view", &tr_or(&format!("view.{name}"), &name))])
             }
             "view_home" => {
                 st.home_view(instant);
                 self.frame_head(instant);
-                "home view".into()
+                tr("studio.home").into()
             }
-            "eyes" => toggle(st, "eyes", "eye meshes")?,
+            "eyes" => toggle(st, "eyes", tr("studio.opt.eyes"))?,
             "ortho" => {
                 let cam = st.active_cam();
                 cam.ortho = !cam.ortho;
                 if instant {
                     cam.snap();
                 }
-                if cam.ortho { "orthographic".into() } else { "perspective".into() }
+                if cam.ortho { tr("studio.orthographic").into() } else { tr("view.perspective").into() }
             }
-            "undo" | "redo" => self.undo(id == "redo").unwrap_or_else(|| format!("nothing to {id}")),
+            "undo" | "redo" => self.undo(id == "redo").unwrap_or_else(|| if id == "redo" { tr("studio.nothing_redo").into() } else { tr("studio.nothing_undo").into() }),
             "hud" => {
                 self.hud.on = !self.hud.on;
-                format!("timings {}", if self.hud.on { "shown" } else { "hidden" })
+                if self.hud.on { tr("studio.timings_shown").into() } else { tr("studio.timings_hidden").into() }
             }
             "reset_shape" => {
                 self.shape_event(ShapeEvent::Reset);
-                "reset all sliders".into()
+                tr("designer.undo.reset").into()
             }
             other => return Err(format!("unknown action {other}")),
         })

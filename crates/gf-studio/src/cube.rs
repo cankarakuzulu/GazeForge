@@ -11,7 +11,7 @@ pub const FACES: [(&str, V3, V3, V3); 6] = [
     ("right", [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]),
 ];
 pub const BORDER: f64 = 0.6;
-const LABELS: [&str; 6] = ["FRONT", "BACK", "TOP", "BOTTOM", "LEFT", "RIGHT"];
+const LABELS: [&str; 6] = ["front", "back", "top", "bottom", "left", "right"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Element(pub u8);
@@ -200,7 +200,7 @@ impl Cube {
 
     fn label(&self, ui: &egui::Ui, painter: &egui::Painter, f: usize, color: egui::Color32) {
         let ctx = ui.ctx();
-        let galley = painter.layout_no_wrap(LABELS[f].to_string(), egui::FontId::proportional(32.0), color);
+        let galley = painter.layout_no_wrap(crate::i18n::tr(&format!("cube.{}", LABELS[f])).to_string(), egui::FontId::proportional(32.0), color);
         let size = galley.size();
         let k = (1.5 / size.x as f64).min(0.55 / size.y as f64);
         let mut mesh = egui::Mesh::default();

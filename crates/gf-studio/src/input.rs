@@ -3,15 +3,16 @@ use std::ops::RangeInclusive;
 use eframe::egui;
 use gf_core::eyerig::{self as er, EyeAdjust, EyeballSpec};
 
+use crate::i18n::{tr, tr_or, trf};
 use crate::shape::{Edit, ShapeEvent, ShapeModel, Slider, pair_edits};
 
 const EYE_FIELDS: [(&str, f64, f64); 7] = [
-    ("out mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
-    ("up mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
-    ("forward mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
-    ("pitch up deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
-    ("yaw out deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
-    ("roll deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("out", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("up", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("forward", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("pitch", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("yaw", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("roll", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
     ("scale", er::SCALE_RANGE[0], er::SCALE_RANGE[1]),
 ];
 
@@ -115,16 +116,16 @@ fn target_row(ui: &mut egui::Ui, shape: &ShapeModel, s: &Slider, out: &mut Vec<S
         Slider::One(i) => {
             let t = &shape.targets[*i];
             let id = t.id.clone();
-            let spec = RowSpec { label: &t.label, value: live.weight(&t.id), start: start.weight(&t.id), range: 0.0..=1.0, ends: None, hover: format!("{}\nright click: back to the start value", t.id) };
+            let spec = RowSpec { label: &t.label, value: live.weight(&t.id), start: start.weight(&t.id), range: 0.0..=1.0, ends: None, hover: format!("{}\n{}", t.id, tr("studio.shape.reset_one")) };
             let reset = vec![Edit::Weight(t.id.clone(), start.weight(&t.id))];
             slider_row(ui, spec, |x| vec![Edit::Weight(id.clone(), x)], reset, out);
         }
         Slider::Pair { label, neg, pos, ends } => {
             let (n, p) = (&shape.targets[*neg].id, &shape.targets[*pos].id);
             let (wn, wp) = (live.weight(n), live.weight(p));
-            let mut hover = format!("left: {n}\nright: {p}\nright click: back to the start values");
+            let mut hover = trf("studio.shape.pair_hover", &[("left", n), ("right", p)]);
             if wn > 0.0 && wp > 0.0 {
-                hover.push_str(&format!("\nboth are set ({} {wn:.3}, {} {wp:.3}); a drag keeps only one side", ends.0, ends.1));
+                hover.push_str(&format!("\n{}", trf("studio.shape.both_set", &[("left", &ends.0), ("wl", &format!("{wn:.3}")), ("right", &ends.1), ("wr", &format!("{wp:.3}"))])));
             }
             let spec = RowSpec { label, value: wp - wn, start: start.weight(p) - start.weight(n), range: -1.0..=1.0, ends: Some(*ends), hover };
             let reset = vec![Edit::Weight(n.clone(), start.weight(n)), Edit::Weight(p.clone(), start.weight(p))];
@@ -141,25 +142,25 @@ impl SliderPanel {
                     self.tab = tab;
                 }
             };
-            pick(ui, Tab::Macros, format!("Macros ({})", shape.macros.len()));
-            pick(ui, Tab::Eyes, "Eyes".into());
-            pick(ui, Tab::All, format!("All ({})", shape.sliders.len()));
+            pick(ui, Tab::Macros, trf("studio.shape.macros", &[("n", &shape.macros.len())]));
+            pick(ui, Tab::Eyes, tr("panel.eyes").into());
+            pick(ui, Tab::All, trf("studio.shape.all", &[("n", &shape.sliders.len())]));
             for (c, _) in &shape.categories {
                 let n = shape.sliders.iter().filter(|s| shape.targets[s.first()].category == *c).count();
-                pick(ui, Tab::Category(c.clone()), format!("{c} ({n})"));
+                pick(ui, Tab::Category(c.clone()), format!("{} ({n})", tr_or(&format!("category.{c}"), c)));
             }
         });
     }
 
     fn macros(&self, ui: &mut egui::Ui, shape: &ShapeModel, out: &mut Vec<ShapeEvent>) {
         if !shape.macros_available {
-            ui.label(format!("unavailable: {}", shape.macros_reason.as_deref().unwrap_or("no macro definition")));
+            ui.label(trf("designer.macros_unavailable", &[("reason", &shape.macros_reason.as_deref().unwrap_or(tr("studio.shape.no_macro")))]));
             return;
         }
         for m in &shape.macros {
             let value = shape.live.macros.get(&m.name).copied().unwrap_or(m.start);
             let name = m.name.clone();
-            let spec = RowSpec { label: &m.name, value, start: m.start, range: 0.0..=1.0, ends: None, hover: "right click: back to the start value".into() };
+            let spec = RowSpec { label: &m.name, value, start: m.start, range: 0.0..=1.0, ends: None, hover: tr("studio.shape.reset_one").into() };
             slider_row(ui, spec, |x| vec![Edit::Macro(name.clone(), x)], vec![Edit::Macro(m.name.clone(), m.start)], out);
         }
     }
@@ -171,55 +172,55 @@ impl SliderPanel {
         if let Some(rig) = &rig {
             let models = gf_core::eye_inventory::models();
             let current = live.model.as_ref().map(|m| m.id.clone());
-            let shown = current.as_ref().and_then(|id| models.iter().find(|m| &m.id == id)).map_or("eyes file / none".to_string(), |m| m.name.clone());
+            let shown = current.as_ref().and_then(|id| models.iter().find(|m| &m.id == id)).map_or(tr("studio.eyes.file_or_none").to_string(), |m| tr_or(&format!("eyes.model.{}", m.id), &m.name).to_string());
             let mut picked = current.clone();
-            egui::ComboBox::from_label("eye model").selected_text(shown).show_ui(ui, |ui| {
-                ui.selectable_value(&mut picked, None, "eyes file / none");
+            egui::ComboBox::from_label(tr("eyes.model")).selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut picked, None, tr("studio.eyes.file_or_none"));
                 let mut family = String::new();
                 for m in &models {
                     if m.family != family {
                         family = m.family.clone();
-                        ui.label(egui::RichText::new(&family).weak());
+                        ui.label(egui::RichText::new(tr_or(&format!("eyes.family.{family}"), &family)).weak());
                     }
-                    ui.selectable_value(&mut picked, Some(m.id.clone()), &m.name);
+                    ui.selectable_value(&mut picked, Some(m.id.clone()), tr_or(&format!("eyes.model.{}", m.id), &m.name));
                 }
             });
             if picked != current {
                 let radius_mm = live.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
                 let s = EyeballSpec { model: picked.clone().map(|id| er::EyeModelChoice { id, radius_mm }), rig: Some(rig.clone()), ..live.clone() };
                 out.push(ShapeEvent::Preview(vec![Edit::Eyes(Some(s))]));
-                out.push(ShapeEvent::Commit(picked.map_or("no eye model".into(), |id| format!("eye model {id}"))));
+                out.push(ShapeEvent::Commit(picked.map_or(tr("eyes.undo_no_model").into(), |id| trf("eyes.undo_model", &[("id", &id)]))));
             }
             if let Some(m) = &live.model {
                 let start_r = start.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
                 let with = |x: f64| vec![Edit::Eyes(Some(EyeballSpec { model: Some(er::EyeModelChoice { id: m.id.clone(), radius_mm: x }), ..live.clone() }))];
-                let spec = RowSpec { label: "eye radius mm", value: m.radius_mm, start: start_r, range: 5.0..=20.0, ends: None, hover: "eyeball radius in mm\nright click: back to the start value".into() };
+                let spec = RowSpec { label: tr("eyes.radius"), value: m.radius_mm, start: start_r, range: 5.0..=20.0, ends: None, hover: format!("{}\n{}", tr("studio.eyes.radius_title"), tr("studio.shape.reset_one")) };
                 slider_row(ui, spec, with, with(start_r), out);
             }
             ui.separator();
         }
         let mut follow = live.follows();
         let toggle = ui
-            .add_enabled(rig.is_some() || follow, egui::Checkbox::new(&mut follow, "follow the sockets"))
-            .on_hover_text("move and scale each eye with its socket, the way MakeHuman moves its helper eyeball; the eyelid clearance uses the moved eyes");
+            .add_enabled(rig.is_some() || follow, egui::Checkbox::new(&mut follow, tr("eyes.follow")))
+            .on_hover_text(tr("eyes.follow_title"));
         if toggle.changed() {
             let s = EyeballSpec { follow: if follow { er::FOLLOW_HELPER } else { er::FOLLOW_NONE }.into(), rig: if follow { rig.clone() } else { live.rig.clone() }, ..live.clone() };
             out.push(ShapeEvent::Preview(vec![Edit::Eyes(Some(s))]));
-            out.push(ShapeEvent::Commit(format!("eyes {}", if follow { "follow the sockets" } else { "stay where the eyes file puts them" })));
+            out.push(ShapeEvent::Commit(if follow { tr("eyes.undo_follow") } else { tr("eyes.undo_stay") }.into()));
         }
         if rig.is_none() {
-            ui.label("this catalog has no eye rig (store import-eyerig makes one)");
+            ui.label(tr("eyes.no_rig"));
         }
         let mut linked = !self.unlink_eyes;
-        ui.checkbox(&mut linked, "link left and right").on_hover_text("one set of sliders for both eyes; out and yaw mirror between the sides");
+        ui.checkbox(&mut linked, tr("eyes.link")).on_hover_text(tr("eyes.link_title"));
         self.unlink_eyes = !linked;
         ui.separator();
-        let sides: &[(&str, &[usize])] = if linked { &[("both eyes", &[0, 1])] } else { &[("left eye", &[0]), ("right eye", &[1])] };
+        let sides: &[(&str, &[usize])] = if linked { &[("both", &[0, 1])] } else { &[("left", &[0]), ("right", &[1])] };
         for &(title, which) in sides {
-            ui.label(egui::RichText::new(title).strong());
+            ui.label(egui::RichText::new(tr(&format!("eyes.side.{title}"))).strong());
             let adjust = |s: &EyeballSpec| if which[0] == 0 { s.left } else { s.right };
             for (f, &(name, lo, hi)) in EYE_FIELDS.iter().enumerate() {
-                let label = format!("{} {name}", if linked { "eyes" } else { title.trim_end_matches(" eye") });
+                let label = tr(&format!("eyes.field.{name}")).to_string();
                 let value = eye_field(&adjust(&live), f);
                 let first = eye_field(&adjust(&start), f);
                 let with = |x: f64| {
@@ -230,7 +231,7 @@ impl SliderPanel {
                     vec![Edit::Eyes(Some(s))]
                 };
                 let reset = with(first);
-                let spec = RowSpec { label: &label, value, start: first, range: lo..=hi, ends: None, hover: format!("{name} relative to the socket\nright click: back to the start value") };
+                let spec = RowSpec { label: &label, value, start: first, range: lo..=hi, ends: None, hover: format!("{}\n{}", trf("studio.eyes.field_title", &[("field", &label)]), tr("studio.shape.reset_one")) };
                 slider_row(ui, spec, with, reset, out);
             }
         }
@@ -246,8 +247,8 @@ impl ShapeInput for SliderPanel {
         let mut out = Vec::new();
         self.tabs(ui, shape);
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("search all targets").desired_width(150.0));
-            if ui.button("reset").on_hover_text("every slider back to the start values").clicked() {
+            ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(tr("studio.shape.search")).desired_width(150.0));
+            if ui.button(tr("studio.shape.reset")).on_hover_text(tr("action.reset_shape")).clicked() {
                 out.push(ShapeEvent::Reset);
             }
         });

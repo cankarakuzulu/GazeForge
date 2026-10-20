@@ -24,27 +24,27 @@ fn setup() -> Value {
             {"id": "pack", "title": "Dense base", "command": "store.import_pack",
              "help": "The dense base folder (positions, faces, UVs, manifest) becomes the store's pack; it is content-addressed, so the same folder gives the same reference.",
              "fields": [
-                 {"name": "store", "label": "store folder", "widget": "folder", "bind": "$run.store", "common": true},
-                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                 {"name": "macro_base", "label": "macro base sliders", "common": true},
-                 {"name": "pin_top", "label": "pin height (m)"},
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                 {"name": "macro_base", "label": "Macro base sliders", "common": true},
+                 {"name": "pin_top", "label": "Pin height (m)"},
              ],
              "shows": [{"kind": "report"}]},
             {"id": "catalog", "title": "Targets", "command": "store.import_catalog",
              "help": "The targets folder (sparse targets on the dense topology) becomes the pack's catalog.",
              "fields": [hidden("store", "$pack.input.store"), hidden("pack", "$pack.result.pack"),
-                        {"name": "targets", "label": "targets folder", "widget": "folder", "common": true}],
+                        {"name": "targets", "label": "Targets folder", "widget": "folder", "common": true}],
              "shows": [{"kind": "report"}]},
             {"id": "game", "title": "Game base", "command": "store.import_game",
              "help": "An existing game base folder for this pack (the Build a game base task makes one).",
              "fields": [hidden("store", "$pack.input.store"), hidden("pack", "$pack.result.pack"),
-                        {"name": "base", "label": "game base folder", "widget": "folder", "common": true}],
+                        {"name": "base", "label": "Game base folder", "widget": "folder", "common": true}],
              "shows": [{"kind": "report"}]},
             {"id": "eyerig", "title": "Eye rig", "command": "store.import_eyerig", "optional": true,
              "help": "MakeHuman's helper eyeballs and their per-target moves, so eyeballs follow the character and eye models can be placed. It needs the pack imported with its macro base sliders: a pack registered at another state is refused (median skin distance over 2 mm).",
              "fields": [hidden("store", "$pack.input.store"), hidden("catalog", "$catalog.result.catalog"),
                         {"name": "makehuman", "label": "MakeHuman data folder", "widget": "folder", "common": true},
-                        {"name": "macro", "label": "macro definition", "widget": "file_open", "ext": ".json", "common": true}],
+                        {"name": "macro", "label": "Macro definition", "widget": "file_open", "ext": ".json", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -58,19 +58,19 @@ fn build_base() -> Value {
             {"id": "build", "title": "Build", "command": "base.build",
              "help": "Decimate to a vertex target with angle guards; the shapes the collapse must serve keep their detail. Minutes at the full dense size.",
              "fields": [
-                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                 {"name": "out", "label": "output folder", "widget": "folder", "bind": "$dir/base", "common": true},
-                 {"name": "target", "label": "vertices", "common": true},
-                 {"name": "lods", "label": "levels of detail (e.g. 8000,3000)", "common": true},
-                 {"name": "shapes", "label": "shapes to serve (all, none, a,b)"},
-                 {"name": "weights", "label": "importance weights (.npy)", "widget": "file_open", "ext": ".npy"},
+                 {"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                 {"name": "out", "label": "Output folder", "widget": "folder", "bind": "$dir/base", "common": true},
+                 {"name": "target", "label": "Vertices", "common": true},
+                 {"name": "lods", "label": "Levels of detail (e.g. 8000,3000)", "common": true},
+                 {"name": "shapes", "label": "Shapes to serve (all, none, a,b)"},
+                 {"name": "weights", "label": "Importance weights (.npy)", "widget": "file_open", "ext": ".npy"},
              ],
              "shows": [{"kind": "report"}]},
             {"id": "import", "title": "Import", "command": "store.import_game",
              "help": "The new base into the store, beside every base it already has.",
              "fields": [hidden("base", "$build.input.out"),
-                        {"name": "store", "label": "store folder", "widget": "folder", "bind": "$run.store", "common": true},
-                        {"name": "pack", "label": "pack", "bind": "$run.pack", "common": true}],
+                        {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                        {"name": "pack", "label": "Pack", "bind": "$run.pack", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -84,10 +84,10 @@ fn create() -> Value {
             {"id": "create", "title": "Weights", "command": "character.create",
              "help": "Target weights in [0, 1] as a JSON object; macro sliders and a sculpt's residual are made with the command line form.",
              "fields": [hidden("store", "$run.store"), hidden("pack", "$run.pack"), hidden("catalog", "$run.catalog"), hidden("game", "$run.game"),
-                        {"name": "weights", "label": "weights (JSON)", "common": true},
-                        {"name": "name", "label": "name", "common": true},
-                        {"name": "out", "label": "spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
-                        {"name": "placement", "label": "placement"}],
+                        {"name": "weights", "label": "Weights (JSON)", "common": true},
+                        {"name": "name", "label": "Name", "common": true},
+                        {"name": "out", "label": "Spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
+                        {"name": "placement", "label": "Placement"}],
              "shows": [{"kind": "report"}]},
             {"id": "validate", "title": "Validate", "command": "character.validate",
              "help": "The spec against the store: format, references, target ids and weight ranges.",
@@ -105,10 +105,10 @@ fn body() -> Value {
             {"id": "import", "title": "Body", "command": "body.import",
              "help": "A MakeHuman body (exact) or any body mesh; the neck is cut where the head meets it.",
              "fields": [
-                 {"name": "mode", "label": "kind", "common": true},
-                 {"name": "obj", "label": "body .obj", "widget": "file_open", "ext": ".obj", "common": true},
-                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                 {"name": "out", "label": "body pack folder", "widget": "folder", "bind": "$dir/body", "common": true},
+                 {"name": "mode", "label": "Kind", "common": true},
+                 {"name": "obj", "label": "Body .obj", "widget": "file_open", "ext": ".obj", "common": true},
+                 {"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                 {"name": "out", "label": "Body pack folder", "widget": "folder", "bind": "$dir/body", "common": true},
              ],
              "shows": [{"kind": "report"}]},
         ],
@@ -121,10 +121,10 @@ fn check() -> Value {
         "summary": "Shell gates (folds, inner surfaces, roughness) between two dense surfaces.",
         "steps": [
             {"id": "shell", "title": "Shell gates", "command": "gates.shell",
-             "help": "before and after are base, shape:NAME or a dense .npy; a failing gate is reported with every value and its limit.",
-             "fields": [{"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                        {"name": "before", "label": "before", "bind": "=base", "common": true},
-                        {"name": "after", "label": "after (.npy)", "widget": "file_open", "ext": ".npy", "common": true}],
+             "help": "Before and after are base, shape:NAME or a dense .npy; a failing gate is reported with every value and its limit.",
+             "fields": [{"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                        {"name": "before", "label": "Before", "bind": "=base", "common": true},
+                        {"name": "after", "label": "After (.npy)", "widget": "file_open", "ext": ".npy", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -136,12 +136,12 @@ fn lids() -> Value {
         "summary": "Dense eyelid vertices pushed out of the eyeballs, with the area inside the eyes before and after.",
         "steps": [
             {"id": "collide", "title": "Collide", "command": "lids.collide",
-             "help": "positions are base, shape:NAME or a dense .npy; the result is a dense .npy.",
-             "fields": [{"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                        {"name": "positions", "label": "positions", "common": true},
-                        {"name": "eyes", "label": "eyes file", "widget": "file_open", "ext": ".json", "common": true},
-                        {"name": "out", "label": "output .npy", "widget": "file_save", "ext": ".npy", "bind": "$dir/collided.npy", "common": true},
-                        {"name": "clearance", "label": "clearance (mm)", "common": true}],
+             "help": "Positions are base, shape:NAME or a dense .npy; the result is a dense .npy.",
+             "fields": [{"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                        {"name": "positions", "label": "Positions", "common": true},
+                        {"name": "eyes", "label": "Eyes file", "widget": "file_open", "ext": ".json", "common": true},
+                        {"name": "out", "label": "Output .npy", "widget": "file_save", "ext": ".npy", "bind": "$dir/collided.npy", "common": true},
+                        {"name": "clearance", "label": "Clearance (mm)", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -154,15 +154,15 @@ fn macros() -> Value {
         "steps": [
             {"id": "weights", "title": "Weights", "command": "macro.weights",
              "help": "Every macro slider and race value as a JSON object; the result lists the target weights they make.",
-             "fields": [{"name": "macro", "label": "macro definition", "widget": "file_open", "ext": ".json", "common": true},
-                        {"name": "sliders", "label": "sliders (JSON)", "common": true}],
+             "fields": [{"name": "macro", "label": "Macro definition", "widget": "file_open", "ext": ".json", "common": true},
+                        {"name": "sliders", "label": "Sliders (JSON)", "common": true}],
              "shows": [{"kind": "report"}]},
             {"id": "labels", "title": "Labels", "command": "macro.labels", "optional": true,
              "help": "One slider's label weights over a .npy of slider values, written as a table.",
              "fields": [hidden("macro", "$weights.input.macro"),
-                        {"name": "slider", "label": "slider", "common": true},
-                        {"name": "values", "label": "values (.npy)", "widget": "file_open", "ext": ".npy", "common": true},
-                        {"name": "out", "label": "table (.npy)", "widget": "file_save", "ext": ".npy", "bind": "$dir/labels.npy", "common": true}],
+                        {"name": "slider", "label": "Slider", "common": true},
+                        {"name": "values", "label": "Values (.npy)", "widget": "file_open", "ext": ".npy", "common": true},
+                        {"name": "out", "label": "Table (.npy)", "widget": "file_save", "ext": ".npy", "bind": "$dir/labels.npy", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -181,11 +181,11 @@ fn photos() -> Value {
             {"id": "photos", "title": "Photos", "command": null,
              "help": "A passport-style front (looking straight at the camera, plain background, even light, eyes open, mouth closed) and a true side profile; the other side's profile is optional.",
              "fields": [
-                 {"name": "front", "label": "front photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
-                 {"name": "profile", "label": "profile photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
-                 {"name": "profile_side", "label": "the profile shows the face's", "common": true, "bind": "=right", "schema": {"enum": ["right", "left"]}},
-                 {"name": "other_profile", "label": "other profile (optional)", "widget": "file_open", "ext": ".png .jpg"},
-                 {"name": "other_profile_side", "label": "the other profile shows the face's", "bind": "=left", "schema": {"enum": ["right", "left"]}},
+                 {"name": "front", "label": "Front photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
+                 {"name": "profile", "label": "Profile photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
+                 {"name": "profile_side", "label": "The profile shows the face's", "common": true, "bind": "=right", "schema": {"enum": ["right", "left"]}},
+                 {"name": "other_profile", "label": "Other profile (optional)", "widget": "file_open", "ext": ".png .jpg"},
+                 {"name": "other_profile_side", "label": "The other profile shows the face's", "bind": "=left", "schema": {"enum": ["right", "left"]}},
              ],
              "shows": []},
             {"id": "check", "title": "Check", "command": "photo.check",
@@ -195,7 +195,7 @@ fn photos() -> Value {
                  {"name": "profile", "bind": "$photos.input.profile", "hidden": true},
                  {"name": "profile_side", "bind": "$photos.input.profile_side", "hidden": true},
                  {"name": "run", "bind": "$dir/check", "hidden": true},
-                 {"name": "allow", "label": "allow these failed checks"},
+                 {"name": "allow", "label": "Allow these failed checks"},
              ],
              "shows": [{"kind": "report"}]},
             {"id": "views", "title": "Landmarks", "command": "photo.views",
@@ -208,7 +208,7 @@ fn photos() -> Value {
                      {"name": "other_profile", "path": "$photos.input.other_profile", "role": "profile", "side": "$photos.input.other_profile_side"},
                  ]},
              ],
-             "shows": [{"kind": "images", "from": "$views.result.views", "path": "overlay", "label": "name"}, {"kind": "report"}]},
+             "shows": [{"kind": "images", "from": "$views.result.views", "path": "overlay", "label": "Name"}, {"kind": "report"}]},
             {"id": "fit", "title": "Fit", "command": "fit.photos",
              "help": "The targets fitted to every photo's landmarks and outline through solved cameras, with a stay-at-base prior; per photo the landmark and outline errors.",
              "fields": [
@@ -216,9 +216,9 @@ fn photos() -> Value {
                  {"name": "store", "bind": "$run.store", "hidden": true},
                  {"name": "pack", "bind": "$run.pack", "hidden": true},
                  {"name": "catalog", "bind": "$run.catalog", "hidden": true},
-                 {"name": "focal_px", "label": "focal length in pixels (if known)", "common": true},
-                 {"name": "base_landmarks", "label": "base landmark table (detected on the base with eyes)", "widget": "file_open", "ext": ".json", "bind": "$run.base_landmarks", "common": true},
-                 {"name": "leave_out", "label": "cross-check: fit without this view"},
+                 {"name": "focal_px", "label": "Focal length in pixels (if known)", "common": true},
+                 {"name": "base_landmarks", "label": "Base landmark table (detected on the base with eyes)", "widget": "file_open", "ext": ".json", "bind": "$run.base_landmarks", "common": true},
+                 {"name": "leave_out", "label": "Cross-check: fit without this view"},
              ],
              "shows": [{"kind": "report"}]},
             {"id": "accept", "title": "Accept", "command": "character.create",
@@ -229,8 +229,8 @@ fn photos() -> Value {
                  {"name": "catalog", "bind": "$run.catalog", "hidden": true},
                  {"name": "game", "bind": "$run.game", "hidden": true},
                  {"name": "weights", "bind": "$fit.result.weights", "hidden": true},
-                 {"name": "out", "label": "spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
-                 {"name": "name", "label": "name", "bind": "=from photos", "common": true},
+                 {"name": "out", "label": "Spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
+                 {"name": "name", "label": "Name", "bind": "=from photos", "common": true},
              ],
              "shows": [{"kind": "report"}, {"kind": "spec", "from": "$accept.result.out", "store": "$run.store"}]},
         ],
@@ -248,8 +248,8 @@ fn export() -> Value {
             {"id": "character", "title": "Character", "command": null,
              "help": "The character to export: the spec file the designer saved (the current character by default) and its store.",
              "fields": [
-                 {"name": "store", "label": "store", "widget": "folder", "bind": "$run.store", "common": true},
-                 {"name": "spec", "label": "character spec", "widget": "file_open", "ext": ".gfchar.json", "bind": "$run.spec", "common": true},
+                 {"name": "store", "label": "Store", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "spec", "label": "Character spec", "widget": "file_open", "ext": ".gfchar.json", "bind": "$run.spec", "common": true},
              ],
              "shows": []},
             {"id": "export", "title": "Export", "command": "export.glb",
@@ -257,14 +257,14 @@ fn export() -> Value {
              "fields": [
                  {"name": "store", "bind": "$character.input.store", "hidden": true},
                  {"name": "spec", "bind": "$character.input.spec", "hidden": true},
-                 {"name": "out", "label": "glb file", "widget": "file_save", "ext": ".glb", "bind": "$run.out", "common": true},
-                 {"name": "lod0_out", "label": "also an obj of the finest level (file stem)", "widget": "file_save", "ext": "", "common": true},
-                 {"name": "morphs", "label": "morph targets", "widget": "targets"},
-                 {"name": "eyes", "label": "eyes file", "widget": "file_open", "ext": ".json"},
-                 {"name": "body", "label": "body pack", "widget": "folder"},
-                 {"name": "lids", "label": "eyelid fitting"},
-                 {"name": "rig", "label": "face rig"},
-                 {"name": "sparse", "label": "sparse morphs"},
+                 {"name": "out", "label": "Glb file", "widget": "file_save", "ext": ".glb", "bind": "$run.out", "common": true},
+                 {"name": "lod0_out", "label": "Also an obj of the finest level (file stem)", "widget": "file_save", "ext": "", "common": true},
+                 {"name": "morphs", "label": "Morph targets", "widget": "targets"},
+                 {"name": "eyes", "label": "Eyes file", "widget": "file_open", "ext": ".json"},
+                 {"name": "body", "label": "Body pack", "widget": "folder"},
+                 {"name": "lids", "label": "Eyelid fitting"},
+                 {"name": "rig", "label": "Face rig"},
+                 {"name": "sparse", "label": "Sparse morphs"},
                  {"name": "lod_screen", "label": "LOD switch screen sizes"},
              ],
              "shows": [{"kind": "report"}, {"kind": "glb", "from": "$export.result.out"}]},
@@ -272,7 +272,7 @@ fn export() -> Value {
              "help": "Every triangle of the exported file faces the way its vertex normals say, in the neutral and in each morph state.",
              "fields": [
                  {"name": "glb", "bind": "$export.result.out", "hidden": true},
-                 {"name": "states", "label": "states", "bind": "=all", "common": true},
+                 {"name": "states", "label": "States", "bind": "=all", "common": true},
              ],
              "shows": [{"kind": "report"}]},
         ],
@@ -716,6 +716,31 @@ mod tests {
         assert_eq!(start(&ctx, &json!({"wizard": "export", "project": "demo"})).unwrap()["run"], "demo/export-2");
         assert!(state(&ctx, &json!({"run": "../x"})).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_text_a_client_shows_starts_with_a_capital() {
+        fn walk(v: &Value, at: &str, bad: &mut Vec<String>) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m {
+                        if let (true, Some(s)) = (["title", "label", "summary", "help", "notes", "group"].contains(&k.as_str()), x.as_str())
+                            && s.chars().next().is_some_and(char::is_lowercase)
+                        {
+                            bad.push(format!("{at}.{k}: {s}"));
+                        }
+                        walk(x, &format!("{at}.{k}"), bad);
+                    }
+                }
+                Value::Array(a) => a.iter().enumerate().for_each(|(i, x)| walk(x, &format!("{at}[{i}]"), bad)),
+                _ => {}
+            }
+        }
+        let mut bad = Vec::new();
+        for w in definitions() {
+            walk(&w, w["id"].as_str().unwrap_or("?"), &mut bad);
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
     }
 
     #[test]

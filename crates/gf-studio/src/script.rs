@@ -430,7 +430,7 @@ impl Offscreen {
             }
             "mode" => {
                 let name = text("mode").ok_or("mode needs mode")?;
-                let m = mode_index(name).ok_or_else(|| format!("unknown mode {name}; modes: {}", viewer::MODES.map(|m| m.0).join(", ")))?;
+                let m = mode_index(name).ok_or_else(|| format!("unknown mode {name}; modes: {}", viewer::MODES.join(", ")))?;
                 let t = Instant::now();
                 for s in slots_of(step, w) {
                     w.set_mode(s, m);

@@ -1,6 +1,7 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
 import { ViewCube, elementName, elementDir, yawPitch } from "./cube.js";
 import { createWizards } from "./wizard.js";
+import { tr, loadLocale, applyDom } from "./i18n.js";
 
 const params = new URLSearchParams(location.search);
 let store = params.get("store");
@@ -43,17 +44,18 @@ let V = null;
 let gl = null;
 
 const SHORTCUTS = [
-  ["Ctrl+Z", "undo"], ["Ctrl+Y / Ctrl+Shift+Z", "redo"], ["F", "frame the head (active view)"], ["Shift+F", "frame the selection (last slider's region, else the last picked point)"],
-  ["double-click", "set the orbit pivot on the surface point"], ["left drag", "orbit"], ["right / middle / Shift+left drag", "pan"], ["wheel", "zoom (Alt+wheel moves clip plane 1)"],
-  ["O or 5", "perspective / orthographic (matched framing)"], ["1 / Shift+1", "front / back view"], ["3 / Shift+3", "left / right side view"], ["7 / Shift+7", "top / bottom view"], ["9", "three-quarter view"],
-  ["Home", "home view of the active viewport, framed"], ["view cube", "top right of each viewport: click a face, edge or corner to look from there, drag it to orbit"],
-  ["[ / ]", "narrower / wider field of view (framing kept)"], ["L", "layout: single, side by side, quad"], ["N", "next viewport"], ["M / Shift+M", "next / previous render mode"], [", / .", "coarser / finer level of detail"],
-  ["W", "wireframe overlay"], ["X", "hidden edges through the surface (x-ray wire)"], ["P", "vertex points"], ["B", "back-face highlight"], ["E", "seams and boundary edges"],
-  ["C", "clip plane 1 on / off"], ["G", "light gizmo"], ["H / Alt+H", "hide the head / show everything"], ["I", "isolate the head"], ["K / Shift+K", "PNG of the active view / the whole layout"],
-  ["T", "face grid: cells fixed to the topology (same cell = same vertices on every character)"], ["R", "millimetre grid (axis-aligned ortho views; a back plane in perspective)"],
-  ["Q / Alt+click", "probe mode (a click shows the address) / probe once in any mode"], ["J", "go to an address (a cell, dense N, game vN or a GF@ line)"],
-  ["Ctrl+N / Ctrl+O", "new / open project"], ["Ctrl+S / Ctrl+Shift+S", "save / save the project as"],
-  ["D", "dark / light interface"], ["?", "this help"], ["Esc", "close the help"],
+  ["Ctrl+Z", "undo"], ["Ctrl+Y / Ctrl+Shift+Z", "redo"], ["F", "frame_the_head_active_view"], ["Shift+F", "frame_the_selection_last_slider_"],
+  ["double-click", "set_the_orbit_pivot_on_the_surfa"], ["left drag", "orbit"], ["right / middle / Shift+left drag", "pan"],
+  ["wheel", "zoom_alt_wheel_moves_clip_plane_"], ["O or 5", "perspective_orthographic_matched"], ["1 / Shift+1", "front_back_view"],
+  ["3 / Shift+3", "left_right_side_view"], ["7 / Shift+7", "top_bottom_view"], ["9", "three_quarter_view"],
+  ["Home", "home_view_of_the_active_viewport"], ["view cube", "top_right_of_each_viewport_click"], ["[ / ]", "narrower_wider_field_of_view_fra"],
+  ["L", "layout_single_side_by_side_quad"], ["N", "next_viewport"], ["M / Shift+M", "next_previous_render_mode"],
+  [", / .", "coarser_finer_level_of_detail"], ["W", "wireframe_overlay"], ["X", "hidden_edges_through_the_surface"], ["P", "vertex_points"],
+  ["B", "back_face_highlight"], ["E", "seams_and_boundary_edges"], ["C", "clip_plane_1_on_off"], ["G", "light_gizmo"],
+  ["H / Alt+H", "hide_the_head_show_everything"], ["I", "isolate_the_head"], ["K / Shift+K", "png_of_the_active_view_the_whole"],
+  ["T", "face_grid_cells_fixed_to_the_top"], ["R", "millimetre_grid_axis_aligned_ort"], ["Q / Alt+click", "probe_mode_a_click_shows_the_add"],
+  ["J", "go_to_an_address_a_cell_dense_n_"], ["Ctrl+N / Ctrl+O", "new_open_project"], ["Ctrl+S / Ctrl+Shift+S", "save_save_the_project_as"],
+  ["D", "dark_light_interface"], ["?", "this_help"], ["Esc", "close_the_help"],
 ];
 D.shortcuts = SHORTCUTS;
 
@@ -61,7 +63,7 @@ function setStatus(kind, text) {
   const el = $("status");
   el.className = `status ${kind}`;
   el.textContent = text;
-  $("label").textContent = kind === "preview" ? "approximate preview: release the slider to settle" : "";
+  $("label").textContent = kind === "preview" ? tr("designer.preview_hint") : "";
 }
 
 function toast(text) {
@@ -142,7 +144,7 @@ async function loadKernel(pack, blob) {
   const tris = put("triangles", Uint32Array), offs = put("offsets", Uint32Array), idx = put("index", Uint32Array);
   const del = put("delta", Int16Array), sc = put("scale", Float32Array);
   D.kernel = e.gf_kernel_new(pack.vertices, tris, pack.triangles, pack.targets.length, offs, idx, pack.entries, del, sc);
-  if (!D.kernel) throw new Error("the preview kernel refused the pack");
+  if (!D.kernel) throw new Error(tr("designer.err.kernel"));
   D.n = pack.vertices;
   D.tri = pack.triangles;
   D.indices = new Uint32Array(blob, L.triangles.offset, L.triangles.count).slice();
@@ -202,12 +204,12 @@ async function context() {
       canvas.addEventListener("webglcontextlost", (e) => {
         e.preventDefault();
         D.contextLost = (D.contextLost || 0) + 1;
-        setStatus("busy", "graphics context lost; waiting for the browser to restore it");
+        setStatus("busy", tr("designer.status.context_lost"));
       });
       canvas.addEventListener("webglcontextrestored", () => {
         D.contextRestored = (D.contextRestored || 0) + 1;
         if (V) { V.restore(); request(true); }
-        setStatus("settled", "graphics context restored");
+        setStatus("settled", tr("designer.status.context_restored"));
       });
       D.contextAttempts = attempt + 1;
       return g;
@@ -242,10 +244,10 @@ function computePreview() {
     extra = 1;
   }
   if (fallback.length) {
-    const text = `preview (approximate; macro ${fallback.join(", ")}: single slope until its samples arrive)`;
+    const text = tr("designer.status.preview_macro", { macros: fallback.join(", ") });
     if ($("status").textContent !== text) setStatus("preview", text);
     if (fallback.join() !== D.macroFallback.join()) for (const name of fallback) macroSamplesFor(name);
-  } else if (D.macroFallback.length && changed()) setStatus("preview", "preview (approximate)");
+  } else if (D.macroFallback.length && changed()) setStatus("preview", tr("designer.status.preview"));
   D.macroFallback = fallback;
   return D.wasm.gf_preview(D.kernel, extra);
 }
@@ -299,7 +301,7 @@ async function macroSamplesFor(name) {
     D.macroSamples[name] = list.slice(0, 4);
     request(true);
   } catch (e) {
-    $("label").textContent = `macro samples unavailable: ${e.message}`;
+    $("label").textContent = tr("designer.macro_samples_unavailable", { error: e.message });
     D.macroSampling = null;
     return;
   }
@@ -375,7 +377,7 @@ function settleInput() {
 
 function setEyeballs(spec, origin) {
   D.eyeballs = spec ? JSON.parse(JSON.stringify(spec)) : null;
-  refreshEyes().catch((e) => toast(`eyes: ${e.message || e}`));
+  refreshEyes().catch((e) => toast(tr("designer.err.eyes", { error: e.message || e })));
   for (const cb of D.eyeListeners) { try { cb(origin); } catch (e) { console.error(e); } }
   notify("slider");
   scheduleDirty();
@@ -402,7 +404,7 @@ async function settle(full) {
   if (D.settling) { D.pendingSettle = 1; return; }
   clearTimeout(D.fullTimer);
   D.settling = true;
-  setStatus("busy", "settling");
+  setStatus("busy", tr("designer.status.settling"));
   const wSent = D.w.slice(), mSent = { ...D.macroW };
   const t0 = performance.now();
   let r;
@@ -414,7 +416,7 @@ async function settle(full) {
     r = await api("designer.settle", input);
   } catch (e) {
     D.settling = false;
-    setStatus("preview", `settle failed: ${e.message}`);
+    setStatus("preview", tr("designer.status.settle_failed", { error: e.message }));
     return;
   }
   const pos = decodeF32(r.positions_f32_b64);
@@ -443,9 +445,9 @@ async function settle(full) {
   D.settleCount++;
   placeEyes(r.eyes);
   D.settling = false;
-  const kind = r.approximate ? `${r.placement} draft (approximate, ${r.draft.rounds} of ${r.draft.full_rounds} fit rounds; save and export use the full placement)` : r.placement;
-  setStatus(changed() ? "preview" : "settled", changed() ? "preview (approximate)" : `settled ${kind} ${rtt.toFixed(0)} ms`);
-  $("info").textContent = `${D.n} vertices, ${D.tri} triangles, ${D.targets.length} targets loaded, ${V.renderer || ""}`;
+  const kind = r.approximate ? tr("designer.status.draft", { placement: r.placement, rounds: r.draft.rounds, full: r.draft.full_rounds }) : r.placement;
+  setStatus(changed() ? "preview" : "settled", changed() ? tr("designer.status.preview") : tr("designer.status.settled", { kind, ms: rtt.toFixed(0) }));
+  $("info").textContent = tr("designer.info", { vertices: D.n, triangles: D.tri, targets: D.targets.length, renderer: V.renderer || "" });
   request(true);
   notify("settle", { positions: pos, measurements: r.measurements, revision: r.revision, placement: r.placement });
   if (D.pendingSettle) { D.pendingSettle = 0; settle(); }
@@ -462,11 +464,11 @@ function renderHistory() {
   const H = D.history, list = $("history");
   $("undo").disabled = !H.done.length;
   $("redo").disabled = !H.undone.length;
-  $("undo").title = H.done.length ? `Undo ${H.done[H.done.length - 1].label} (Ctrl+Z)` : "Nothing to undo (Ctrl+Z)";
-  $("redo").title = H.undone.length ? `Redo ${H.undone[H.undone.length - 1].label} (Ctrl+Y)` : "Nothing to redo (Ctrl+Y)";
+  $("undo").title = H.done.length ? tr("designer.undo_title", { what: H.done[H.done.length - 1].label }) : tr("designer.undo_none");
+  $("redo").title = H.undone.length ? tr("designer.redo_title", { what: H.undone[H.undone.length - 1].label }) : tr("designer.redo_none");
   scheduleDirty();
   if (!list) return;
-  const rows = [`<li class="${H.done.length ? "" : "now"}" data-at="0">start</li>`];
+  const rows = [`<li class="${H.done.length ? "" : "now"}" data-at="0">${tr("designer.history_start")}</li>`];
   H.done.forEach((e, i) => rows.push(`<li class="${i === H.done.length - 1 ? "now" : ""}" data-at="${i + 1}">${escapeHtml(e.label)}</li>`));
   [...H.undone].reverse().forEach((e, i) => rows.push(`<li class="undone" data-at="${H.done.length + i + 1}">${escapeHtml(e.label)}</li>`));
   list.innerHTML = rows.join("");
@@ -476,7 +478,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
 function pushUndo(entry) {
   if (!entry || typeof entry.undo !== "function" || typeof entry.redo !== "function") throw new Error("pushUndo needs { label, undo(), redo() }");
   const H = D.history;
-  H.done.push({ label: String(entry.label || "edit"), undo: entry.undo, redo: entry.redo });
+  H.done.push({ label: String(entry.label || tr("designer.edit")), undo: entry.undo, redo: entry.redo });
   if (H.done.length > H.limit) H.done.shift();
   H.undone.length = 0;
   renderHistory();
@@ -484,18 +486,18 @@ function pushUndo(entry) {
 function undo() {
   const e = D.history.done.pop();
   if (!e) return;
-  try { e.undo(); } catch (err) { toast(`undo failed: ${err.message}`); }
+  try { e.undo(); } catch (err) { toast(tr("designer.undo_failed", { error: err.message })); }
   D.history.undone.push(e);
   renderHistory();
-  toast(`undo: ${e.label}`);
+  toast(tr("designer.undone", { what: e.label }));
 }
 function redo() {
   const e = D.history.undone.pop();
   if (!e) return;
-  try { e.redo(); } catch (err) { toast(`redo failed: ${err.message}`); }
+  try { e.redo(); } catch (err) { toast(tr("designer.redo_failed", { error: err.message })); }
   D.history.done.push(e);
   renderHistory();
-  toast(`redo: ${e.label}`);
+  toast(tr("designer.redone", { what: e.label }));
 }
 function historyTo(at) {
   while (D.history.done.length > at) undo();
@@ -530,7 +532,7 @@ function setWeights(pairs, macros) {
     const m = (D.macroRows || []).find((r) => r.name === name);
     if (m) { m.input.value = x; m.out.textContent = Number(x).toFixed(3); }
   }
-  setStatus("preview", "preview (approximate)");
+  setStatus("preview", tr("designer.status.preview"));
   request(true);
   notify("slider");
   scheduleSettle();
@@ -547,10 +549,11 @@ function buildSliders() {
       const h = document.createElement("div");
       h.className = "group";
       h.dataset.category = current;
-      h.textContent = `${current} (${D.categories[current]})`;
+      h.textContent = `${tr(`category.${current}`, null, current)} (${D.categories[current]})`;
       list.appendChild(h);
       const o = document.createElement("option");
-      o.value = o.textContent = current;
+      o.value = current;
+      o.textContent = tr(`category.${current}`, null, current);
       cats.appendChild(o);
     }
     const name = t.id.split("/").pop();
@@ -558,7 +561,7 @@ function buildSliders() {
       D.w[i] = x;
       D.lastTarget = i;
       s.row.classList.toggle("changed", x !== (D.start.weights[t.id] || 0));
-      setStatus("preview", "preview (approximate)");
+      setStatus("preview", tr("designer.status.preview"));
       request(true);
       notify("slider");
     }, () => {
@@ -587,7 +590,7 @@ function buildSliders() {
     const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart }, eAfter = D.start.eyeballs ?? null;
     const apply = (w, m, e) => { setWeights(w.map((x, i) => [i, x]), m); if (JSON.stringify(e) !== JSON.stringify(D.eyeballs)) setEyeballs(e); };
     apply(after, mAfter, eAfter);
-    pushUndo({ label: "reset all sliders", undo: () => apply(before, mBefore, eBefore), redo: () => apply(after, mAfter, eAfter) });
+    pushUndo({ label: tr("designer.undo.reset"), undo: () => apply(before, mBefore, eBefore), redo: () => apply(after, mAfter, eAfter) });
   });
 }
 
@@ -599,15 +602,15 @@ function buildMacros() {
   D.macroW0 = { ...D.macroW };
   D.macroCommitted = { ...D.macroW };
   if (!D.macros.available) {
-    box.innerHTML = `<div class="note">unavailable: ${D.macros.reason}</div>`;
+    box.innerHTML = `<div class="note">${tr("designer.macros_unavailable", { reason: D.macros.reason })}</div>`;
     return;
   }
   D.macroRows = D.macros.sliders.map((m) => {
-    const s = sliderRow(m.name, m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", "preview (approximate)"); request(true); notify("slider"); }, () => {
+    const s = sliderRow(m.name, m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", tr("designer.status.preview")); request(true); notify("slider"); }, () => {
       const from = D.macroCommitted[m.name], to = D.macroW[m.name];
       if (from !== to) {
         D.macroCommitted[m.name] = to;
-        pushUndo({ label: `macro ${m.name} ${Number(from).toFixed(3)} → ${Number(to).toFixed(3)}`, undo: () => setWeights([], { [m.name]: from }), redo: () => setWeights([], { [m.name]: to }) });
+        pushUndo({ label: tr("designer.undo.macro", { name: m.name, from: Number(from).toFixed(3), to: Number(to).toFixed(3) }), undo: () => setWeights([], { [m.name]: from }), redo: () => setWeights([], { [m.name]: to }) });
       }
       scheduleSettle();
     }, async () => {
@@ -621,7 +624,7 @@ function buildMacros() {
         D.macroDelta[m.name] = { up: decodeF32(r.up_f32_b64), down: decodeF32(r.down_f32_b64).map((x) => -x) };
         request(true);
       } catch (e) {
-        $("label").textContent = `macro preview unavailable: ${e.message}`;
+        $("label").textContent = tr("designer.macro_preview_unavailable", { error: e.message });
       }
     });
     s.name = m.name;
@@ -730,11 +733,11 @@ function frameSelection() {
     const b = V.computeBounds(sel);
     b.radius = Math.max(b.radius, 0.01);
     V.frameBox(b, [V.activeCam()]);
-    toast(`framed ${D.targets[D.lastTarget].id} (${pts.length} vertices)`);
+    toast(tr("designer.framed_target", { target: D.targets[D.lastTarget].id, count: pts.length }));
   } else if (D.lastPick) {
     V.frameBox({ centre: D.lastPick, radius: 0.03 }, [V.activeCam()]);
-    toast("framed the picked point");
-  } else { toast("nothing selected: move a slider or double-click the surface first"); return; }
+    toast(tr("designer.framed_point"));
+  } else { toast(tr("designer.nothing_selected")); return; }
   V.pivotFlash = 0.6;
   request(false);
 }
@@ -748,7 +751,7 @@ async function ensureReference() {
     else if (D.refSource === "snapshot") ref = head.cpuPos ? head.cpuPos.slice() : null;
     else {
       if (!D.neutral) {
-        toast("settling the neutral base for the reference");
+        toast(tr("designer.settling_neutral"));
         const input = { store, ...D.base, placement: D.start.placement, name: "neutral", weights: {} };
         if (opt("eyes")) input.eyes = opt("eyes");
         D.neutral = decodeF32((await api("designer.settle", input)).positions_f32_b64);
@@ -757,7 +760,7 @@ async function ensureReference() {
     }
     V.setReference(ref);
     request(false);
-  } catch (e) { toast(`reference failed: ${e.message}`); }
+  } catch (e) { toast(tr("designer.reference_failed", { error: e.message })); }
 }
 
 function screenshot(which) {
@@ -775,7 +778,7 @@ function screenshot(which) {
 function visItems() {
   const items = [];
   for (const m of V.meshes.values()) items.push({ kind: "mesh", id: m.id, label: m.label || m.id, on: m.visible });
-  for (const o of V.overlays.values()) items.push({ kind: "overlay", id: o.id, label: `${o.id} (overlay)`, on: o.visible });
+  for (const o of V.overlays.values()) items.push({ kind: "overlay", id: o.id, label: tr("designer.overlay_item", { id: o.id }), on: o.visible });
   return items;
 }
 function visState() { return visItems().map((x) => [x.kind, x.id, x.on]); }
@@ -793,14 +796,14 @@ function visEdit(label, mutate) {
   pushUndo({ label, undo: () => applyVis(before), redo: () => applyVis(after) });
 }
 function setVisible(kind, id, on) {
-  visEdit(`${on ? "show" : "hide"} ${id}`, () => { const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id); if (t) t.visible = on; });
+  visEdit(on ? tr("designer.undo.show", { what: id }) : tr("designer.undo.hide", { what: id }), () => { const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id); if (t) t.visible = on; });
 }
 function isolate(kind, id) {
-  visEdit(`isolate ${id}`, () => { for (const m of V.meshes.values()) m.visible = kind === "mesh" && m.id === id; for (const o of V.overlays.values()) o.visible = kind === "overlay" && o.id === id; });
+  visEdit(tr("designer.undo.isolate", { what: id }), () => { for (const m of V.meshes.values()) m.visible = kind === "mesh" && m.id === id; for (const o of V.overlays.values()) o.visible = kind === "overlay" && o.id === id; });
 }
 function showAll() {
-  visEdit("show everything", () => { for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
-  if (V.opts.hiddenRegions) setRegionMask(0, "show all regions");
+  visEdit(tr("designer.undo.show_all"), () => { for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
+  if (V.opts.hiddenRegions) setRegionMask(0, tr("designer.undo.show_regions"));
 }
 function renderVisibility() {
   const box = $("visibility");
@@ -809,7 +812,7 @@ function renderVisibility() {
   for (const it of visItems()) {
     const row = document.createElement("div");
     row.className = "vis";
-    row.innerHTML = `<label><input type="checkbox" ${it.on ? "checked" : ""}> ${escapeHtml(it.label)}</label><button class="small">isolate</button>`;
+    row.innerHTML = `<label><input type="checkbox" ${it.on ? "checked" : ""}> ${escapeHtml(it.label)}</label><button class="small">${tr("designer.isolate")}</button>`;
     row.querySelector("input").addEventListener("change", (e) => setVisible(it.kind, it.id, e.target.checked));
     row.querySelector("button").addEventListener("click", () => isolate(it.kind, it.id));
     box.appendChild(row);
@@ -830,8 +833,8 @@ function renderRegions() {
     const row = document.createElement("label");
     row.className = "region";
     const hidden = (V.opts.hiddenRegions >>> i) & 1;
-    row.innerHTML = `<input type="checkbox" ${hidden ? "" : "checked"}> ${escapeHtml(name)} <span class="muted">${D.regions.counts[i]}</span>`;
-    row.querySelector("input").addEventListener("change", (e) => setRegionMask(e.target.checked ? V.opts.hiddenRegions & ~(1 << i) : V.opts.hiddenRegions | (1 << i), `${e.target.checked ? "show" : "hide"} region ${name}`));
+    row.innerHTML = `<input type="checkbox" ${hidden ? "" : "checked"}> ${escapeHtml(tr(`category.${name}`, null, name))} <span class="muted">${D.regions.counts[i]}</span>`;
+    row.querySelector("input").addEventListener("change", (e) => setRegionMask(e.target.checked ? V.opts.hiddenRegions & ~(1 << i) : V.opts.hiddenRegions | (1 << i), e.target.checked ? tr("designer.undo.show_region", { name }) : tr("designer.undo.hide_region", { name })));
     box.appendChild(row);
   });
 }
@@ -864,7 +867,7 @@ function bindOpt(el) {
     boxBefore = null;
     if (before === after) return;
     const apply = (s) => { Object.assign(V.opts.box, JSON.parse(s)); refreshOpts(); request(false); };
-    pushUndo({ label: path[1] === "on" ? `${V.opts.box.on ? "hide" : "show"} box region` : "move the hide box", undo: () => apply(before), redo: () => apply(after) });
+    pushUndo({ label: path[1] === "on" ? (V.opts.box.on ? tr("designer.undo.box_hide") : tr("designer.undo.box_show")) : tr("designer.undo.box_move"), undo: () => apply(before), redo: () => apply(after) });
   });
   D.optWriters.push(write);
   write();
@@ -889,7 +892,7 @@ function toggleOpt(path, label) {
   holder[key] = !holder[key];
   refreshOpts();
   if (path === "seams" && needUV() && !D.placedUVs && D.ready) settle();
-  toast(`${label} ${holder[key] ? "on" : "off"}`);
+  toast(holder[key] ? tr("designer.on", { what: label }) : tr("designer.off", { what: label }));
   request(false);
   saveSettings();
 }
@@ -899,7 +902,7 @@ function refreshToolbar() {
   $("mode").value = String(st.mode);
   $("lod").value = String(st.lod);
   document.querySelectorAll("#layout button").forEach((b) => b.classList.toggle("on", b.dataset.layout === V.layout));
-  $("proj").querySelector("span").textContent = cam.ortho ? "ortho" : "persp";
+  $("proj").querySelector("span").textContent = cam.ortho ? tr("designer.ortho") : tr("ui.persp");
   $("proj").classList.toggle("on", cam.ortho);
   $("fov").value = cam.goal.fov;
   $("fov-val").textContent = `${cam.goal.fov.toFixed(0)}°`;
@@ -909,10 +912,10 @@ function refreshToolbar() {
 
 function buildControls() {
   const mode = $("mode");
-  MODES.forEach((m, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = m.label; mode.appendChild(o); });
+  MODES.forEach((m, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = tr(`mode.${m.id}`); mode.appendChild(o); });
   mode.addEventListener("input", () => setMode(Number(mode.value)));
   const lod = $("lod"), head = V.meshes.get("head");
-  head.lods.forEach((l, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = `LOD${i} · ${l.tri} tris`; lod.appendChild(o); });
+  head.lods.forEach((l, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = tr("designer.lod_option", { level: i, triangles: l.tri }); lod.appendChild(o); });
   lod.addEventListener("input", () => setLod(Number(lod.value)));
   document.querySelectorAll("#layout button").forEach((b) => b.addEventListener("click", () => setLayout(b.dataset.layout)));
   let wantLayout = V.layout;
@@ -938,37 +941,37 @@ function buildControls() {
   $("ref").addEventListener("input", (e) => { D.refSource = e.target.value; ensureReference(); saveSettings(); });
   $("ref-now").addEventListener("click", () => { D.refSource = "snapshot"; $("ref").value = "snapshot"; ensureReference(); saveSettings(); });
   const preset = $("preset");
-  for (const [k, p] of Object.entries(LIGHT_PRESETS)) { const o = document.createElement("option"); o.value = k; o.textContent = p.label; preset.appendChild(o); }
-  const c = document.createElement("option"); c.value = "custom"; c.textContent = "custom"; preset.appendChild(c);
+  for (const k of Object.keys(LIGHT_PRESETS)) { const o = document.createElement("option"); o.value = k; o.textContent = tr(`preset.${k}`); preset.appendChild(o); }
+  const c = document.createElement("option"); c.value = "custom"; c.textContent = tr("preset.custom"); preset.appendChild(c);
   preset.value = D.preset;
   preset.addEventListener("input", () => applyPreset(preset.value));
   const lights = $("lights");
   for (let i = 0; i < MAX_LIGHTS; i++) {
     const row = document.createElement("div");
     row.className = "light";
-    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="lights.${i}.on"> light ${i + 1}</label>
-      <label>azimuth <input type="range" min="-180" max="180" step="1" data-opt="lights.${i}.az"><span class="val"></span></label>
-      <label>elevation <input type="range" min="-90" max="90" step="1" data-opt="lights.${i}.el"><span class="val"></span></label>
-      <label>intensity <input type="range" min="0" max="3" step="0.01" data-opt="lights.${i}.i"><span class="val"></span></label>
-      <label>colour K <input type="range" min="2000" max="12000" step="100" data-opt="lights.${i}.k"><span class="val"></span></label>`;
+    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="lights.${i}.on"> ${tr("designer.light_n", { n: i + 1 })}</label>
+      <label>${tr("designer.azimuth")} <input type="range" min="-180" max="180" step="1" data-opt="lights.${i}.az"><span class="val"></span></label>
+      <label>${tr("designer.elevation")} <input type="range" min="-90" max="90" step="1" data-opt="lights.${i}.el"><span class="val"></span></label>
+      <label>${tr("designer.intensity")} <input type="range" min="0" max="3" step="0.01" data-opt="lights.${i}.i"><span class="val"></span></label>
+      <label>${tr("designer.colour_k")} <input type="range" min="2000" max="12000" step="100" data-opt="lights.${i}.k"><span class="val"></span></label>`;
     lights.appendChild(row);
   }
   const clips = $("clips");
   for (let i = 0; i < 3; i++) {
     const row = document.createElement("div");
     row.className = "clip";
-    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="clip.${i}.on"> plane ${i + 1}</label>
-      <label>axis <select data-opt="clip.${i}.axis"><option value="x">x (left-right)</option><option value="y">y (front-back)</option><option value="z">z (up-down)</option><option value="free">free</option></select></label>
-      <label>offset <input type="range" min="-0.15" max="0.15" step="0.0005" data-opt="clip.${i}.offset" data-fmt="mm"><span class="val"></span></label>
-      <label>azimuth (free) <input type="range" min="-180" max="180" step="1" data-opt="clip.${i}.az"><span class="val"></span></label>
-      <label>elevation (free) <input type="range" min="-90" max="90" step="1" data-opt="clip.${i}.el"><span class="val"></span></label>
-      <label><input type="checkbox" data-opt="clip.${i}.flip"> keep the other side</label>
-      <label><input type="checkbox" data-opt="clip.${i}.slab"> slab, thickness <input type="range" min="0.0005" max="0.05" step="0.0005" data-opt="clip.${i}.thick" data-fmt="mm"><span class="val"></span></label>`;
+    row.innerHTML = `<label class="ttl"><input type="checkbox" data-opt="clip.${i}.on"> ${tr("designer.plane_n", { n: i + 1 })}</label>
+      <label>${tr("designer.axis")} <select data-opt="clip.${i}.axis"><option value="x">${tr("designer.axis_x")}</option><option value="y">${tr("designer.axis_y")}</option><option value="z">${tr("designer.axis_z")}</option><option value="free">${tr("designer.axis_free")}</option></select></label>
+      <label>${tr("designer.offset")} <input type="range" min="-0.15" max="0.15" step="0.0005" data-opt="clip.${i}.offset" data-fmt="mm"><span class="val"></span></label>
+      <label>${tr("designer.azimuth_free")} <input type="range" min="-180" max="180" step="1" data-opt="clip.${i}.az"><span class="val"></span></label>
+      <label>${tr("designer.elevation_free")} <input type="range" min="-90" max="90" step="1" data-opt="clip.${i}.el"><span class="val"></span></label>
+      <label><input type="checkbox" data-opt="clip.${i}.flip"> ${tr("designer.keep_other_side")}</label>
+      <label><input type="checkbox" data-opt="clip.${i}.slab"> ${tr("designer.slab")} <input type="range" min="0.0005" max="0.05" step="0.0005" data-opt="clip.${i}.thick" data-fmt="mm"><span class="val"></span></label>`;
     clips.appendChild(row);
   }
   document.querySelectorAll("[data-opt]").forEach(bindOpt);
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
-  $("help-list").innerHTML = SHORTCUTS.map(([k, what]) => `<tr><td><kbd>${escapeHtml(k)}</kbd></td><td>${escapeHtml(what)}</td></tr>`).join("");
+  $("help-list").innerHTML = SHORTCUTS.map(([k, id]) => `<tr><td><kbd>${escapeHtml(tr(`shortcut_key.${k}`, null, k))}</kbd></td><td>${escapeHtml(tr(`shortcut.${id}`))}</td></tr>`).join("");
   showTab(D.tab);
   refreshToolbar();
   renderHistory();
@@ -1030,13 +1033,13 @@ function interaction() {
   }, { passive: false });
   c.addEventListener("dblclick", (e) => {
     const hit = V.pick(e.clientX, e.clientY);
-    if (!hit) { toast("no surface under the cursor"); return; }
+    if (!hit) { toast(tr("designer.no_surface")); return; }
     const r = V.rectAt(e.clientX, e.clientY);
     V.cams[r.cam].set({ target: hit.point });
     D.lastPick = hit.point;
     D.lastTarget = -1;
     V.pivotFlash = 0.8;
-    toast(`pivot on ${hit.mesh} at ${hit.point.map((x) => (x * 1000).toFixed(1)).join(", ")} mm`);
+    toast(tr("designer.pivot", { mesh: hit.mesh, point: hit.point.map((x) => (x * 1000).toFixed(1)).join(", ") }));
     request(false);
   });
   window.addEventListener("resize", () => request(false));
@@ -1066,20 +1069,20 @@ function interaction() {
       case "f": e.shiftKey ? frameSelection() : frameHead(); break;
       case "l": setLayout({ single: "side", side: "quad", quad: "single" }[V.layout]); break;
       case "n": V.active = (V.active + 1) % V.rects().length; V.pivotFlash = 0.4; refreshToolbar(); break;
-      case "m": setMode(V.activeVp().mode + (e.shiftKey ? -1 : 1)); toast(MODES[V.activeVp().mode].label); break;
-      case "w": toggleOpt("wire", "wireframe"); break;
-      case "x": toggleOpt("xray", "hidden edges"); break;
-      case "p": toggleOpt("points", "vertex points"); break;
-      case "b": toggleOpt("backHi", "back-face highlight"); break;
-      case "e": toggleOpt("seams", "seams and boundaries"); break;
-      case "c": toggleOpt("clip.0.on", "clip plane 1"); break;
-      case "g": toggleOpt("lightGizmo", "light gizmo"); break;
+      case "m": setMode(V.activeVp().mode + (e.shiftKey ? -1 : 1)); toast(tr(`mode.${MODES[V.activeVp().mode].id}`)); break;
+      case "w": toggleOpt("wire", tr("designer.opt.wire")); break;
+      case "x": toggleOpt("xray", tr("designer.opt.xray")); break;
+      case "p": toggleOpt("points", tr("designer.opt.points")); break;
+      case "b": toggleOpt("backHi", tr("designer.opt.back")); break;
+      case "e": toggleOpt("seams", tr("designer.opt.seams")); break;
+      case "c": toggleOpt("clip.0.on", tr("designer.opt.clip")); break;
+      case "g": toggleOpt("lightGizmo", tr("designer.opt.gizmo")); break;
       case "h": if (e.altKey) showAll(); else setVisible("mesh", "head", !V.meshes.get("head").visible); break;
       case "i": isolate("mesh", "head"); break;
       case "k": screenshot(e.shiftKey ? "layout" : "viewport"); break;
-      case "t": toggleOpt("faceGrid", "face grid"); break;
-      case "d": setTheme(D.theme === "light" ? "dark" : "light"); toast(`${D.theme} interface`); break;
-      case "r": toggleOpt("normalGrid", "millimetre grid"); break;
+      case "t": toggleOpt("faceGrid", tr("designer.opt.grid")); break;
+      case "d": setTheme(D.theme === "light" ? "dark" : "light"); toast(D.theme === "light" ? tr("designer.theme_light") : tr("designer.theme_dark")); break;
+      case "r": toggleOpt("normalGrid", tr("designer.opt.mm")); break;
       case "q": setProbeMode(!D.probeMode); break;
       case "j": $("addr").classList.remove("hidden"); $("goto").focus(); $("goto").select(); break;
       case "[": setFov(V.activeCam().goal.fov - 5); break;
@@ -1111,7 +1114,7 @@ function placeEyes(report) {
   }
   D.eyesPlaced = report || null;
   const shaded = look && uvs.length === (pos.length / 3) * 2;
-  V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes", uvs: shaded ? uvs : null, parts: shaded ? parts : null, look: shaded ? look : null }, "eyes");
+  V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: tr("mesh.eyes"), uvs: shaded ? uvs : null, parts: shaded ? parts : null, look: shaded ? look : null }, "eyes");
   request(false);
 }
 
@@ -1156,7 +1159,7 @@ async function loadScene() {
   const sc = await api("designer.scene", eyeInput());
   D.scene = { lods: sc.lods.map((l) => ({ target: l.target, triangles: l.triangles, dropped: l.dropped_triangles })), eyes: sc.eyes };
   const head = V.setHead(D.n, D.indices, sc.triangle_uvs_f32_b64 ? decodeF32(sc.triangle_uvs_f32_b64) : null);
-  head.label = "head (LOD0)";
+  head.label = tr("mesh.head_lod0");
   for (const l of sc.lods) V.addHeadLod(decodeU32(l.triangles_u32_b64), decodeF32(l.triangle_uvs_f32_b64), `LOD ${l.target}`);
   await eyeLook(sc.eyes[0]?.model);
   setEyeBase(sc.eyes);
@@ -1180,7 +1183,7 @@ function ensureGrid() {
     V.setChart(uv, r.definition, anchors);
     request(false);
     return D.grid;
-  })().catch((e) => { D.gridPromise = null; toast(`face grid: ${e.message}`); throw e; });
+  })().catch((e) => { D.gridPromise = null; toast(tr("designer.err.grid", { error: e.message })); throw e; });
   return D.gridPromise;
 }
 
@@ -1276,14 +1279,14 @@ function describeAt(lod, tri, bary, point) {
 function showCard(p) {
   $("addr").classList.remove("hidden");
   $("addr-line").textContent = p ? p.address : "";
-  $("addr-note").textContent = p && p.lod0 && p.lod > 0 ? `a pin goes to the closest LOD0 surface point, ${p.lod0.err_mm.toFixed(3)} mm from this LOD${p.lod} point` : "";
+  $("addr-note").textContent = p && p.lod0 && p.lod > 0 ? tr("designer.pin_lod_note", { mm: p.lod0.err_mm.toFixed(3), level: p.lod }) : "";
   $("addr-copy").disabled = $("addr-pin").disabled = !p;
 }
 
 async function probeAt(clientX, clientY) {
   await ensureGrid();
   const hit = V.pick(clientX, clientY);
-  if (!hit || hit.mesh !== "head") { toast(hit ? `probe: ${hit.mesh} is not the head` : "no surface under the cursor"); return null; }
+  if (!hit || hit.mesh !== "head") { toast(hit ? tr("designer.probe_not_head", { mesh: hit.mesh }) : tr("designer.no_surface")); return null; }
   const p = describeAt(hit.lod, hit.triangle, hit.bary, hit.point);
   p.lod0 = toLod0(hit);
   D.probe = p;
@@ -1326,7 +1329,7 @@ async function goTo(text) {
   V.flash = { pos: target, until: performance.now() + 2500 };
   D.lastPick = target;
   D.lastGoTo = { text: t, target, what, warning: warn };
-  toast(`go to ${what}${warn}`);
+  toast(tr("designer.go_to", { what, warn }));
   request(false);
   return D.lastGoTo;
 }
@@ -1380,7 +1383,7 @@ function makeApi(panelId) {
 function setProbeMode(on) {
   D.probeMode = !!on;
   $("probe-mode").checked = D.probeMode;
-  toast(`probe mode ${D.probeMode ? "on: click a surface point" : "off"}`);
+  toast(D.probeMode ? tr("designer.probe_on") : tr("designer.probe_off"));
 }
 
 function gridControls() {
@@ -1388,12 +1391,12 @@ function gridControls() {
   $("addr-close").addEventListener("click", () => $("addr").classList.add("hidden"));
   $("addr-copy").addEventListener("click", async () => {
     if (!D.probe) return;
-    try { await navigator.clipboard.writeText(D.probe.address); toast("address copied"); }
-    catch { const r = document.createRange(); r.selectNodeContents($("addr-line")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("clipboard refused: the line is selected, press Ctrl+C"); }
+    try { await navigator.clipboard.writeText(D.probe.address); toast(tr("designer.copied")); }
+    catch { const r = document.createRange(); r.selectNodeContents($("addr-line")); getSelection().removeAllRanges(); getSelection().addRange(r); toast(tr("designer.clipboard_refused")); }
   });
   $("addr-pin").addEventListener("click", () => {
     if (!D.probe) return;
-    if (!D.pinListeners.length) { toast("the Pins panel is not loaded"); return; }
+    if (!D.pinListeners.length) { toast(tr("designer.pins_not_loaded")); return; }
     for (const cb of D.pinListeners) { try { cb(D.probe); } catch (e) { console.error(e); } }
   });
   const go = () => goTo($("goto").value).catch((e) => toast(e.message));
@@ -1409,7 +1412,7 @@ function gridControls() {
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4 || !(d.alt || D.probeMode)) return;
     const b = c.getBoundingClientRect();
     if (e.clientX < b.left || e.clientX >= b.right || e.clientY < b.top || e.clientY >= b.bottom) return;
-    probeAt(e.clientX, e.clientY).catch((err) => toast(`probe: ${err.message}`));
+    probeAt(e.clientX, e.clientY).catch((err) => toast(tr("designer.err.probe", { error: err.message })));
   }, true);
   let hoverAt = 0, hoverT = 0;
   const hover = (x, y) => {
@@ -1444,12 +1447,12 @@ window.GF = {
 async function loadPanels() {
   const box = $("panels");
   let ids = [];
-  try { ids = await (await fetch("panels/index.json", { cache: "no-store" })).json(); } catch (e) { box.innerHTML = `<div class="note">no panels/index.json: ${escapeHtml(e.message)}</div>`; return; }
+  try { ids = await (await fetch("panels/index.json", { cache: "no-store" })).json(); } catch (e) { box.innerHTML = `<div class="note">${escapeHtml(tr("designer.no_panels", { error: e.message }))}</div>`; return; }
   if (!Array.isArray(ids)) ids = [];
   for (const [k, id] of ids.entries()) {
     if (typeof id !== "string" || !/^[A-Za-z0-9_-]+$/.test(id)) continue;
     const before = D.panelDefs.length;
-    try { await import(`./panels/${id}.js`); } catch (e) { D.panels.push({ id, error: e.message }); box.insertAdjacentHTML("beforeend", `<div class="note">panel ${escapeHtml(id)} failed to load: ${escapeHtml(e.message)}</div>`); continue; }
+    try { await import(`./panels/${id}.js`); } catch (e) { D.panels.push({ id, error: e.message }); box.insertAdjacentHTML("beforeend", `<div class="note">${escapeHtml(tr("designer.panel_load_failed", { id, error: e.message }))}</div>`); continue; }
     for (const def of D.panelDefs.slice(before)) def._index = k;
   }
   const defs = [...D.panelDefs].sort((a, b) => (a.order ?? a._index ?? 0) - (b.order ?? b._index ?? 0) || (a._index ?? 0) - (b._index ?? 0));
@@ -1457,7 +1460,7 @@ async function loadPanels() {
     const d = document.createElement("details");
     d.className = "panel";
     d.open = true;
-    d.innerHTML = `<summary>${escapeHtml(def.title || def.id)}</summary><div class="panel-body"></div>`;
+    d.innerHTML = `<summary>${escapeHtml(tr(`panel.${def.id}`, null, def.title || def.id))}</summary><div class="panel-body"></div>`;
     box.appendChild(d);
     try {
       const ret = def.mount(d.querySelector(".panel-body"), makeApi(def.id)) || {};
@@ -1466,7 +1469,7 @@ async function loadPanels() {
       if (getState || setState) D.panelHooks.set(def.id, { getState, setState });
       D.panels.push({ id: def.id, mounted: true, state: !!getState });
     }
-    catch (e) { d.querySelector(".panel-body").innerHTML = `<div class="note">mount failed: ${escapeHtml(e.message)}</div>`; D.panels.push({ id: def.id, error: e.message }); }
+    catch (e) { d.querySelector(".panel-body").innerHTML = `<div class="note">${escapeHtml(tr("designer.mount_failed", { error: e.message }))}</div>`; D.panels.push({ id: def.id, error: e.message }); }
   }
   renderVisibility();
   if (D.settled) notify("settle", { positions: D.settledPositions, measurements: D.settled.measurements, revision: D.settled.revision, placement: D.settled.placement });
@@ -1474,12 +1477,12 @@ async function loadPanels() {
 
 async function save() {
   const out = $("out").value.trim();
-  if (!out) { $("saved").textContent = "give a path"; return; }
+  if (!out) { $("saved").textContent = tr("designer.give_path"); return; }
   try {
     const input = { ...settleInput(), out };
     delete input.eyes;
     const r = await api("designer.save", input);
-    $("saved").textContent = `saved ${r.out} (${r.revision})`;
+    $("saved").textContent = tr("designer.saved_spec", { out: r.out, revision: r.revision });
   } catch (e) {
     $("saved").textContent = e.message;
   }
@@ -1547,7 +1550,7 @@ function applyPanelStates(states) {
   for (const [id, s] of Object.entries(states)) {
     const h = D.panelHooks.get(id);
     if (!h?.setState) continue;
-    try { h.setState(s); } catch (e) { toast(`panel ${id} could not restore its state: ${e.message}`); }
+    try { h.setState(s); } catch (e) { toast(tr("designer.panel_restore_failed", { id, error: e.message })); }
   }
 }
 
@@ -1575,11 +1578,11 @@ function scheduleDirty() {
 function updateDirty() {
   if (!D.ready || P.savedSig === null) return;
   P.dirty = P.recovered || P.relinked || projectSig() !== P.savedSig;
-  const label = P.name || "untitled";
+  const label = P.name || tr("designer.untitled");
   $("p-name").textContent = label;
   $("p-name").classList.toggle("dirty", P.dirty);
-  $("p-name").title = P.dirty ? "unsaved changes" : "saved";
-  document.title = `${P.dirty ? "* " : ""}${label} - GazeForge Designer`;
+  $("p-name").title = P.dirty ? tr("designer.unsaved") : tr("designer.saved");
+  document.title = tr("designer.doc_title", { dirty: P.dirty ? "* " : "", name: label });
 }
 
 function projectInput(name) {
@@ -1600,16 +1603,16 @@ async function renderRecent() {
     const have = new Set(l.projects.filter((p) => !p.error).map((p) => p.name));
     names = [...names.filter((n) => have.has(n)), ...l.projects.filter((p) => !p.error && !names.includes(p.name)).map((p) => p.name)].slice(0, 8);
   } catch {}
-  sel.innerHTML = `<option value="">recent…</option>` + names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+  sel.innerHTML = `<option value="">${tr("ui.option.recent")}</option>` + names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
 }
 
 function renderProjectTab() {
   const doc = P.doc;
   $("p-info").textContent = doc
-    ? `${doc.name}: saved ${doc.modified}, created ${doc.created}; store ${doc.store}; base pack ${doc.base.pack.slice(0, 19)}…, ${doc.base.blobs} base blobs`
-    : "untitled: not saved yet (Save As names it)";
+    ? tr("designer.project_info", { name: doc.name, modified: doc.modified, created: doc.created, store: doc.store, pack: doc.base.pack.slice(0, 19), blobs: doc.base.blobs })
+    : tr("designer.project_unsaved");
   $("p-chars").innerHTML = (doc ? doc.characters : [{ id: "c1", name: D.start.name, revision: "", history: [] }])
-    .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.id)} ${escapeHtml((c.revision || "").slice(0, 15))} · ${(c.history || []).length} revisions</span></li>`).join("");
+    .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.id)} ${escapeHtml((c.revision || "").slice(0, 15))} · ${tr("designer.revisions", { n: (c.history || []).length })}</span></li>`).join("");
   $("p-export").disabled = !P.name;
 }
 
@@ -1626,7 +1629,7 @@ function projectUrl(name, extra = {}) {
   return `${location.pathname}?${q}`;
 }
 
-function dialog({ title, note = "", name = null, list = null, ok = "OK" }) {
+function dialog({ title, note = "", name = null, list = null, ok = tr("ui.p-dlg-ok") }) {
   return new Promise((resolve) => {
     const box = $("p-dialog"), input = $("p-dlg-name"), ul = $("p-dlg-list");
     $("p-dlg-title").textContent = title;
@@ -1662,13 +1665,13 @@ function dialog({ title, note = "", name = null, list = null, ok = "OK" }) {
 async function confirmDiscard(what) {
   updateDirty();
   if (!P.dirty) return true;
-  return !!(await dialog({ title: "Unsaved changes", note: `${P.name || "untitled"} has unsaved changes; ${what} discards them (its autosave stays recoverable until you save or discard it).`, ok: "discard changes" }));
+  return !!(await dialog({ title: tr("designer.unsaved"), note: tr("designer.discard_note", { name: P.name || tr("designer.untitled"), what }), ok: tr("designer.discard_changes") }));
 }
 
 async function saveProject(asName) {
   const name = asName || P.name;
   if (!name) return saveProjectAs();
-  if (D.start.macros && !D.macros?.available) { toast("this character has macro sliders: open it with its macro definition (macro) to save it"); return false; }
+  if (D.start.macros && !D.macros?.available) { toast(tr("designer.needs_macro")); return false; }
   const was = P.name;
   P.saving = true;
   try {
@@ -1688,18 +1691,18 @@ async function saveProject(asName) {
     renderRecent();
     renderProjectTab();
     updateDirty();
-    $("p-status").textContent = `saved ${r.path} (${r.bytes} bytes) at ${r.modified}`;
-    toast(`saved ${name}`);
+    $("p-status").textContent = tr("designer.project_saved", { path: r.path, bytes: r.bytes, modified: r.modified });
+    toast(tr("designer.saved_name", { name }));
     return true;
   } catch (e) {
-    $("p-status").textContent = `save failed: ${e.message}`;
-    toast(`save failed: ${e.message}`);
+    $("p-status").textContent = tr("designer.save_failed", { error: e.message });
+    toast(tr("designer.save_failed", { error: e.message }));
     return false;
   } finally { P.saving = false; }
 }
 
 async function saveProjectAs() {
-  const name = await dialog({ title: "Save project as", note: "1 to 64 letters, digits, spaces, '_', '-' or '.'", name: P.name || D.start.name || "" , ok: "save" });
+  const name = await dialog({ title: tr("designer.save_as_title"), note: tr("designer.name_rule"), name: P.name || D.start.name || "" , ok: tr("designer.save") });
   if (!name) return false;
   return saveProject(name);
 }
@@ -1707,17 +1710,17 @@ async function saveProjectAs() {
 async function openProject(name) {
   if (!name) {
     let items = [];
-    try { items = (await api("project.list", rootArg())).projects.filter((p) => !p.error).map((p) => ({ value: p.name, label: `${p.name} · ${p.modified} · ${p.characters} character(s)` })); } catch (e) { toast(e.message); return; }
-    if (!items.length) { toast("no saved projects yet"); return; }
-    name = await dialog({ title: "Open project", list: items, ok: "open" });
+    try { items = (await api("project.list", rootArg())).projects.filter((p) => !p.error).map((p) => ({ value: p.name, label: tr("designer.project_row", { name: p.name, modified: p.modified, count: p.characters }) })); } catch (e) { toast(e.message); return; }
+    if (!items.length) { toast(tr("designer.no_projects")); return; }
+    name = await dialog({ title: tr("designer.open_title"), list: items, ok: tr("designer.open") });
     if (!name) return;
   }
-  if (!(await confirmDiscard(`opening ${name}`))) return;
+  if (!(await confirmDiscard(tr("designer.frag.opening", { name })))) return;
   leave(projectUrl(name));
 }
 
 async function newProject() {
-  if (!(await confirmDiscard("a new project"))) return;
+  if (!(await confirmDiscard(tr("designer.frag.new_project")))) return;
   const extra = { store };
   for (const k of PROJECT_OPTIONS) if (opt(k)) extra[k] = opt(k);
   leave(projectUrl(null, extra));
@@ -1741,9 +1744,9 @@ async function autosave(reason = "settle") {
     P.autosaves++;
     P.lastAutosave = r.modified;
     P.unresolved = r.unresolved || [];
-    $("p-status").textContent = `autosaved (${reason}) at ${r.modified}` + (P.unresolved.length ? `; not found, kept as typed: ${unresolvedText(P.unresolved)}` : "");
+    $("p-status").textContent = tr("designer.autosaved", { reason, modified: r.modified }) + (P.unresolved.length ? tr("designer.not_found_suffix", { list: unresolvedText(P.unresolved) }) : "");
   } catch (e) {
-    $("p-status").textContent = `autosave failed: ${e.message}`;
+    $("p-status").textContent = tr("designer.autosave_failed", { error: e.message });
   } finally { P.autosaving = false; }
 }
 
@@ -1754,7 +1757,7 @@ function unresolvedText(list) {
 function relinkDialog(unresolved, message, given) {
   return new Promise((resolve) => {
     const box = $("p-relink"), rows = $("p-relink-rows");
-    $("p-relink-note").textContent = `${message}. Give the new location of each, then retry.`;
+    $("p-relink-note").textContent = tr("designer.relink_note", { message });
     rows.innerHTML = "";
     const items = [];
     for (const u of unresolved) {
@@ -1769,7 +1772,7 @@ function relinkDialog(unresolved, message, given) {
       const input = document.createElement("input");
       input.type = "text";
       input.className = "wide";
-      input.placeholder = "path of the file or folder";
+      input.placeholder = tr("designer.relink_path");
       input.value = given[u.role] || "";
       row.append(label, why, input);
       let skip = null;
@@ -1777,7 +1780,7 @@ function relinkDialog(unresolved, message, given) {
         const l = document.createElement("label");
         skip = document.createElement("input");
         skip.type = "checkbox";
-        l.append(skip, document.createTextNode(" open without it"));
+        l.append(skip, document.createTextNode(" " + tr("designer.open_without")));
         row.append(l);
       }
       rows.append(row);
@@ -1807,7 +1810,7 @@ async function offerRecovery() {
   try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
   if (!slot) return;
   P.recoveryOffer = slot;
-  $("p-recover-text").textContent = `Unsaved work on ${slot.name} from ${slot.modified} was kept by autosave (the last session ended without saving).`;
+  $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: slot.modified });
   $("p-recover").classList.remove("hidden");
 }
 
@@ -1819,8 +1822,8 @@ function buildProjectControls() {
   $("p-recent").addEventListener("input", (e) => { const n = e.target.value; e.target.value = ""; if (n) openProject(n); });
   $("p-notes").addEventListener("input", scheduleDirty);
   $("p-export").addEventListener("click", async () => {
-    try { const r = await api("project.export", { name: P.name, ...rootArg() }); $("p-status").textContent = `portable file ${r.out} (${r.bytes} bytes, ${r.character_blobs} character blobs)`; }
-    catch (e) { $("p-status").textContent = `export failed: ${e.message}`; }
+    try { const r = await api("project.export", { name: P.name, ...rootArg() }); $("p-status").textContent = tr("designer.portable", { out: r.out, bytes: r.bytes, blobs: r.character_blobs }); }
+    catch (e) { $("p-status").textContent = tr("designer.export_failed", { error: e.message }); }
   });
   $("p-chars").addEventListener("click", async (e) => {
     const li = e.target.closest("li");
@@ -1831,7 +1834,7 @@ function buildProjectControls() {
   $("p-restore").addEventListener("click", () => { $("p-recover").classList.add("hidden"); leave(projectUrl(slotName(), { recovery: 1, ...(P.name ? {} : { store }) })); });
   $("p-discard").addEventListener("click", async () => {
     $("p-recover").classList.add("hidden");
-    try { await api("project.discard", { name: slotName(), ...rootArg() }); toast("autosave discarded"); } catch (e) { toast(e.message); }
+    try { await api("project.discard", { name: slotName(), ...rootArg() }); toast(tr("designer.autosave_discarded")); } catch (e) { toast(e.message); }
   });
   window.addEventListener("beforeunload", (e) => {
     updateDirty();
@@ -1900,11 +1903,13 @@ function wireTasks() {
 }
 
 async function main() {
-  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(`tasks: ${e.message}`)));
+  await loadLocale(params.get("lang") || navigator.language);
+  applyDom();
+  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(tr("designer.err.tasks", { error: e.message }))));
   wireTasks();
   const doc = await loadProjectDoc();
   if (!store) {
-    setStatus("preview", "open this page with ?store=<store path> (optional &spec=, &macro=, &eyes=) or ?project=<name>");
+    setStatus("preview", tr("designer.no_store"));
     return;
   }
   const startFrom = doc ? { character: doc.characters[P.active].spec } : { spec: opt("spec") };
@@ -1924,7 +1929,7 @@ async function main() {
   const blob = await (await fetch(`/v1/blob/${hex}?store=${encodeURIComponent(store)}`)).arrayBuffer();
   await loadKernel(pack, blob);
   gl = await context();
-  if (!gl) throw new Error("WebGL2 is not available in this browser (on some Windows boxes Chrome needs --use-angle=gl)");
+  if (!gl) throw new Error(tr("designer.no_webgl"));
   for (let attempt = 0; !V; attempt++) {
     if (gl.isContextLost()) await new Promise((r) => { gl.canvas.addEventListener("webglcontextrestored", r, { once: true }); setTimeout(r, 15000); });
     try { V = new Viewer(gl, $("vps")); } catch (e) { if (!gl.isContextLost() || attempt >= 2) throw e; }
@@ -1955,8 +1960,8 @@ async function main() {
     applyPanelStates(doc.panels);
   }
   buildProjectControls();
-  if (P.loadUnresolved?.length) $("p-status").textContent = `not found, kept as typed: ${unresolvedText(P.loadUnresolved)}`;
-  else if (P.relinked) $("p-status").textContent = "resources relinked: save to keep the new locations";
+  if (P.loadUnresolved?.length) $("p-status").textContent = tr("designer.not_found", { list: unresolvedText(P.loadUnresolved) });
+  else if (P.relinked) $("p-status").textContent = tr("designer.relinked");
   D.ui = { setMode, setLod, setLayout, namedView, homeView, setTheme, cube: { snap: cubeSnap, pointOf: (slot, name) => D.cube.pointOf(slot, name), buttonOf: (slot, act) => D.cube.buttonOf(slot, act) }, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
            setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"), macroReady: (name) => !!macroSampled(name),
            grid: { ensureGrid, probeAt, goTo, describeAt, pointOf, toLod0, setProbeMode, headPos },
@@ -1969,4 +1974,4 @@ async function main() {
 }
 
 setTheme(D.theme, false);
-main().catch((e) => { setStatus("preview", `error: ${e.message}`); D.error = e.message; console.error(e); });
+main().catch((e) => { setStatus("preview", tr("designer.err.main", { error: e.message })); D.error = e.message; console.error(e); });

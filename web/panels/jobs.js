@@ -1,3 +1,5 @@
+import { tr } from "../i18n.js";
+
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const when = (ms) => (ms ? new Date(ms).toLocaleTimeString() : "");
 const took = (j) => (j.finished_ms && j.started_ms ? `${((j.finished_ms - j.started_ms) / 1000).toFixed(1)} s` : "");
@@ -7,17 +9,17 @@ window.GF.registerPanel({
   title: "Jobs",
   order: 90,
   mount(root, api) {
-    root.innerHTML = `<div class="jobs-list"><div class="note">no jobs yet</div></div>`;
+    root.innerHTML = `<div class="jobs-list"><div class="note">${tr("jobs.none")}</div></div>`;
     const list = root.querySelector(".jobs-list");
     let timer = 0;
     const render = (r) => {
-      if (!r.jobs.length) { list.innerHTML = `<div class="note">no jobs in ${esc(r.jobs_dir)}</div>`; return; }
+      if (!r.jobs.length) { list.innerHTML = `<div class="note">${esc(tr("jobs.none_in", { dir: r.jobs_dir }))}</div>`; return; }
       list.innerHTML = r.jobs.map((j) => {
         const p = j.progress, frac = p && p.total ? Math.round((100 * p.done) / p.total) : 0;
         const live = j.state === "running" || j.state === "queued";
         return `<div class="job st-${esc(j.state)}" title="${esc(j.id)}">
-          <div class="job-head"><b>${esc(j.command)}</b><span class="job-state">${esc(j.state)}${j.ok === false ? " (failed)" : ""}</span>
-            ${live ? `<button class="small job-cancel" data-id="${esc(j.id)}">cancel</button>` : ""}</div>
+          <div class="job-head"><b>${esc(j.command)}</b><span class="job-state">${esc(tr(`job.state.${j.state}`, null, j.state))}${j.ok === false ? ` ${tr("jobs.failed")}` : ""}</span>
+            ${live ? `<button class="small job-cancel" data-id="${esc(j.id)}">${tr("jobs.cancel")}</button>` : ""}</div>
           <div class="note">${when(j.submitted_ms)} ${took(j)}${j.error ? ` · ${esc(j.error)}` : ""}</div>
           ${live && p ? `<div class="wz-progress"><div class="bar"><i style="width:${frac}%"></i></div><span class="msg">${esc(p.stage)} ${p.done}/${p.total}</span></div>` : ""}
         </div>`;

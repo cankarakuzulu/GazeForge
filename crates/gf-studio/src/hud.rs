@@ -3,6 +3,8 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
+use crate::i18n::trf;
+
 pub struct Ring {
     cap: usize,
     v: VecDeque<f64>,
@@ -105,14 +107,14 @@ impl Hud {
             _ => "-".into(),
         };
         vec![
-            format!("present {:.1} Hz", self.present_hz()),
-            format!("frame interval p50/p95 {}", q(&self.frame_interval)),
-            format!("frame cpu p50/p95 {}", q(&self.frame_cpu)),
-            format!("preview compute p50/p95 {}", q(&self.preview_compute)),
-            format!("input to preview p50/p95 {}", q(&self.preview_latency)),
-            format!("settle latency p50/p95 {}", q(&self.settle_latency)),
-            format!("macro slope p50/p95 {}", q(&self.slope)),
-            format!("macro samples p50/p95 {}", q(&self.samples)),
+            trf("studio.hud.present", &[("v", &format!("{:.1}", self.present_hz()))]),
+            trf("studio.hud.interval", &[("v", &q(&self.frame_interval))]),
+            trf("studio.hud.cpu", &[("v", &q(&self.frame_cpu))]),
+            trf("studio.hud.compute", &[("v", &q(&self.preview_compute))]),
+            trf("studio.hud.latency", &[("v", &q(&self.preview_latency))]),
+            trf("studio.hud.settle", &[("v", &q(&self.settle_latency))]),
+            trf("studio.hud.slope", &[("v", &q(&self.slope))]),
+            trf("studio.hud.samples", &[("v", &q(&self.samples))]),
         ]
     }
 

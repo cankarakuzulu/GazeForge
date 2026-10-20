@@ -239,13 +239,13 @@ impl ShapeModel {
             ShapeEvent::Reset => {
                 let before = self.live.clone();
                 if before != self.start {
-                    self.push("reset all sliders".into(), self.committed.clone(), self.start.clone());
+                    self.push(crate::i18n::tr("designer.undo.reset").into(), self.committed.clone(), self.start.clone());
                     self.live = self.start.clone();
                     self.committed = self.start.clone();
                     self.generation += 1;
                     out.preview = true;
                     out.settle = true;
-                    out.committed = Some("reset all sliders".into());
+                    out.committed = Some(crate::i18n::tr("designer.undo.reset").into());
                 }
             }
         }

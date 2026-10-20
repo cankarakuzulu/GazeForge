@@ -1,3 +1,4 @@
+import { tr } from "./i18n.js";
 const FACES = [
   ["front", [0, -1, 0], [1, 0, 0], [0, 0, 1]],
   ["back", [0, 1, 0], [-1, 0, 0], [0, 0, 1]],
@@ -6,7 +7,7 @@ const FACES = [
   ["left", [1, 0, 0], [0, 1, 0], [0, 0, 1]],
   ["right", [-1, 0, 0], [0, -1, 0], [0, 0, 1]],
 ];
-const LABELS = ["FRONT", "BACK", "TOP", "BOTTOM", "LEFT", "RIGHT"];
+const LABELS = ["front", "back", "top", "bottom", "left", "right"];
 const BORDER = 0.6;
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -114,8 +115,8 @@ export class ViewCube {
       svg.setAttribute("class", "vcube-svg");
       const btns = document.createElement("div");
       btns.className = "vcube-btns";
-      btns.innerHTML = `<button class="ib mini" data-act="home" title="Home view, framed (Home)"><svg class="ico"><use href="#i-house"/></svg></button>` +
-        `<button class="ib mini" data-act="three" title="Three-quarter view (9)"><svg class="ico"><use href="#i-rotate-3d"/></svg></button>`;
+      btns.innerHTML = `<button class="ib mini" data-act="home" title="${tr("cube.home")}"><svg class="ico"><use href="#i-house"/></svg></button>` +
+        `<button class="ib mini" data-act="three" title="${tr("cube.three")}"><svg class="ico"><use href="#i-rotate-3d"/></svg></button>`;
       wrap.append(svg, btns);
       this.layer.appendChild(wrap);
       const item = { spot, wrap, svg };
@@ -184,7 +185,7 @@ export class ViewCube {
       if (t > 0.2) {
         const [, n, a, b] = FACES[f], c = g.screen(n), sa = [dot(a, g.s) * g.r, -dot(a, g.u) * g.r], sb = [dot(b, g.s) * g.r, -dot(b, g.u) * g.r];
         const k = 1 / 64;
-        parts.push(`<text class="ct" style="opacity:${Math.min(1, (t - 0.2) / 0.4).toFixed(3)}" transform="matrix(${(sa[0] * k).toFixed(4)} ${(sa[1] * k).toFixed(4)} ${(-sb[0] * k).toFixed(4)} ${(-sb[1] * k).toFixed(4)} ${c[0].toFixed(2)} ${c[1].toFixed(2)})">${LABELS[f]}</text>`);
+        parts.push(`<text class="ct" style="opacity:${Math.min(1, (t - 0.2) / 0.4).toFixed(3)}" transform="matrix(${(sa[0] * k).toFixed(4)} ${(sa[1] * k).toFixed(4)} ${(-sb[0] * k).toFixed(4)} ${(-sb[1] * k).toFixed(4)} ${c[0].toFixed(2)} ${c[1].toFixed(2)})">${tr(`cube.${LABELS[f]}`)}</text>`);
       }
     }
     it.svg.innerHTML = parts.join("");

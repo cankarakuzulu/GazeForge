@@ -4,45 +4,45 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use serde_json::{Value, json};
 
-pub const ACTIONS: &[(&str, &str, &[&str])] = &[
-    ("frame", "frame the head in the active viewport", &["Alt+F"]),
-    ("layout", "cycle the layout: single, side by side, quad", &["Alt+L"]),
-    ("next_viewport", "make the next viewport active", &["Alt+N"]),
-    ("mode_next", "next render mode", &["Alt+M"]),
-    ("mode_prev", "previous render mode", &["Alt+Shift+M"]),
-    ("wire", "wireframe overlay", &["Alt+W"]),
-    ("xray", "hidden edges through the surface", &["Alt+X"]),
-    ("points", "vertex points", &["Alt+P"]),
-    ("back_faces", "back-face highlight", &["Alt+B"]),
-    ("seams", "UV seams and open boundaries", &["Alt+E"]),
-    ("clip", "clip plane 1", &["Alt+C"]),
-    ("eyes", "eye meshes", &["Alt+Y"]),
-    ("light_gizmo", "light direction gizmo", &["Alt+G"]),
-    ("theme", "dark or light viewport", &["Alt+T"]),
-    ("interface_theme", "dark or light interface", &["Alt+Shift+T"]),
-    ("screenshot", "save the active viewport as PNG", &["Alt+K"]),
-    ("screenshot_layout", "save the whole layout as PNG", &["Alt+Shift+K"]),
-    ("fov_down", "narrower field of view", &["Alt+OpenBracket"]),
-    ("fov_up", "wider field of view", &["Alt+CloseBracket"]),
-    ("lod_coarser", "coarser level of detail", &["Alt+Comma"]),
-    ("lod_finer", "finer level of detail", &["Alt+Period"]),
-    ("view_front", "front view", &["Alt+1"]),
-    ("view_back", "back view", &["Alt+Shift+1"]),
-    ("view_left", "left view", &["Alt+3"]),
-    ("view_right", "right view", &["Alt+Shift+3"]),
-    ("view_top", "top view", &["Alt+7"]),
-    ("view_bottom", "bottom view", &["Alt+Shift+7"]),
-    ("view_three_quarter", "three-quarter view", &["Alt+9"]),
-    ("view_home", "home view of the active viewport, framed", &["Alt+Home"]),
-    ("ortho", "orthographic or perspective", &["Alt+5", "Alt+O"]),
-    ("undo", "undo the last shape change", &["Ctrl+Z"]),
-    ("redo", "redo the last undone shape change", &["Ctrl+Y", "Ctrl+Shift+Z"]),
-    ("save_spec", "save the character spec", &["Ctrl+S"]),
-    ("reset_shape", "every slider back to the start values", &[]),
-    ("hud", "timings overlay", &["Alt+H"]),
-    ("help", "show the key map", &["F1"]),
-    ("bad_triangles", "show the bad triangles (smallest angle under the Topology limit)", &["Alt+Q"]),
-    ("topology_improve", "improve the topology of the game base (runs a job)", &[]),
+pub const ACTIONS: &[(&str, &[&str])] = &[
+    ("frame", &["Alt+F"]),
+    ("layout", &["Alt+L"]),
+    ("next_viewport", &["Alt+N"]),
+    ("mode_next", &["Alt+M"]),
+    ("mode_prev", &["Alt+Shift+M"]),
+    ("wire", &["Alt+W"]),
+    ("xray", &["Alt+X"]),
+    ("points", &["Alt+P"]),
+    ("back_faces", &["Alt+B"]),
+    ("seams", &["Alt+E"]),
+    ("clip", &["Alt+C"]),
+    ("eyes", &["Alt+Y"]),
+    ("light_gizmo", &["Alt+G"]),
+    ("theme", &["Alt+T"]),
+    ("interface_theme", &["Alt+Shift+T"]),
+    ("screenshot", &["Alt+K"]),
+    ("screenshot_layout", &["Alt+Shift+K"]),
+    ("fov_down", &["Alt+OpenBracket"]),
+    ("fov_up", &["Alt+CloseBracket"]),
+    ("lod_coarser", &["Alt+Comma"]),
+    ("lod_finer", &["Alt+Period"]),
+    ("view_front", &["Alt+1"]),
+    ("view_back", &["Alt+Shift+1"]),
+    ("view_left", &["Alt+3"]),
+    ("view_right", &["Alt+Shift+3"]),
+    ("view_top", &["Alt+7"]),
+    ("view_bottom", &["Alt+Shift+7"]),
+    ("view_three_quarter", &["Alt+9"]),
+    ("view_home", &["Alt+Home"]),
+    ("ortho", &["Alt+5", "Alt+O"]),
+    ("undo", &["Ctrl+Z"]),
+    ("redo", &["Ctrl+Y", "Ctrl+Shift+Z"]),
+    ("save_spec", &["Ctrl+S"]),
+    ("reset_shape", &[]),
+    ("hud", &["Alt+H"]),
+    ("help", &["F1"]),
+    ("bad_triangles", &["Alt+Q"]),
+    ("topology_improve", &[]),
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ pub fn default_path() -> Option<PathBuf> {
 
 pub fn defaults_json() -> Value {
     let mut m = serde_json::Map::new();
-    for (id, _, keys) in ACTIONS {
+    for (id, keys) in ACTIONS {
         m.insert(id.to_string(), json!(keys));
     }
     json!({"format": "gazeforge.keymap/1", "bindings": m,
@@ -95,7 +95,7 @@ pub fn defaults_json() -> Value {
 impl Keymap {
     pub fn defaults() -> Keymap {
         let mut bindings = Vec::new();
-        for (id, _, keys) in ACTIONS {
+        for (id, keys) in ACTIONS {
             for k in *keys {
                 bindings.push((id.to_string(), parse(k).expect("default bindings parse")));
             }
