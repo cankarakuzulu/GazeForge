@@ -16,5 +16,8 @@ pub mod measure;
 pub mod placement;
 pub mod rig;
 pub mod residual;
+pub mod skin_map;
+pub mod skin_regions;
+pub mod skin_texture;
 
 pub use gf_geom;

@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
 use crate::tasks::api;
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, wizards};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, skin, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -167,6 +167,24 @@ pub static REGISTRY: &[CommandDef] = &[
         input: eyes::textures_input,
         output: eyes::textures_output,
         run: eyes::textures,
+    },
+    CommandDef {
+        name: "skin.models",
+        kind: Kind::Query,
+        summary: "The procedural skin presets: tone (melanin, haemoglobin, undertone), regional redness, lips, under-eyes, freckles, moles, pores, age, stubble and its hair colour, T-zone oil.",
+        limits: "Presets are starting points; skin.generate takes a preset and overrides any field.",
+        input: skin::models_input,
+        output: skin::models_output,
+        run: skin::models,
+    },
+    CommandDef {
+        name: "skin.generate",
+        kind: Kind::Mutation,
+        summary: "Write a procedural skin for a game base as PNG: albedo, a tangent-space normal map (pores, fine lines) and an occlusion-roughness-metallic map, laid out on the game base's UVs. The skin is evaluated on the neutral base's surface in millimetres, so it has no UV seams and follows every character built on that base.",
+        limits: "Overwrites <id>.albedo.png, <id>.normal.png and <id>.orm.png in out. Deterministic per look (seeded). Needs the base's landmark table for its regions.",
+        input: skin::generate_input,
+        output: skin::generate_output,
+        run: skin::generate,
     },
     CommandDef {
         name: "grid.chart",

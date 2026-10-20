@@ -22,6 +22,7 @@ pub mod wizards;
 pub mod project;
 pub mod resources;
 pub mod schema;
+pub mod skin;
 pub mod zipsafe;
 
 pub use error::{ApiError, Code};

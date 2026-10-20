@@ -185,6 +185,18 @@ base alpha, so a viewer without transmission still shows the iris through it. Wi
 blending, and the iris and sclera textures as RGBA pixels), the same values the glb writes. `designer.scene` and
 `designer.eyes` (only the eyes, for a client that changes the model) take the spec's `eyeballs`: with a model they return
 its eyes at their rest place with UVs and parts instead of an eyes file's.
+**Procedural skin (in progress).** `skin.models` lists skin presets (12 today, fair to deep, young to elder, with and
+without stubble); `skin.generate` writes one for a game base as three PNGs on its UVs: albedo, a tangent-space normal map
+and an occlusion-roughness-metallic map (glTF's packing: roughness in green, metallic in blue). A look is data: tone from
+two pigments (`melanin`, `haemoglobin`) and an `undertone`, regional `redness` (cheeks, nose, ears, chin), `lip_tint`,
+`under_eye`, `freckles` and `freckle_size_mm`, `moles`, `pores`, `age` (spots, forehead and under-eye lines), `stubble`
+with its `hair` colour, and T-zone `oil`; `skin` overrides any field of the preset. Every texel is evaluated at its point
+on the neutral base's surface, in millimetres, so the skin has no UV seams and the same detail size everywhere, and it
+follows every character built on that base. Detail finer than about two texels fades out instead of aliasing, so a
+1024 texture is smooth and a 4096 one shows pores. The regions (lips, inner mouth, nose, cheeks, forehead, chin, upper
+lip, beard zone, under-eyes, eyelids, ears, scalp, neck, T-zone) come from the base's landmark table (`landmarks`:
+MediaPipe landmark to dense vertex) and the ears from how far the surface stands out of a smoothed head; `regions: true`
+also writes a picture of them. Not yet: the skin in the exported glb and in the clients, and skin from photos.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 
