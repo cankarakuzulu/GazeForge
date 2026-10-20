@@ -314,6 +314,7 @@ pub struct Opts {
     pub clip: Vec<ClipPlane>,
     pub clip_box: ClipBox,
     pub dark: bool,
+    pub bad: bool,
 }
 
 pub const MAX_LIGHTS: usize = 4;
@@ -362,6 +363,7 @@ impl Default for Opts {
                 .collect(),
             clip_box: ClipBox { on: false, lo: [0.4, 0.0, 0.4], hi: [1.0, 0.5, 1.0] },
             dark: true,
+            bad: false,
         }
     }
 }
@@ -404,6 +406,7 @@ impl Opts {
             ["planeGizmo"] => self.plane_gizmo = flag()?,
             ["lightGizmo"] => self.light_gizmo = flag()?,
             ["dark"] => self.dark = flag()?,
+            ["badTriangles"] => self.bad = flag()?,
             ["preset"] => {
                 if !self.apply_preset(v.as_str().unwrap_or("")) {
                     return Err(format!("unknown light preset {v}"));
@@ -460,6 +463,7 @@ impl Opts {
             "lightGizmo" => self.light_gizmo,
             "clip.0.on" => self.clip[0].on,
             "dark" => self.dark,
+            "badTriangles" => self.bad,
             _ => return Err(format!("{path} cannot be toggled")),
         };
         self.set(path, &serde_json::Value::Bool(!now))?;

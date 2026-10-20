@@ -8,6 +8,7 @@ use crate::hud::Hud;
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
 use crate::session::{EdgePairs, Session};
 use crate::shape::{ShapeEvent, ShapeModel, Values};
+use crate::topology::TopologyUi;
 use crate::viewer::{self, Bounds, DISPLACEMENT, MODES, ViewerState};
 use crate::worker::{Done, Job, Jobs, SettleRequest, stamp};
 
@@ -47,6 +48,8 @@ pub struct World {
     pub anchor_at: Option<Instant>,
     pub anchor_release: Option<Instant>,
     pub trace: Vec<Value>,
+    pub topo: TopologyUi,
+    pub head_generation: u64,
 }
 
 impl Default for World {
@@ -88,6 +91,8 @@ impl Default for World {
             anchor_at: None,
             anchor_release: None,
             trace: Vec::new(),
+            topo: TopologyUi::default(),
+            head_generation: 0,
         }
     }
 }
@@ -97,6 +102,17 @@ fn ms(d: Duration) -> f64 {
 }
 
 impl World {
+    pub fn epoch_bump_head(&mut self) {
+        self.head_generation += 1;
+    }
+
+    pub fn with_topo<R>(&mut self, f: impl FnOnce(&mut TopologyUi, &mut World) -> R) -> R {
+        let mut t = std::mem::take(&mut self.topo);
+        let r = f(&mut t, self);
+        self.topo = t;
+        r
+    }
+
     pub fn set_wake(&self, f: Box<dyn Fn() + Send>) {
         self.jobs.set_wake(f);
     }
@@ -121,11 +137,12 @@ impl World {
         }
     }
 
-    pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>) {
+    pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) {
         self.load_seq += 1;
         self.loading = Some(Instant::now());
         self.load_result = None;
-        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: spec.map(str::to_string), macro_file: macro_file.map(str::to_string), eyes: eyes.map(str::to_string) });
+        let owned = |s: Option<&str>| s.map(str::to_string);
+        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: owned(spec), macro_file: owned(macro_file), eyes: owned(eyes), game: owned(game) });
     }
 
     pub fn idle(&self) -> bool {
@@ -602,6 +619,7 @@ impl World {
             "clip" => toggle(st, "clip.0.on", "clip plane 1")?,
             "light_gizmo" => toggle(st, "lightGizmo", "light gizmo")?,
             "theme" => toggle(st, "dark", "dark viewport")?,
+            "bad_triangles" => toggle(st, "badTriangles", "bad triangles")?,
             "fov_down" | "fov_up" => {
                 let f = st.active_cam().goal.fov + if id == "fov_up" { 5.0 } else { -5.0 };
                 st.set_fov(f, instant);

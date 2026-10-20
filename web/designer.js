@@ -1840,7 +1840,7 @@ async function main() {
     return;
   }
   const startFrom = doc ? { character: doc.characters[P.active].spec } : { spec: opt("spec") };
-  const sl = await api("designer.sliders", { store, ...startFrom, macro: opt("macro") });
+  const sl = await api("designer.sliders", { store, ...startFrom, macro: opt("macro"), game: opt("game") });
   D.base = { pack: sl.pack, catalog: sl.catalog, game: sl.game };
   D.start = sl.start;
   D.eyeballs = sl.start.eyeballs ?? null;

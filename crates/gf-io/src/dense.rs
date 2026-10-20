@@ -53,12 +53,14 @@ pub fn write_points_f64(path: &Path, points: &[[f64; 3]]) -> Result<(), String> 
     ndarray_npy::write_npy(path, &array).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+pub type Assembled = (Vec<[f64; 3]>, Vec<[u32; 3]>, Vec<[Uv; 3]>);
+
 pub fn assemble(
     positions: Vec<[f64; 3]>,
     sizes: &Array1<u32>,
     corners: &Array1<u32>,
     uvs: &Array2<f32>,
-) -> Result<(Vec<[f64; 3]>, Vec<[u32; 3]>, Vec<[Uv; 3]>), String> {
+) -> Result<Assembled, String> {
     let mut triangles = Vec::with_capacity(sizes.len() * 2);
     let mut triangle_uvs = Vec::with_capacity(sizes.len() * 2);
     let mut start = 0usize;

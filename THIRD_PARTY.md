@@ -2,7 +2,7 @@
 
 ## Lucide icons
 
-- What: 35 icons (SVG, 24x24, stroke) used by the browser designer (inlined into `web/index.html`) and the native
+- What: 37 icons (SVG, 24x24, stroke) used by the browser designer (inlined into `web/index.html`) and the native
   studio (`crates/gf-studio`, drawn as vector paths from the same files).
 - Where: `third_party/lucide/icons/`, copied verbatim from the npm package `lucide-static` version 1.60.0
   (https://registry.npmjs.org/lucide-static/-/lucide-static-1.60.0.tgz, npm integrity
@@ -14,6 +14,6 @@
   https://github.com/lucide-icons/lucide/blob/1.60.0/LICENSE and to the package's LICENSE, is kept in
   `third_party/lucide/LICENSE`.
 - Bundled icons on Lucide's Feather list, so covered by both notices: `crosshair`, `moon`, `square`, `x`, plus
-  `circle-help` and `columns-2`, which are Lucide's current names for the listed `help-circle` and `columns` (the
-  package ships both names with identical drawings).
+  `circle-help`, `columns-2` and `triangle-alert`, which are Lucide's current names for the listed `help-circle`,
+  `columns` and `alert-triangle` (the package ships both names with identical drawings).
 - Regenerate the sprite and the studio's table with `python tools/icons/build_icons.py` (the list of icons lives there).

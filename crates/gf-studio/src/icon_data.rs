@@ -31,7 +31,9 @@ pub const ICONS: &[(&str, &str)] = &[
     ("square", include_str!("../../../third_party/lucide/icons/square.svg")),
     ("sun", include_str!("../../../third_party/lucide/icons/sun.svg")),
     ("sun-moon", include_str!("../../../third_party/lucide/icons/sun-moon.svg")),
+    ("triangle-alert", include_str!("../../../third_party/lucide/icons/triangle-alert.svg")),
     ("undo-2", include_str!("../../../third_party/lucide/icons/undo-2.svg")),
     ("vector-square", include_str!("../../../third_party/lucide/icons/vector-square.svg")),
+    ("wand-sparkles", include_str!("../../../third_party/lucide/icons/wand-sparkles.svg")),
     ("x", include_str!("../../../third_party/lucide/icons/x.svg")),
 ];

@@ -486,6 +486,27 @@ impl Store {
         Ok((self.put_manifest("game", &manifest)?, manifest))
     }
 
+    pub fn put_game(&self, mesh: &Decimated, pack: &str, lods: Vec<GameLod>, build: Value) -> Result<(String, GameManifest), String> {
+        let (pack_manifest, _) = self.load_pack(pack)?;
+        if let Some(bad) = mesh.kept.iter().find(|&&k| k as usize >= pack_manifest.vertices) {
+            return Err(format!("kept vertex {bad} is outside the pack's {} vertices", pack_manifest.vertices));
+        }
+        let mut arrays = BTreeMap::new();
+        for (name, bytes) in crate::game_base::npy_arrays(mesh)? {
+            arrays.insert(name.to_string(), hash::reference(&self.put(&bytes)?));
+        }
+        let manifest = GameManifest {
+            format: GAME_FORMAT.into(),
+            pack: pack.to_string(),
+            vertices: mesh.kept.len(),
+            triangles: mesh.triangles.len(),
+            arrays,
+            lods,
+            build,
+        };
+        Ok((self.put_manifest("game", &manifest)?, manifest))
+    }
+
     pub fn load_game(&self, reference: &str) -> Result<(GameManifest, Decimated), String> {
         let manifest: GameManifest = self.get_manifest("game", reference)?;
         let blob = |name: &str| -> Result<Cursor<Vec<u8>>, String> {

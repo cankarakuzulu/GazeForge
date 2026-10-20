@@ -582,6 +582,24 @@ pub static REGISTRY: &[CommandDef] = &[
         output: api::argv_output,
         run: api::rig,
     },
+    CommandDef {
+        name: "topology.improve",
+        kind: Kind::Job,
+        summary: "Re-cut a game base's triangles by edge flips so the worst angles over the shape range it serves rise, and import the result as a new game base (argv `topology improve`); before and after statistics per shape.",
+        limits: "Flips only: the same vertices (kept and owner unchanged), never across a UV seam or the open boundary, never where a scored shape would turn a triangle over or its texture orientation flip. The old base is untouched; characters name their base by sha256, so they change only when pointed at the new one. Reads every scored catalog target (minutes with all of them).",
+        input: api::topology_improve_input,
+        output: api::argv_output,
+        run: api::topology_improve,
+    },
+    CommandDef {
+        name: "topology.inspect",
+        kind: Kind::Query,
+        summary: "A game base's triangle quality: every triangle's smallest angle at the rest shape, its triangles, and the record of the improve that made it (with each triangle's worst angle over that shape range), for showing bad triangles (argv `topology inspect`).",
+        limits: "The rest shape only is measured here; the shape range numbers are those an improve recorded. Loads the pack (about a second).",
+        input: api::topology_inspect_input,
+        output: api::argv_output,
+        run: api::topology_inspect,
+    },
 ];
 
 pub fn obj(properties: Value, required: &[&str]) -> Value {

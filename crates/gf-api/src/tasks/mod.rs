@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use gf_core::placement::{self as gp, DenseMesh, Placement, PlacementVersion};
-use gf_geom::decimate::{self, Decimated, Settings};
-use gf_geom::{lids, placement, placement_f2, placement_f3, placement_f5};
+use gf_geom::decimate::{self, Settings};
+use gf_geom::{lids, placement, placement_f2, placement_f3, placement_f5, topology as topology_geom};
 use gf_io::dense::{self, Dense};
 use gf_io::{game_base, obj};
 use serde_json::{Value, json};
@@ -12,6 +12,7 @@ pub mod api;
 pub mod data;
 pub mod mesh;
 pub mod rig;
+pub mod topology;
 
 pub const BUILD_KEYS: &[&str] = &[
     "dense",
@@ -28,7 +29,7 @@ pub const BUILD_KEYS: &[&str] = &[
     "weights",
     "lods",
 ];
-pub const EXPORT_KEYS: &[&str] = &["dense", "base", "positions", "out", "placement", "tip-vertex"];
+pub const EXPORT_KEYS: &[&str] = &["dense", "base", "positions", "out", "placement", "tip-vertex", "quads"];
 pub const OPTIMAL_KEYS: &[&str] = &["max-move"];
 pub const FIT_KEYS: &[&str] = &["max-move", "fit-iterations", "fit-smooth", "fit-min-angle", "fit-guard-steps", "fit-repair-below", "fit-trim"];
 pub const F2_KEYS: &[&str] = &[
@@ -249,25 +250,32 @@ pub fn export_obj(opts: &Options) -> Result<Value, String> {
     let base = game_base::load(Path::new(need(opts, "base")?))?;
     let positions = dense.positions_from(need(opts, "positions")?)?;
     let tip = dense.nose_tip(&positions, tip_vertex)?;
+    let quads = match opts.get("quads").map(String::as_str) {
+        None | Some("off") => false,
+        Some("on") => true,
+        Some(other) => return Err(format!("--quads takes on or off, got {other}")),
+    };
     crate::jobs::progress("place", 0, 1, version.name);
     let placed = placer.place(&positions, &DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs }, &base);
-    match placed.triangle_uvs {
-        Some(triangle_uvs) => {
-            let character = Decimated {
-                kept: base.kept.clone(),
-                owner: base.owner.clone(),
-                triangles: base.triangles.clone(),
-                triangle_uvs,
-                stats: Default::default(),
-            };
-            obj::write(out, &placed.game, &character)?;
-        }
-        None => obj::write(out, &placed.game, &base)?,
+    let faces = quads.then(|| {
+        let rest: Vec<[f64; 3]> = base.kept.iter().map(|&k| dense.positions[k as usize]).collect();
+        topology_geom::quads(&rest, &base.triangles, &base.triangle_uvs, &topology_geom::QuadSettings::default())
+    });
+    let written_uvs = placed.triangle_uvs.as_ref().unwrap_or(&base.triangle_uvs);
+    match &faces {
+        Some(faces) => obj::write_faces(out, &placed.game, &base.triangles, written_uvs, faces)?,
+        None => obj::write_triangles(out, &placed.game, &base.triangles, written_uvs)?,
     }
     let measure = placement::measure(&positions, &dense.triangles, &base, &placed.game, tip);
     let mut value = json!({"ok": true, "command": "export-obj", "out": out.display().to_string(), "vertices": base.kept.len(),
                            "triangles": base.triangles.len(), "placement": version.name,
                            "placement_version": placer.version().to_string(), "measure": measure});
+    if let Some(faces) = &faces {
+        let quad_count = faces.iter().filter(|f| matches!(f, topology_geom::Face::Quad(_))).count();
+        value["quads"] = json!({"quads": quad_count, "triangles": faces.len() - quad_count, "faces": faces.len(),
+                                "settings": topology_geom::QuadSettings::default(),
+                                "rule": "pairs paired on the base's rest shape and texture, so every character of the base gets the same faces"});
+    }
     for (k, v) in placed.report {
         value[k] = v;
     }

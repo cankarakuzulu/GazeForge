@@ -19,7 +19,7 @@ ICONS = [
     "box", "camera", "chart-scatter", "circle-help", "columns-2", "crosshair", "eye", "file-plus", "flip-horizontal-2",
     "focus", "folder-open", "gauge", "grid-3x3", "house", "images", "keyboard", "layout-grid", "lightbulb", "moon",
     "redo-2", "rotate-3d", "rotate-ccw", "ruler", "save", "save-all", "scan-eye", "scan-search", "scissors-line-dashed",
-    "slice", "square", "sun", "sun-moon", "undo-2", "vector-square", "x",
+    "slice", "square", "sun", "sun-moon", "triangle-alert", "undo-2", "vector-square", "wand-sparkles", "x",
 ]
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ICON_DIR = os.path.join(ROOT, "third_party", "lucide", "icons")

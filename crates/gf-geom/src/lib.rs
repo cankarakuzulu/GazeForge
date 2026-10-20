@@ -12,6 +12,7 @@ pub mod placement_f3;
 pub mod placement_f5;
 pub mod prepared;
 pub mod quadric;
+pub mod topology;
 pub mod uv_chart;
 
 pub type Uv = [f32; 2];

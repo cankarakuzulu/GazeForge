@@ -27,6 +27,7 @@ pub struct UiState {
     pub spec: String,
     pub macro_file: String,
     pub eyes: String,
+    pub game: String,
     pub status: String,
     texture: Option<egui::TextureId>,
     texture_generation: u64,
@@ -63,6 +64,7 @@ impl UiState {
             spec: a.spec.unwrap_or_default(),
             macro_file: a.macro_file.unwrap_or_default(),
             eyes: a.eyes.unwrap_or_default(),
+            game: String::new(),
             status: "open a store".into(),
             texture: None,
             texture_generation: 0,
@@ -123,8 +125,8 @@ pub struct Studio<'a> {
 impl Studio<'_> {
     pub fn load(&mut self) {
         let opt = |s: &String| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
-        let (spec, mac, eyes) = (opt(&self.s.spec), opt(&self.s.macro_file), opt(&self.s.eyes));
-        self.world.request_load(self.s.store.trim(), spec.as_deref(), mac.as_deref(), eyes.as_deref());
+        let (spec, mac, eyes, game) = (opt(&self.s.spec), opt(&self.s.macro_file), opt(&self.s.eyes), opt(&self.s.game));
+        self.world.request_load(self.s.store.trim(), spec.as_deref(), mac.as_deref(), eyes.as_deref(), game.as_deref());
         self.s.status = "loading".into();
     }
 
@@ -146,6 +148,11 @@ impl Studio<'_> {
         match id {
             "screenshot" | "screenshot_layout" => self.s.status = self.screenshot(id == "screenshot_layout"),
             "help" => self.s.show_help = !self.s.show_help,
+            _ if id.starts_with("topology_") => {
+                if let Some(m) = self.topology_act(id) {
+                    self.s.status = m;
+                }
+            }
             "interface_theme" => self.s.flip_theme = true,
             "save_spec" => self.save(),
             _ => {
@@ -213,6 +220,14 @@ impl Studio<'_> {
             let light = ctx.theme() != egui::Theme::Light;
             ctx.set_theme(if light { egui::ThemePreference::Light } else { egui::ThemePreference::Dark });
             self.s.status = format!("{} interface", if light { "light" } else { "dark" });
+        }
+        let show_bad = self.world.state.opts.bad;
+        self.world.with_topo(|t, w| t.sync(w, show_bad));
+        if let Some(m) = self.world.topo.poll() {
+            self.s.status = m;
+        }
+        if self.world.topo.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
@@ -294,6 +309,7 @@ impl Studio<'_> {
                 ("seams", "scissors-line-dashed", o.seams, "UV seams and open boundaries"),
                 ("light_gizmo", "lightbulb", o.light_gizmo, "Light direction gizmo"),
                 ("clip", "slice", o.clip[0].on, "Clip plane 1 (Alt+wheel moves it)"),
+                ("bad_triangles", "triangle-alert", o.bad, "Bad triangles: smallest angle under the Topology limit"),
             ];
             for (id, icon, on, what) in toggles {
                 if icons::button(ui, icon, on, &self.tip(what, id)).clicked() {
@@ -374,6 +390,7 @@ impl Studio<'_> {
                     ("spec", &mut self.s.spec, "optional .gfchar.json"),
                     ("macro", &mut self.s.macro_file, "optional macro definition"),
                     ("eyes", &mut self.s.eyes, "optional eyes file"),
+                    ("game", &mut self.s.game, "optional game base sha256:..."),
                 ] {
                     ui.label(label);
                     ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(f32::INFINITY));
@@ -395,6 +412,7 @@ impl Studio<'_> {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
         });
+        self.topology_panel(ui);
         if let Some(s) = &self.world.session {
             ui.separator();
             ui.horizontal(|ui| {

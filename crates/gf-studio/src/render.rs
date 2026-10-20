@@ -185,6 +185,7 @@ pub struct Renderer {
     pub dpr: f64,
     generation: u64,
     epoch: u64,
+    head_generation: u64,
 }
 
 fn f32_bytes(v: &[f32]) -> Vec<u8> {
@@ -309,6 +310,7 @@ impl Renderer {
             dpr: 1.0,
             generation: 0,
             epoch: 0,
+            head_generation: 0,
         }
     }
 
@@ -317,9 +319,10 @@ impl Renderer {
     }
 
     pub fn sync_world(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world: &mut crate::world::World) {
-        if world.epoch != self.epoch {
+        if world.epoch != self.epoch || world.head_generation != self.head_generation {
             self.clear_head();
             self.epoch = world.epoch;
+            self.head_generation = world.head_generation;
         }
         if let Some(s) = &world.session {
             self.sync_head(device, queue, &s.head, world.uvs_dirty);
@@ -476,7 +479,7 @@ impl Renderer {
         let planes = viewer::planes(o, &st.bounds);
         u[104..108].copy_from_slice(&[planes.len() as f32, -1.0, b(o.clip_box.on), 1.0]);
         u[108..112].copy_from_slice(&[rect.w as f32, rect.h as f32, 0.0, canvas_h as f32]);
-        u[112..116].copy_from_slice(&[rect.x as f32, rect.y as f32, 0.0, 0.0]);
+        u[112..116].copy_from_slice(&[rect.x as f32, rect.y as f32, b(o.bad), 0.0]);
         for (i, p) in planes.iter().enumerate() {
             put(&mut u, 116 + i * 4, p.n, p.d);
         }

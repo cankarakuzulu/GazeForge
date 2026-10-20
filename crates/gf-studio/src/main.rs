@@ -12,6 +12,7 @@ mod script;
 mod session;
 mod shape;
 mod studio;
+mod topology;
 mod ui_script;
 mod viewer;
 mod worker;
@@ -76,6 +77,22 @@ fn install_log() {
 fn main() -> ExitCode {
     install_log();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [verb, dir, id] = args.as_slice() {
+        let worker = match verb.as_str() {
+            "__job-supervise" => Some(gf_api::jobs::supervise(std::path::Path::new(dir), id)),
+            "__job-work" => Some(gf_api::jobs::work(std::path::Path::new(dir), id)),
+            _ => None,
+        };
+        if let Some(result) = worker {
+            return match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return emit(json!({"ok": true, "usage": USAGE, "keymap_default_path": keymap::default_path().map(|p| p.display().to_string()), "godot_config_default_path": godot::default_path().map(|p| p.display().to_string())}), 0);
     }
