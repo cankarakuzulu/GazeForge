@@ -26,7 +26,7 @@ fn setup() -> Value {
              "fields": [
                  {"name": "store", "label": "store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
-                 {"name": "macro_base", "label": "macro base sliders"},
+                 {"name": "macro_base", "label": "macro base sliders", "common": true},
                  {"name": "pin_top", "label": "pin height (m)"},
              ],
              "shows": [{"kind": "report"}]},
@@ -329,7 +329,14 @@ fn runs_root(ctx: &Ctx, input: &Value) -> PathBuf {
 
 fn run_dir(ctx: &Ctx, input: &Value) -> Result<PathBuf, ApiError> {
     let run = text(input, "run");
-    let ok = run.split('/').count() == 2 && run.split('/').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !p.starts_with('.'));
+    let ok = match run.split_once('/') {
+        Some((project, wizard)) => {
+            project::check_name(project, true).is_ok()
+                && !wizard.is_empty()
+                && wizard.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        }
+        None => false,
+    };
     if !ok {
         return Err(ApiError::invalid(format!("{run:?} is not a wizard run id (PROJECT/WIZARD-N)")));
     }
@@ -354,9 +361,9 @@ pub fn run_file(ctx: &Ctx, run: &str, path: &str) -> Result<PathBuf, ApiError> {
 
 pub fn upload(ctx: &Ctx, run: &str, name: &str, bytes: &[u8]) -> Result<PathBuf, ApiError> {
     let dir = run_dir(ctx, &json!({"run": run}))?;
-    let ok = (1..=128).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.starts_with('.');
+    let ok = (1..=128).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.starts_with('.') && !name.ends_with('.') && !project::device_name(name);
     if !ok {
-        return Err(ApiError::invalid(format!("upload name {name:?}: use 1 to 128 letters, digits, '-', '_' or '.', not starting with '.'")));
+        return Err(ApiError::invalid(format!("upload name {name:?}: use 1 to 128 letters, digits, '-', '_' or '.', not starting or ending with '.', and not a device name such as CON or COM1")));
     }
     if bytes.len() > UPLOAD_LIMIT {
         return Err(ApiError::invalid(format!("upload of {} bytes is over the {UPLOAD_LIMIT}-byte limit", bytes.len())));
@@ -423,6 +430,37 @@ pub fn start(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     state_of(ctx, &dir)
 }
 
+pub fn runs_input() -> Value {
+    obj(json!({"project": {"type": "string", "minLength": 1, "description": "the project whose runs to list (default untitled)"},
+               "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "at most this many runs (default 20)"}, "root": root_prop()}),
+        &[])
+}
+
+pub fn runs_output() -> Value {
+    shape(json!({"project": {"type": "string"}, "total": {"type": "integer"},
+                 "runs": {"type": "array", "description": "per run: run, wizard, title, started, steps (id and state)"}}))
+}
+
+pub fn runs(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let name = input.get("project").and_then(Value::as_str).unwrap_or(project::UNTITLED);
+    project::check_name(name, true)?;
+    let limit = input.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+    let base = runs_root(ctx, input).join(name);
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+        let dir = entry.path();
+        let Some(run) = read_json(&dir.join("run.json")) else { continue };
+        let Ok(w) = definition(run["wizard"].as_str().unwrap_or_default()) else { continue };
+        let Ok(s) = state_of(ctx, &dir) else { continue };
+        let steps: Vec<Value> = s["steps"].as_array().into_iter().flatten().map(|x| json!({"id": x["id"], "state": x["state"]})).collect();
+        rows.push(json!({"run": run["run"], "wizard": run["wizard"], "title": w["title"], "started": run["started"], "steps": steps}));
+    }
+    rows.sort_by(|a, b| b["started"].as_str().cmp(&a["started"].as_str()).then_with(|| b["run"].as_str().cmp(&a["run"].as_str())));
+    let total = rows.len();
+    rows.truncate(limit);
+    Ok(json!({"project": name, "total": total, "runs": rows}))
+}
+
 pub fn state(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     state_of(ctx, &run_dir(ctx, input)?)
 }
@@ -478,7 +516,10 @@ fn finish_job(ctx: &Ctx, dir: &Path, id: &str) -> Result<(), ApiError> {
         return Ok(());
     }
     let jctx = Ctx { jobs_dir: PathBuf::from(job["jobs_dir"].as_str().unwrap_or_default()), ..ctx.clone() };
-    let record = jobs::status(&jctx, &json!({"id": job["id"]}))?;
+    let record = match jobs::status(&jctx, &json!({"id": job["id"]})) {
+        Ok(r) => r,
+        Err(e) => return write_json(&at.join("output.json"), &json!({"result": null, "error": e.to_json(), "job_state": "lost"})),
+    };
     match record["state"].as_str() {
         Some("done") | Some("failed") | Some("cancelled") => {
             let envelope = record.get("result").cloned().unwrap_or_else(|| json!({"ok": false, "error": record["error"]}));
@@ -523,6 +564,13 @@ fn state_of(ctx: &Ctx, dir: &Path) -> Result<Value, ApiError> {
     Ok(json!({"run": run["run"], "wizard": run["wizard"], "dir": dir.display().to_string(), "values": run["values"], "steps": rows}))
 }
 
+fn fields_schema(step: &Value) -> Value {
+    let props: Map<String, Value> = step["fields"].as_array().into_iter().flatten()
+        .map(|f| (f["name"].as_str().unwrap_or_default().to_string(), f.get("schema").cloned().unwrap_or_else(|| json!({"type": "string"}))))
+        .collect();
+    json!({"type": "object", "additionalProperties": false, "properties": props})
+}
+
 pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let dir = run_dir(ctx, input)?;
     let run = read_json(&dir.join("run.json")).ok_or_else(|| ApiError::internal("the run record does not read"))?;
@@ -544,20 +592,40 @@ pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
     }
     let given = Value::Object(given);
+    let cmd = match def["command"].as_str() {
+        Some(name) => {
+            let cmd = find(name).ok_or_else(|| ApiError::internal(format!("wizard step {id} names an unknown command {name}")))?;
+            check_input(cmd, &given)?;
+            Some(cmd)
+        }
+        None => {
+            let problems = crate::schema::validate(&fields_schema(def), &given);
+            if !problems.is_empty() {
+                return Err(ApiError::invalid(format!("step {id} input: {}", problems.join("; "))).details(json!({"problems": problems})));
+            }
+            None
+        }
+    };
     let here = dir.join("steps").join(id);
-    let _ = std::fs::remove_dir_all(&here);
+    if state["steps"][at]["state"] == "running"
+        && let Some(job) = read_json(&here.join("job.json"))
+    {
+        let jctx = Ctx { jobs_dir: PathBuf::from(job["jobs_dir"].as_str().unwrap_or_default()), ..ctx.clone() };
+        jobs::cancel(&jctx, &json!({"id": job["id"]}))?;
+    }
+    std::fs::remove_dir_all(&here).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+        .map_err(|e| ApiError::internal(format!("{}: {e}", here.display())))?;
     for later in &steps[at + 1..] {
         let d = dir.join("steps").join(later["id"].as_str().unwrap_or_default());
         if d.join("input.json").exists() {
             write_json(&d.join("stale"), &json!({"because": id}))?;
         }
     }
-    let Some(name) = def["command"].as_str() else {
+    let Some(cmd) = cmd else {
         write_json(&here.join("input.json"), &given)?;
         return state_of(ctx, &dir);
     };
-    let cmd = find(name).ok_or_else(|| ApiError::internal(format!("wizard step {id} names an unknown command {name}")))?;
-    check_input(cmd, &given)?;
+    let name = cmd.name;
     write_json(&here.join("input.json"), &given)?;
     if cmd.kind == Kind::Job {
         let record = jobs::submit(ctx, &json!({"command": name, "input": given}))?;
@@ -647,6 +715,36 @@ mod tests {
         assert_eq!(s["steps"][2]["proposed"]["states"], "all");
         assert_eq!(start(&ctx, &json!({"wizard": "export", "project": "demo"})).unwrap()["run"], "demo/export-2");
         assert!(state(&ctx, &json!({"run": "../x"})).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refused_step_keeps_its_record_and_a_lost_job_fails_only_its_step() {
+        let root = std::env::temp_dir().join(format!("gf-wizard-refuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.clone() };
+        let s = start(&ctx, &json!({"wizard": "export", "project": "my demo", "values": {"store": "S", "spec": "C.gfchar.json"}})).unwrap();
+        let run = s["run"].as_str().unwrap().to_string();
+        assert_eq!(run, "my demo/export-1");
+        step(&ctx, &json!({"run": run, "step": "character", "input": {}})).unwrap();
+        for bad in [json!({"spec": 5}), json!({"bogus": "x"})] {
+            assert!(step(&ctx, &json!({"run": run, "step": "character", "input": bad})).is_err());
+            let s = state(&ctx, &json!({"run": run})).unwrap();
+            assert_eq!(s["steps"][0]["state"], "done");
+            assert_eq!(s["steps"][0]["input"]["spec"], "C.gfchar.json");
+        }
+        write_json(&root.join("runs/my demo/export-1/steps/export/job.json"), &json!({"id": "missing", "jobs_dir": root.join("jobs").display().to_string()})).unwrap();
+        let s = state(&ctx, &json!({"run": run})).unwrap();
+        assert_eq!(s["steps"][1]["state"], "failed");
+        assert_eq!(s["steps"][0]["state"], "done");
+        for name in ["CON", "com1.png", "x.", ".x", "a/b"] {
+            assert!(upload(&ctx, &run, name, b"x").is_err(), "{name}");
+        }
+        assert!(upload(&ctx, &run, "front_a.png", b"x").is_ok());
+        let listed = runs(&ctx, &json!({"project": "my demo"})).unwrap();
+        assert_eq!(listed["runs"][0]["run"], run.as_str());
+        assert_eq!(listed["runs"][0]["steps"][1]["state"], "failed");
+        assert_eq!(runs(&ctx, &json!({"project": "none here"})).unwrap()["total"], 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -646,6 +646,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: wizards::state,
     },
     CommandDef {
+        name: "wizards.runs",
+        kind: Kind::Query,
+        summary: "A project's wizard runs, newest first: run id, wizard, start time and each step's state, so a client can resume one with wizards.state.",
+        limits: "Only runs whose run record reads are listed; a run of a wizard that no longer exists is skipped.",
+        input: wizards::runs_input,
+        output: wizards::runs_output,
+        run: wizards::runs,
+    },
+    CommandDef {
         name: "wizards.step",
         kind: Kind::Mutation,
         summary: "Run one wizard step: its fields (hidden and bound fields not given take their bound values) are checked against the step command's schema and the command runs, or is submitted as a job; later steps that ran are marked stale.",

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -27,6 +28,8 @@ pub struct Wizards {
     developer: bool,
     jobs_cache: Option<(Instant, Value)>,
     store_cache: Option<(String, Value)>,
+    runs: Option<Vec<Value>>,
+    pending: Option<Receiver<Result<Value, String>>>,
 }
 
 fn load_png(path: &str) -> Option<egui::ColorImage> {
@@ -110,6 +113,19 @@ impl Wizards {
         Ok(())
     }
 
+    pub fn resume(&mut self, wizard: &str, run: &str) -> Result<(), String> {
+        let def = call("wizards.get", json!({"id": wizard}))?;
+        let state = call("wizards.state", json!({"run": run}))?;
+        let steps = state["steps"].as_array().cloned().unwrap_or_default();
+        self.at = steps.iter().position(|s| s["state"] != "done").unwrap_or(steps.len().saturating_sub(1));
+        self.def = Some(def);
+        self.state = Some(state);
+        self.prepared = Map::new();
+        self.shown_for = None;
+        self.error = None;
+        Ok(())
+    }
+
     fn step_def(&self, i: usize) -> &Value {
         &self.def.as_ref().expect("a wizard")["steps"][i]
     }
@@ -167,7 +183,7 @@ impl Wizards {
         self.shown_for = Some(key);
     }
 
-    fn input(&self) -> Value {
+    fn input(&self) -> Result<Value, String> {
         let mut out = Map::new();
         for (name, _, _, schema) in self.fields(self.at) {
             if schema["type"] == "boolean" {
@@ -180,21 +196,68 @@ impl Wizards {
             if t.is_empty() {
                 continue;
             }
+            let structured = t.starts_with('{') || t.starts_with('[');
             let v = match schema["type"].as_str() {
-                Some("number") | Some("integer") => t.parse::<f64>().map(|x| json!(x)).unwrap_or(json!(t)),
+                _ if schema["enum"].is_array() => json!(t),
+                Some("number") | Some("integer") => json!(t.parse::<f64>().map_err(|_| format!("{name}: not a number ({t})"))?),
+                Some("object") | Some("array") => gf_api::exactjson::text(&t).map_err(|e| format!("{name}: not JSON ({e})"))?,
+                None if structured => gf_api::exactjson::text(&t).map_err(|e| format!("{name}: not JSON ({e})"))?,
                 None => gf_api::exactjson::text(&t).unwrap_or(json!(t)),
                 _ => json!(t),
             };
             out.insert(name, v);
         }
-        Value::Object(out)
+        Ok(Value::Object(out))
+    }
+
+    pub fn submit_step(&mut self) -> Result<(), String> {
+        if self.pending.is_some() {
+            return Err("a step is already running".into());
+        }
+        let run = self.state.as_ref().ok_or("no run")?["run"].clone();
+        let id = self.step_def(self.at)["id"].clone();
+        let input = self.input()?;
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(call("wizards.step", json!({"run": run, "step": id, "input": input})));
+        });
+        self.pending = Some(rx);
+        self.error = None;
+        Ok(())
     }
 
     pub fn run_step(&mut self) -> Result<(), String> {
+        self.submit_step()?;
+        let outcome = self.pending.take().expect("submitted").recv().map_err(|e| e.to_string())?;
+        self.finish_step(outcome)
+    }
+
+    fn collect_step(&mut self) -> Result<(), String> {
+        let Some(rx) = &self.pending else { return Ok(()) };
+        match rx.try_recv() {
+            Ok(outcome) => {
+                self.pending = None;
+                self.finish_step(outcome)
+            }
+            Err(TryRecvError::Empty) => Ok(()),
+            Err(TryRecvError::Disconnected) => {
+                self.pending = None;
+                Err("the step's worker thread ended without an answer".into())
+            }
+        }
+    }
+
+    fn cancel_job(&mut self) -> Result<(), String> {
+        let job = self.step_state(self.at)["job"].as_str().ok_or("this step has no job")?.to_string();
         let run = self.state.as_ref().ok_or("no run")?["run"].clone();
-        let id = self.step_def(self.at)["id"].clone();
-        let state = call("wizards.step", json!({"run": run, "step": id, "input": self.input()}))?;
-        self.state = Some(state);
+        let _ = call("jobs.cancel", json!({"id": job, "wait_s": 0.5}));
+        self.state = Some(call("wizards.state", json!({"run": run}))?);
+        self.shown_for = None;
+        Ok(())
+    }
+
+    fn finish_step(&mut self, outcome: Result<Value, String>) -> Result<(), String> {
+        self.state = Some(outcome?);
         self.shown_for = None;
         let st = self.step_state(self.at);
         if st["state"] == "done" && self.step_def(self.at)["command"].is_null() && self.at + 1 < self.steps() {
@@ -208,6 +271,10 @@ impl Wizards {
     }
 
     pub fn poll(&mut self) -> Result<bool, String> {
+        self.collect_step()?;
+        if self.pending.is_some() {
+            return Ok(true);
+        }
         let Some(state) = &self.state else { return Ok(false) };
         if self.step_state(self.at)["state"] != "running" {
             return Ok(false);
@@ -225,7 +292,7 @@ impl Wizards {
     }
 
     pub fn running(&self) -> bool {
-        self.state.is_some() && self.step_state(self.at)["state"] == "running"
+        self.pending.is_some() || (self.state.is_some() && self.step_state(self.at)["state"] == "running")
     }
 
     pub fn set_field(&mut self, name: &str, value: &Value) {
@@ -260,9 +327,10 @@ impl Wizards {
         let title = self.def.as_ref().and_then(|d| d["title"].as_str()).unwrap_or("Tasks").to_string();
         egui::Window::new("Tasks").id(egui::Id::new("wizards")).title_bar(true).open(&mut open).resizable(true).default_width(720.0).default_height(560.0).show(ui_ctx, |ui| {
             ui.horizontal(|ui| {
-                if self.def.is_some() && ui.button("all tasks").clicked() {
+                if self.def.is_some() && self.pending.is_none() && ui.button("all tasks").clicked() {
                     self.def = None;
                     self.state = None;
+                    self.runs = None;
                 }
                 ui.strong(&title);
             });
@@ -301,6 +369,26 @@ impl Wizards {
         }
         if let Some(id) = chosen
             && let Err(e) = self.start(&id, run_values(world), world.settle_input(), project)
+        {
+            self.error = Some(e);
+        }
+        if self.runs.is_none() {
+            self.runs = Some(call("wizards.runs", json!({"project": project, "limit": 8})).map(|r| r["runs"].as_array().cloned().unwrap_or_default()).unwrap_or_default());
+        }
+        let mut resumed = None;
+        let runs = self.runs.clone().unwrap_or_default();
+        if !runs.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new(format!("Recent runs in {project}")).weak());
+            for r in &runs {
+                let steps: Vec<String> = r["steps"].as_array().into_iter().flatten().map(|s| format!("{} {}", shown(&s["id"]), shown(&s["state"]))).collect();
+                if ui.button(format!("{}  {}", shown(&r["title"]), shown(&r["run"]))).on_hover_text(format!("{} · {}", shown(&r["started"]), steps.join(", "))).clicked() {
+                    resumed = Some((shown(&r["wizard"]), shown(&r["run"])));
+                }
+            }
+        }
+        if let Some((wizard, run)) = resumed
+            && let Err(e) = self.resume(&wizard, &run)
         {
             self.error = Some(e);
         }
@@ -434,6 +522,12 @@ impl Wizards {
                     if let Some(e) = st["error"].as_object() {
                         ui.colored_label(ui.visuals().warn_fg_color, format!("{}: {}", e.get("code").and_then(Value::as_str).unwrap_or(""), e.get("message").and_then(Value::as_str).unwrap_or("")));
                     }
+                    if self.pending.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("running the step");
+                        });
+                    }
                     if st["state"] == "running" {
                         let p = self.progress.clone().unwrap_or(Value::Null);
                         let frac = match (p["done"].as_f64(), p["total"].as_f64()) {
@@ -460,8 +554,13 @@ impl Wizards {
                             self.shown_for = None;
                         }
                         let label = if s["command"].is_null() { "use these" } else if state == "done" { "run again" } else { "run" };
-                        if ui.add_enabled(state != "running", egui::Button::new(label)).clicked()
-                            && let Err(e) = self.run_step()
+                        if ui.add_enabled(state != "running" && self.pending.is_none(), egui::Button::new(label)).clicked()
+                            && let Err(e) = self.submit_step()
+                        {
+                            self.error = Some(e);
+                        }
+                        if state == "running" && st["job"].is_string() && ui.button("cancel").on_hover_text("Cancel the running job of this step").clicked()
+                            && let Err(e) = self.cancel_job()
                         {
                             self.error = Some(e);
                         }

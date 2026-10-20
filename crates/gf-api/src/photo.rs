@@ -232,7 +232,11 @@ pub(crate) fn ensure_base_landmarks(input: &Value, run: &Path, base: &Base) -> R
     dio::write_points(&run.join("base_positions.npy"), p).map_err(ApiError::internal)?;
     dio::write_points(&run.join("base_normals.npy"), &normals).map_err(ApiError::internal)?;
     worker(input, "photo_worker.py", "base", json!({}), run)?;
-    Ok(())
+    write_json(&run.join("base_landmarks.detected"), &json!({"by": "photo_worker.py base"}))
+}
+
+pub(crate) fn landmarks_detected(run: &Path) -> bool {
+    run.join("base_landmarks.detected").is_file()
 }
 
 pub(crate) fn landmark_vertices(run: &Path) -> Result<BTreeMap<usize, usize>, ApiError> {
@@ -275,6 +279,7 @@ pub fn register(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 return Err(ApiError::invalid(format!("{table} has no vertices object")));
             }
             write_json(&dest, &body)?;
+            let _ = std::fs::remove_file(run.join("base_landmarks.detected"));
         }
     }
     ensure_base_landmarks(input, &run, &base)?;

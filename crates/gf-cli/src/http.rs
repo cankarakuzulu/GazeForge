@@ -49,7 +49,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             }
         }
     }
-    let limit = if path.starts_with("/v1/upload") { gf_api::wizards::UPLOAD_LIMIT } else { MAX_BODY };
+    let limit = if method == "POST" && path.split('?').next() == Some("/v1/upload") { gf_api::wizards::UPLOAD_LIMIT } else { MAX_BODY };
     if length > limit {
         return Err(format!("body of {length} bytes is over the {limit}-byte limit"));
     }
@@ -149,7 +149,7 @@ fn wizard_file(ctx: &Ctx, path: &str) -> Served {
         return not_found("GET /v1/wizard-file?run=<run id>&path=<a file of that run>".into());
     };
     match gf_api::wizards::run_file(ctx, &run, &file) {
-        Ok(p) => match (content_type(&p.display().to_string().to_ascii_lowercase()), std::fs::read(&p)) {
+        Ok(p) => match (content_type(&p.display().to_string().to_ascii_lowercase()).filter(|k| k.starts_with("image/") || *k == "model/gltf-binary" || *k == "application/json"), std::fs::read(&p)) {
             (Some(kind), Ok(body)) => Served { status: 200, content_type: kind, body, immutable: false },
             _ => not_found(format!("{file}: not a file type this route serves")),
         },

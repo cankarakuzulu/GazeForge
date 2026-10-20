@@ -729,11 +729,12 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let same = std::fs::canonicalize(table).ok().zip(std::fs::canonicalize(&dest).ok()).is_some_and(|(a, b)| a == b);
         if !same {
             write_json(&dest, &read_json(Path::new(table))?)?;
+            let _ = std::fs::remove_file(run.join("base_landmarks.detected"));
         }
     }
     let base = photo::load_base(input)?;
-    let table_source = if opt(input, "base_landmarks").is_some() { "given" } else if run.join("base_landmarks.json").is_file() { "run" } else { "detected" };
     photo::ensure_base_landmarks(input, &run, &base)?;
+    let table_source = if photo::landmarks_detected(&run) { "detected" } else if opt(input, "base_landmarks").is_some() { "given" } else { "run" };
     let lm = photo::landmark_vertices(&run)?;
     let p = &base.dense.positions;
     let tris = &base.dense.triangles;

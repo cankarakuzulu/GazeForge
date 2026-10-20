@@ -494,7 +494,10 @@ through another that uses the same directory.
 advanced, and bindings: `$run.NAME`, `$STEP.input.FIELD`, `$STEP.result.PATH`, `=TEXT`). A run is a folder
 `ROOT/runs/PROJECT/WIZARD-N` (`steps/STEP` holds each step's record, the rest the files its steps write, bound as `$dir`): `wizards.start` makes it, `wizards.step` checks a step's input
 against its command's schema and runs it (or submits it as a job) and marks later steps stale, and `wizards.state` reads
-the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed. An agent
+the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed;
+`wizards.runs` lists a project's runs, newest first, and both clients offer them under "recent runs". A step's input is
+checked before anything of the earlier attempt is removed (a step without a command against its fields), re-running a
+running job step cancels that job first, and a job whose record is gone fails only its own step. An agent
 can drive a wizard with the same calls. The wizards: `setup` (a store from a dense base folder, its targets, a game
 base and the eye rig), `build_base` (a game base built and imported), `create` (a character from target weights,
 validated), `photos`, `export`, `body` (a body pack), and, behind a "developer tasks" toggle, `check` (shell gates),
@@ -503,7 +506,7 @@ through `photo.check`, `photo.views` (whose worker now also writes each photo's 
 profile key points yellow), `fit.photos` and `character.create`, and opens the saved spec in the designer. `export` takes
 a character spec through `export.glb` (with an optional obj of the finest level) and `gates.facing`. Each writes the same
 files its commands write from the CLI. `fit.photos` reports where its base landmark table came from (`base_landmarks`:
-given, already in the run, or detected); with no table it now detects one on a render of the base, as `fit.register`
+given, already in the run, or detected, which a re-run keeps reporting while the run still holds the detected table); with no table it now detects one on a render of the base, as `fit.register`
 does, and warns that a table detected on the base without eyes is several millimetres off at the lids and the chin. Two
 HTTP routes serve the browser's wizards, both loopback-only and confined to a run's folder: `POST /v1/upload?run=&name=`
 (a file chosen in the browser, copied to the run's `uploads/`, up to 64 MB) and `GET /v1/wizard-file?run=&path=` (an

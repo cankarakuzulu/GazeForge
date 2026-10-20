@@ -928,23 +928,6 @@ function buildControls() {
   $("shot-layout").addEventListener("click", () => screenshot("layout"));
   $("help-btn").addEventListener("click", () => $("help").classList.toggle("hidden"));
   $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").classList.add("hidden"); });
-  D.wizards = createWizards({
-    api, root: $("wizard"), toast,
-    showMesh: (id, spec) => { V.setExtra(id, spec); renderVisibility(); request(false); },
-    openSpec: (s, spec) => { const q = new URLSearchParams(location.search); q.set("store", s || store); q.set("spec", spec); location.search = q.toString(); },
-    prepare: async () => ({
-      project: P.name || "untitled",
-      values: { store, ...D.base },
-      after: async (dir) => {
-        const spec = `${dir}/character.gfchar.json`;
-        const input = { ...settleInput(), out: spec };
-        delete input.eyes;
-        await api("designer.save", input);
-        return { character: { store, spec }, export: { out: `${dir}/export.glb` } };
-      },
-    }),
-  });
-  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(`tasks: ${e.message}`)));
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("history").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) historyTo(Number(li.dataset.at)); });
@@ -1893,7 +1876,32 @@ async function loadProjectDoc() {
   return doc;
 }
 
+function wireTasks() {
+  D.wizards = createWizards({
+    api, root: $("wizard"), toast,
+    showMesh: (id, spec) => { if (!V) return false; V.setExtra(id, spec); renderVisibility(); request(false); return true; },
+    canShow: () => !!V,
+    openSpec: (s, spec) => { const q = new URLSearchParams(location.search); if (s || store) q.set("store", s || store); q.set("spec", spec); location.search = q.toString(); },
+    prepare: async () => {
+      if (!store || !D.base) return { project: P.name || "untitled", values: store ? { store } : {}, after: async () => ({}) };
+      return {
+        project: P.name || "untitled",
+        values: { store, ...D.base },
+        after: async (dir) => {
+          const spec = `${dir}/character.gfchar.json`;
+          const input = { ...settleInput(), out: spec };
+          delete input.eyes;
+          await api("designer.save", input);
+          return { character: { store, spec }, export: { out: `${dir}/export.glb` } };
+        },
+      };
+    },
+  });
+}
+
 async function main() {
+  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(`tasks: ${e.message}`)));
+  wireTasks();
   const doc = await loadProjectDoc();
   if (!store) {
     setStatus("preview", "open this page with ?store=<store path> (optional &spec=, &macro=, &eyes=) or ?project=<name>");
