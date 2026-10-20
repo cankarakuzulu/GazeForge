@@ -413,6 +413,7 @@ impl Offscreen {
                 if let Some(n) = num("preview_threads") {
                     w.preview_threads = (n as usize).max(1);
                 }
+                w.project_detach();
                 w.request_load(store, text("spec"), text("macro"), text("eyes"), text("game"));
                 w.wait(|w| w.loading.is_none(), 600.0)?;
                 let r = w.load_result.clone().ok_or("the load returned nothing")??;
@@ -670,6 +671,154 @@ impl Offscreen {
                     other => return Err(format!("topology do is show, improve, wait, after, before or summary, got {other}")),
                 }
                 w.topo.summary()
+            }
+            "rig" => {
+                match text("do").unwrap_or("summary") {
+                    "load" => {
+                        w.face_load();
+                        w.wait(|w| w.face.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if w.face.rig.is_none() {
+                            return Err(w.face.status.clone());
+                        }
+                    }
+                    "preset" => {
+                        let name = text("name").ok_or("rig preset needs name")?;
+                        w.face.weights = crate::face_rig::preset_weights(name).ok_or_else(|| format!("no rig preset {name}"))?;
+                    }
+                    "weights" => {
+                        w.face.weights = vec![0.0; crate::face_rig::SHAPES.len()];
+                        for (k, v) in step.get("weights").and_then(Value::as_object).into_iter().flatten() {
+                            let i = crate::face_rig::SHAPES.iter().position(|s| s == k).ok_or_else(|| format!("no face shape {k}"))?;
+                            w.face.weights[i] = v.as_f64().ok_or_else(|| format!("{k}: not a number"))?;
+                        }
+                    }
+                    "mode" => w.face.mode = if text("mode") == Some("joints") { crate::face_rig::Mode::Joints } else { crate::face_rig::Mode::Blend },
+                    "manual" => {
+                        let rig = w.face.rig.as_ref().ok_or("load the rig first")?;
+                        let name = text("joint").ok_or("rig manual needs joint")?;
+                        let j = rig.joints.iter().position(|x| x.name == name).ok_or_else(|| format!("no joint {name}"))?;
+                        let v = step.get("values").and_then(Value::as_array).ok_or("rig manual needs values [rx, ry, rz, tx, ty, tz]")?;
+                        w.face.manual.insert(j, std::array::from_fn(|c| v.get(c).and_then(Value::as_f64).unwrap_or(0.0)));
+                    }
+                    "clear" => {
+                        w.face.weights = vec![0.0; crate::face_rig::SHAPES.len()];
+                        w.face.manual.clear();
+                    }
+                    "summary" => {}
+                    other => return Err(format!("rig do is load, preset, weights, mode, manual, clear or summary, got {other}")),
+                }
+                w.face_update();
+                w.tick();
+                json!({"status": w.face.status, "loaded": w.face.rig.is_some(), "joints": w.face.rig.as_ref().map_or(0, |r| r.joints.len()),
+                       "mode": w.face.mode.name(), "active": w.face.active(), "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>()})
+            }
+            "project" => {
+                match text("do").unwrap_or("summary") {
+                    "save" => {
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                        let name = text("name").ok_or("project save needs name")?;
+                        w.project_save(name, false);
+                        if w.project.job.is_none() {
+                            return Err(w.project.status.clone());
+                        }
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                        if w.project.name.as_deref() != Some(name) {
+                            return Err(w.project.status.clone());
+                        }
+                    }
+                    "open" => {
+                        w.project_open(text("name").ok_or("project open needs name")?, step.get("recovery").and_then(Value::as_bool).unwrap_or(false));
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if !w.project.unresolved.is_empty() || w.project.doc.is_none() {
+                            return Err(w.project.status.clone());
+                        }
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                        w.wait(|w| w.face.job.is_none() && w.stitch.job.is_none() && w.timeline.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "notes" => w.project.notes = text("text").unwrap_or_default().to_string(),
+                    "pick" => {
+                        w.project_pick(num("index").ok_or("project pick needs index")? as usize);
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                        w.wait(|w| w.stitch.job.is_none() && w.face.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "new" => {
+                        w.project_new();
+                        w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "summary" => {}
+                    other => return Err(format!("project do is save, open, notes, pick, new or summary, got {other}")),
+                }
+                w.tick();
+                json!({"name": w.project.name, "active": w.project.active, "characters": w.project.doc.as_ref().and_then(|d| d["characters"].as_array()).map(Vec::len),
+                       "dirty": w.project_dirty(), "status": w.project.status, "notes": w.project.notes, "panels": w.panel_states(),
+                       "weights": w.character_input().map(|c| c["weights"].clone())})
+            }
+            "timeline" => {
+                match text("do").unwrap_or("summary") {
+                    "deltas" => {
+                        w.timeline_deltas();
+                        w.wait(|w| w.timeline.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                        if w.timeline.rig.is_none() {
+                            return Err(w.timeline.rig_note.clone());
+                        }
+                    }
+                    "clip" => {
+                        let path = text("file").ok_or("timeline clip needs file")?;
+                        let v = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")).and_then(|t| gf_api::exactjson::text(&t).map_err(|e| format!("{path}: {e}")))?;
+                        if !w.timeline_clip(v, "script") {
+                            return Err(w.timeline.status.clone());
+                        }
+                    }
+                    "seek" => {
+                        w.timeline_play(false);
+                        w.timeline.t = num("t").ok_or("timeline seek needs t")?;
+                        w.timeline_show();
+                    }
+                    "head" => {
+                        w.timeline.apply_head = step.get("on").and_then(Value::as_bool).unwrap_or(true);
+                        w.timeline_show();
+                    }
+                    "summary" => {}
+                    other => return Err(format!("timeline do is deltas, clip, seek, head or summary, got {other}")),
+                }
+                w.tick();
+                json!({"status": w.timeline.status, "rig_note": w.timeline.rig_note, "readout": w.timeline.readout, "t": w.timeline.t, "frames": w.timeline.clip.as_ref().map(|c| c.times.len()),
+                       "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), "eye_pose": w.eye_pose.is_some()})
+            }
+            "stitch" => {
+                match text("do").unwrap_or("summary") {
+                    "go" => {
+                        if let Some(b) = text("body") {
+                            w.stitch.body = b.to_string();
+                        }
+                        if let Some(s) = text("store") {
+                            w.stitch.store = s.to_string();
+                        }
+                        for (i, c) in crate::stitch::CONTROLS.iter().enumerate() {
+                            if let Some(v) = num(c.0) {
+                                w.stitch.values[i] = v;
+                            }
+                        }
+                        w.stitch_go();
+                        w.wait(|w| w.stitch.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "show" => {
+                        w.stitch.show = step.get("on").and_then(Value::as_bool).unwrap_or(true);
+                        w.stitch_draw();
+                    }
+                    "dump" => {
+                        let m = w.stitch.last.as_ref().ok_or("nothing stitched")?;
+                        let file = out.join(text("file").ok_or("stitch dump needs file")?);
+                        let bytes: Vec<u8> = m.positions.iter().flat_map(|x| x.to_le_bytes()).collect();
+                        std::fs::write(&file, &bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+                    }
+                    "summary" => {}
+                    other => return Err(format!("stitch do is go, show, dump or summary, got {other}")),
+                }
+                w.tick();
+                let m = w.stitch.last.as_ref();
+                json!({"status": w.stitch.status, "pass": w.stitch.pass, "stale": w.stitch.stale, "vertices": m.map(|m| m.positions.len() / 3), "triangles": m.map(|m| m.indices.len() / 3),
+                       "seam_segments": m.map(|m| m.lines.len() / 2), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
             }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));

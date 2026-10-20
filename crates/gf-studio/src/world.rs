@@ -4,6 +4,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::face_rig::FaceRig;
+use crate::stitch::Stitch;
+use crate::project::Project;
+use crate::timeline::Timeline;
 use crate::hud::Hud;
 use crate::i18n::{tr, tr_or, trf};
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
@@ -12,6 +16,22 @@ use crate::shape::{ShapeEvent, ShapeModel, Values};
 use crate::topology::TopologyUi;
 use crate::viewer::{self, Bounds, DISPLACEMENT, MODES, ViewerState};
 use crate::worker::{Done, Job, Jobs, SettleRequest, stamp};
+
+pub struct Extra {
+    pub id: String,
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub colour: [f32; 3],
+    pub visible: bool,
+    pub key: u64,
+}
+
+pub struct Overlay {
+    pub id: String,
+    pub segments: Vec<[f64; 3]>,
+    pub colour: [f64; 3],
+}
 
 pub struct World {
     pub state: ViewerState,
@@ -51,6 +71,18 @@ pub struct World {
     pub trace: Vec<Value>,
     pub topo: TopologyUi,
     pub head_generation: u64,
+    pub poses: Vec<(String, Vec<f32>)>,
+    pose_dirty: bool,
+    pub face: FaceRig,
+    pub extras: Vec<Extra>,
+    pub overlays: Vec<Overlay>,
+    extra_key: u64,
+    pub stitch: Stitch,
+    pub timeline: Timeline,
+    pub eye_pose: Option<([f64; 9], [f64; 3])>,
+    pub project: Project,
+    pub face_morphs: Option<String>,
+    pub face_prefix: Option<String>,
 }
 
 impl Default for World {
@@ -94,6 +126,18 @@ impl Default for World {
             trace: Vec::new(),
             topo: TopologyUi::default(),
             head_generation: 0,
+            poses: Vec::new(),
+            pose_dirty: false,
+            face: FaceRig::default(),
+            extras: Vec::new(),
+            overlays: Vec::new(),
+            extra_key: 0,
+            stitch: Stitch::default(),
+            timeline: Timeline::default(),
+            eye_pose: None,
+            project: Project::default(),
+            face_morphs: None,
+            face_prefix: None,
         }
     }
 }
@@ -139,11 +183,15 @@ impl World {
     }
 
     pub fn request_load(&mut self, store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) {
+        self.request_load_with(store, spec, None, macro_file, eyes, game);
+    }
+
+    pub fn request_load_with(&mut self, store: &str, spec: Option<&str>, character: Option<Value>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) {
         self.load_seq += 1;
         self.loading = Some(Instant::now());
         self.load_result = None;
         let owned = |s: Option<&str>| s.map(str::to_string);
-        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: owned(spec), macro_file: owned(macro_file), eyes: owned(eyes), game: owned(game) });
+        self.jobs.send(self.load_seq, Job::Load { store: store.to_string(), spec: owned(spec), character, macro_file: owned(macro_file), eyes: owned(eyes), game: owned(game) });
     }
 
     pub fn idle(&self) -> bool {
@@ -171,9 +219,134 @@ impl World {
         while let Some(done) = self.jobs.try_recv() {
             self.handle(done);
         }
+        self.face_poll();
+        self.stitch_poll();
+        self.timeline_poll();
+        self.project_poll();
+        self.project_autosave("timer");
         if self.preview_dirty {
             self.update_preview();
         }
+        if self.pose_dirty {
+            self.present_pose();
+        }
+    }
+
+    pub fn set_pose(&mut self, id: &str, positions: Option<Vec<f32>>) -> Result<(), String> {
+        let n = self.session.as_ref().map_or(0, |s| s.head.n);
+        if let Some(p) = &positions
+            && p.len() != n * 3
+        {
+            return Err(format!("set_pose needs {} floats (game LOD0 order), got {}", n * 3, p.len()));
+        }
+        self.poses.retain(|(k, _)| k != id);
+        if let Some(p) = positions {
+            self.poses.push((id.to_string(), p));
+        } else {
+            self.preview_dirty = true;
+        }
+        self.pose_dirty = true;
+        Ok(())
+    }
+
+    pub fn set_extra(&mut self, id: &str, mesh: Option<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])>) {
+        self.extras.retain(|e| e.id != id);
+        if let Some((positions, normals, indices, colour)) = mesh {
+            self.extra_key += 1;
+            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, visible: true, key: self.extra_key });
+        }
+    }
+
+    pub fn set_overlay(&mut self, id: &str, lines: Option<(Vec<[f64; 3]>, [f64; 3])>) {
+        self.overlays.retain(|o| o.id != id);
+        if let Some((segments, colour)) = lines {
+            self.overlays.push(Overlay { id: id.to_string(), segments, colour });
+        }
+    }
+
+    fn present_pose(&mut self) {
+        self.pose_dirty = false;
+        let (Some(s), Some((_, p))) = (self.session.as_mut(), self.poses.last()) else { return };
+        s.head.positions.copy_from_slice(p);
+        s.head.normals = crate::session::vertex_normals(&s.head.positions, &s.head.lods[0].indices, s.head.n);
+        s.head.revision += 1;
+        s.preview_eyes(self.shape.as_ref().and_then(|sh| sh.live.eyeballs.as_ref()));
+        if let (Some((m, c)), Some(e)) = (self.eye_pose, s.head.eyes.as_mut()) {
+            for v in e.positions.chunks_exact_mut(3) {
+                let (x, y, z) = (v[0] as f64 - c[0], v[1] as f64 - c[1], v[2] as f64 - c[2]);
+                v[0] = (m[0] * x + m[1] * y + m[2] * z + c[0]) as f32;
+                v[1] = (m[3] * x + m[4] * y + m[5] * z + c[1]) as f32;
+                v[2] = (m[6] * x + m[7] * y + m[8] * z + c[2]) as f32;
+            }
+            for v in e.normals.chunks_exact_mut(3) {
+                let (x, y, z) = (v[0] as f64, v[1] as f64, v[2] as f64);
+                v[0] = (m[0] * x + m[1] * y + m[2] * z) as f32;
+                v[1] = (m[3] * x + m[4] * y + m[5] * z) as f32;
+                v[2] = (m[6] * x + m[7] * y + m[8] * z) as f32;
+            }
+        }
+    }
+
+    pub fn face_load(&mut self) {
+        let Some(s) = &self.session else {
+            self.face.status = tr("studio.load_first").into();
+            return;
+        };
+        if self.face.job.is_some() {
+            self.face.stale = true;
+            return;
+        }
+        let mut input = s.settle_input(&s.character, false);
+        let prefix = self.face_prefix();
+        input["morphs"] = json!(crate::face_rig::SHAPES.iter().map(|n| format!("{prefix}{n}")).collect::<Vec<_>>());
+        if let Some(dir) = self.face_morphs() {
+            input["morph_dir"] = json!(dir);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let env = gf_api::call(&gf_api::Ctx::from_env(), "rig.face", &input);
+            let out = if env["ok"] == true { crate::face_rig::Rig::from_json(&env["result"]) } else { Err(env["error"]["message"].as_str().unwrap_or("rig.face failed").to_string()) };
+            let _ = tx.send(out);
+        });
+        self.face.job = Some(rx);
+        self.face.wanted = true;
+        self.face.stale = false;
+        self.face.status = tr("rig.fitting").into();
+    }
+
+    fn face_poll(&mut self) {
+        let Some(rx) = &self.face.job else { return };
+        let Ok(out) = rx.try_recv() else { return };
+        self.face.job = None;
+        match out {
+            Ok(rig) => {
+                if !rig.joints.get(self.face.joint).is_some_and(|j| j.posed) {
+                    self.face.joint = rig.joints.iter().position(|j| j.posed).unwrap_or(0);
+                }
+                self.face.rig = Some(rig);
+                self.face.overlay_off = false;
+                self.face.status = self.face.loaded_text();
+            }
+            Err(e) => self.face.status = trf("rig.error", &[("error", &e)]),
+        }
+        if self.face.stale {
+            self.face_load();
+        } else {
+            self.face_update();
+        }
+    }
+
+    pub fn face_morphs(&self) -> Option<String> {
+        self.face_morphs.clone().or_else(|| std::env::var("GAZEFORGE_FACE_MORPHS").ok())
+    }
+
+    pub fn face_prefix(&self) -> String {
+        self.face_prefix.clone().or_else(|| std::env::var("GAZEFORGE_FACE_PREFIX").ok()).unwrap_or_else(|| "faceunits/".into())
+    }
+
+    pub fn face_update(&mut self) {
+        let pose = self.face.pose();
+        let _ = self.set_pose("rig", pose);
     }
 
     pub fn wait(&mut self, done: impl Fn(&World) -> bool, seconds: f64) -> Result<f64, String> {
@@ -225,6 +398,14 @@ impl World {
                         self.preview = Some(preview);
                         self.uvs_dirty = true;
                         self.epoch += 1;
+                        self.poses.clear();
+                        self.face = FaceRig::default();
+                        self.extras.clear();
+                        self.overlays.clear();
+                        let old = std::mem::take(&mut self.timeline);
+                        self.timeline = Timeline { file: old.file, source: old.source, glb: old.glb, out: old.out, speed: old.speed, looping: old.looping, apply_head: old.apply_head, ..Timeline::default() };
+                        self.eye_pose = None;
+                        self.stitch = Stitch { store: std::mem::take(&mut self.stitch.store), body: std::mem::take(&mut self.stitch.body), values: self.stitch.values, auto: self.stitch.auto, ..Stitch::default() };
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
                         if let Some((id, _, _)) = self.samples_wanted.take() {
@@ -290,6 +471,14 @@ impl World {
                         self.hud.settle_latency.push(l);
                     }
                     self.note(trf("studio.settled", &[("placement", &out.placement), ("ms", &format!("{:.0}", latency.unwrap_or(out.ms)))]));
+                    if self.face.wanted {
+                        self.face_load();
+                    }
+                    self.stitch_changed(false);
+                    if self.timeline.rig.is_some() {
+                        self.timeline_deltas();
+                    }
+                    self.project_autosave("settle");
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {
@@ -472,10 +661,18 @@ impl World {
         if out.preview {
             self.preview_dirty = true;
             self.edit_at.get_or_insert_with(Instant::now);
+            if self.face.rig.is_some() && self.poses.iter().any(|(k, _)| k == "rig") {
+                self.poses.retain(|(k, _)| k != "rig");
+                self.face.overlay_off = true;
+                self.face.status = tr("rig.changed").into();
+            }
         }
         let macros: Vec<String> = shape.macros.iter().map(|m| m.name.clone()).filter(|n| out.begin.contains(n)).collect();
         for m in macros {
             self.want_slope(&m);
+        }
+        if out.preview {
+            self.stitch_changed(true);
         }
         if out.settle {
             self.request_settle();
@@ -536,6 +733,9 @@ impl World {
         }
         if let Some(e) = self.edit_at.take() {
             self.latency_mark = Some(e);
+        }
+        if !self.poses.is_empty() {
+            self.pose_dirty = true;
         }
     }
 

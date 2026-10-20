@@ -265,6 +265,33 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     out
 }
 
+pub fn from_base64(text: &str) -> Result<Vec<u8>, String> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let body = text.trim_end_matches('=').as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return Err(format!("base64 text of length {} is not padded to a multiple of 4", text.len()));
+    }
+    if text.len() - body.len() > 2 || body.len() % 4 == 1 {
+        return Err(format!("base64 text of length {} has {} padding characters, more than its data allows", text.len(), text.len() - body.len()));
+    }
+    let mut out = Vec::with_capacity(body.len() * 3 / 4);
+    for chunk in body.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= (value(c).ok_or_else(|| format!("{:?} is not a base64 character", c as char))? as u32) << (18 - 6 * i);
+        }
+        out.extend(&n.to_be_bytes()[1..chunk.len()]);
+    }
+    Ok(out)
+}
+
 pub(crate) fn f32_base64(values: impl Iterator<Item = f64>) -> String {
     let bytes: Vec<u8> = values.flat_map(|v| (v as f32).to_le_bytes()).collect();
     base64(&bytes)
@@ -1176,6 +1203,12 @@ mod tests {
     fn base64_matches_the_rfc_vectors() {
         for (raw, enc) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
             assert_eq!(base64(raw.as_bytes()), enc);
+            assert_eq!(from_base64(enc).unwrap(), raw.as_bytes());
+        }
+        let all: Vec<u8> = (0..=255).collect();
+        assert_eq!(from_base64(&base64(&all)).unwrap(), all);
+        for bad in ["Zg=", "Z!==", "Zg==="] {
+            assert!(from_base64(bad).is_err(), "{bad}");
         }
     }
 

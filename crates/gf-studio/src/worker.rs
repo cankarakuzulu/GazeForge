@@ -20,7 +20,7 @@ pub struct Opened {
 }
 
 pub enum Job {
-    Load { store: String, spec: Option<String>, macro_file: Option<String>, eyes: Option<String>, game: Option<String> },
+    Load { store: String, spec: Option<String>, character: Option<Value>, macro_file: Option<String>, eyes: Option<String>, game: Option<String> },
     Slope { name: String, key: String, input: Value, urgent: bool },
     Samples { id: u64, name: String, key: String, input: Value },
     Reference { input: Value },
@@ -132,8 +132,8 @@ fn reply(done: &Sender<Done>, wake: &Wake, msg: Done, trace: Trace) -> bool {
     ok
 }
 
-fn open(store: &str, spec: Option<&str>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) -> Result<Box<Opened>, String> {
-    let (session, sliders) = Session::open(store, spec, macro_file, eyes, game)?;
+fn open(store: &str, spec: Option<&str>, character: Option<&Value>, macro_file: Option<&str>, eyes: Option<&str>, game: Option<&str>) -> Result<Box<Opened>, String> {
+    let (session, sliders) = Session::open(store, spec, character, macro_file, eyes, game)?;
     let t = Instant::now();
     let deltas = designer::preview_deltas(&json!({"store": store, "pack": session.pack, "catalog": session.catalog, "game": session.game})).map_err(err)?;
     if deltas.vertices != session.head.n {
@@ -175,8 +175,8 @@ impl Jobs {
                     for (epoch, sent, job) in jobs {
                         let t = Instant::now();
                         let (kind, msg) = match job {
-                            Job::Load { store, spec, macro_file, eyes, game } => {
-                                let result = open(&store, spec.as_deref(), macro_file.as_deref(), eyes.as_deref(), game.as_deref());
+                            Job::Load { store, spec, character, macro_file, eyes, game } => {
+                                let result = open(&store, spec.as_deref(), character.as_ref(), macro_file.as_deref(), eyes.as_deref(), game.as_deref());
                                 ("load", Done::Loaded { epoch, result, ms: ms(t) })
                             }
                             Job::Reference { input } => (

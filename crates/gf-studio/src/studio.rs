@@ -42,6 +42,7 @@ pub struct UiState {
     pub cube_hover: Option<(usize, Element)>,
     pub cube_drag: Option<usize>,
     pub wizards: crate::wizard::Wizards,
+    pub project: crate::project::ProjectUi,
 }
 
 pub struct UiArgs {
@@ -80,6 +81,7 @@ impl UiState {
             cube_hover: None,
             cube_drag: None,
             wizards: Default::default(),
+            project: Default::default(),
         })
     }
 }
@@ -238,7 +240,8 @@ impl Studio<'_> {
         egui::Panel::left("side").default_size(300.0).show(ui, |ui| self.side(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, dt));
         self.keys_window(&ctx);
-        self.s.wizards.show(&ctx, self.world, "untitled");
+        let slot = self.world.project.slot();
+        self.s.wizards.show(&ctx, self.world, &slot);
         if let Some((store, spec)) = self.s.wizards.open_spec.take() {
             if !store.is_empty() {
                 self.s.store = store;
@@ -417,6 +420,7 @@ impl Studio<'_> {
             ui.horizontal(|ui| {
                 let load = ui.add_enabled(self.world.loading.is_none(), egui::Button::new(tr("studio.load"))).on_hover_text(tr("studio.load_tip"));
                 if load.clicked() {
+                    self.world.project_detach();
                     self.load();
                 }
             });
@@ -429,7 +433,11 @@ impl Studio<'_> {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
         });
+        self.project_panel(ui);
         self.topology_panel(ui);
+        self.face_rig_panel(ui);
+        self.stitch_panel(ui);
+        self.timeline_panel(ui);
         if let Some(s) = &self.world.session {
             ui.separator();
             ui.horizontal(|ui| {
@@ -605,6 +613,7 @@ impl Studio<'_> {
                 painter.rect_stroke(rr, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(90, 150, 240)), egui::StrokeKind::Inside);
             }
         }
+        self.face_rig_paint(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
         if self.world.hud.on {
             let mut lines = self.world.hud.lines();
