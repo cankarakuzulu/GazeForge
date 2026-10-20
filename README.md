@@ -388,6 +388,43 @@ under them barely moves; `--plant` adds a forward jump to one vertex at one step
 `game` assert the world frame first (-Y forward, +Z up); `path` measures distances only. A gate that fails prints its
 report with `"ok": false` and exits non-zero.
 
+#### Topology
+
+```
+gazeforge topology improve --store DIR --game sha256:... [--catalog sha256:...] [--shape-targets all|head|none]
+                           [--samples 32] [--seed 1] [--dense DIR] [--below 30] [--min-gain 0.5] [--max-fold 20]
+                           [--max-spread 40] [--rounds 32] [--levels all|finest] [--out DIR]
+gazeforge topology inspect --store DIR --game sha256:...
+gazeforge export-obj ... --quads on
+```
+
+`improve` (registry `topology.improve`, a job) re-cuts a game base's triangles by edge flips and stores the result as a
+new game base; the old manifest is untouched. Only the triangulation changes: `kept` and `owner` stay byte-identical, so
+every vertex is still an original dense vertex and every target, sculpt and residual maps exactly as before. Characters
+name their game base by sha256, so they are unchanged until a spec names the new one.
+
+A flip is scored over the shape range the base serves: the rest shape, every catalog target alone at weight 1
+(identical target files once), `--samples` seeded combinations (per head slider of the designer's categories a random
+side with probability 0.3 at a uniform weight, and with probability 0.5 one or two expression units), and with `--dense`
+the dense pack's own manifest shapes. Each triangle's score is its smallest angle over all those shapes; a flip is made
+only when it raises the smaller score of its two triangles by `--min-gain` degrees, and only on edges of triangles
+scoring under `--below`. It is refused across a UV seam or the open boundary; where, in any scored shape, a new
+triangle's normal leaves the old pair's normal by more than `--max-fold` degrees, more triangles would be turned over
+(against their own rest orientation) than before, or a texture triangle would flip; and where the four corners' rest
+surface normals (the dense base's, angle-weighted) differ by more than `--max-spread` degrees, a crease the game mesh
+cannot follow. Rounds evaluate every candidate edge (in parallel when built with it) and apply the accepted flips in a
+fixed order, so the result is the same on every run. With `--levels all` the levels of detail are improved the same way
+and the new base names the new levels. The result reports, per level, the rest and whole-range statistics before and
+after (smallest-angle percentiles, counts under 5, 10 and 20 degrees, largest angles, turned triangles) and a row per
+scored shape; the manifest's `build.topology` keeps the summary and each triangle's worst angle before and after.
+`--out` also writes the new base as a directory for `export-obj --base`.
+
+`inspect` (registry `topology.inspect`) returns a base's rest-shape triangle quality, its triangles and the record of the
+improve that made it. `export-obj --quads on` writes clean triangle pairs as quads: pairs are chosen on the base's rest
+shape and texture (planar within 10 degrees, convex in 3D and in texture space, corners between 45 and 135 degrees, not
+across a seam), so the characters of one base share them, and a pair that is not clean on the written mesh is written as
+its two triangles. glTF has no quads: `export-glb` stays triangles, and `--quads` is off by default.
+
 ### One registry, three front doors
 
 The commands an agent uses live in one registry (`gf-api`). Each has a name, a kind (query, mutation or job), an input
@@ -587,6 +624,12 @@ other than 1 shows the scaled head through `setPose`; while the character change
 re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
 moves and refits after the settle.
 
+The Topology panel (`topology.js`) shows the triangles whose smallest angle on the settled character is under a limit
+(the toolbar's warning-triangle button toggles it), runs `topology.improve` as a job with its progress, shows the
+numbers before and after, draws the improved base beside the head (settled on it), and reloads the page on the new base
+(the `game` URL parameter, which `designer.sliders` takes as `game`). Its default base, when no spec names one, is the
+store's largest base that is not a topology result.
+
 `api.grid` (the face chart, below) gives a panel `ensure()`, `lastProbe()`, `onProbe(cb)`, `onPin(cb)`,
 `describe(triangle, bary)`, `pointOf(triangle, bary)`, `normalOf(triangle)`, `goTo(address)`, `setMarkers(id, list | fn)`,
 `character()` and `definition()`. The Pins panel (`web/panels/pins.js`) is built on it.
@@ -722,6 +765,13 @@ slider moves and the settle has all of them otherwise; a settle that completes i
 shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings overlay (`Alt+H`) shows the
 present rate, frame times, input-to-preview latency, settle latency, the macro slope and sample costs.
 `GAZEFORGE_SETTLE_THREADS` (default: all cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
+
+The side panel's Topology section highlights the triangles whose smallest angle is under its limit (`Alt+Q`, or the
+warning-triangle toolbar button), runs `topology.improve` as a gf-api job (the studio binary runs the job's supervisor
+and worker itself) with a progress bar, shows the numbers before and after, switches the viewports between the loaded
+base and the improved one with the character settled on each, and reloads the studio on the improved base (the Store
+section's `game` field, an override of the spec's base). Scripts drive it with the `topology` step (`do`: `show`,
+`improve`, `wait`, `after`, `before`, `summary`).
 
 `--bench-window SECONDS` orbits and previews continuously and prints the frame rate; `--bench-idle SECONDS` waits for
 the app to go idle and counts the frames it draws with nothing changing (none expected). When the operating system

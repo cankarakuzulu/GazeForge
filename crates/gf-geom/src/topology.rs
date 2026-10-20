@@ -586,6 +586,50 @@ fn convex_corners(p: [[f64; 3]; 4], up: [f64; 3]) -> bool {
     })
 }
 
+fn quad_score(p: [[f64; 3]; 4], q: [Uv; 4], uv_sign: f64, cos_fold: f64, settings: &QuadSettings) -> Option<f64> {
+    let (n1, n2) = (normal([p[0], p[2], p[3]]), normal([p[2], p[0], p[1]]));
+    let (l1, l2) = (length(n1), length(n2));
+    if !(l1 > 0.0 && l2 > 0.0 && dot(n1, n2) > cos_fold * l1 * l2) {
+        return None;
+    }
+    let up = [n1[0] + n2[0], n1[1] + n2[1], n1[2] + n2[2]];
+    if !convex_corners(p, up) {
+        return None;
+    }
+    if uv_sign == 0.0 || !convex_corners(q.map(|u| [u[0] as f64, u[1] as f64, 0.0]), [0.0, 0.0, uv_sign]) {
+        return None;
+    }
+    let angles = [0, 1, 2, 3].map(|i| angle_at(p[i], p[(i + 1) % 4], p[(i + 3) % 4]));
+    if angles.iter().any(|&x| x < settings.min_corner_deg || x > 180.0 - settings.min_corner_deg) {
+        return None;
+    }
+    Some(angles.iter().map(|&x| (x - 90.0).abs()).fold(0.0, f64::max))
+}
+
+pub fn clean_quads(faces: &[Face], positions: &[[f64; 3]], triangles: &[[u32; 3]], uvs: &[[Uv; 3]], settings: &QuadSettings) -> (Vec<Face>, usize) {
+    let cos_fold = settings.max_fold_deg.to_radians().cos();
+    let mut out = Vec::with_capacity(faces.len() + 64);
+    let mut split = 0;
+    for f in faces {
+        match *f {
+            Face::Quad(c) => {
+                let p = c.map(|(t, k)| positions[triangles[t as usize][k as usize] as usize]);
+                let q = c.map(|(t, k)| uvs[t as usize][k as usize]);
+                if quad_score(p, q, uv_area(uvs[c[0].0 as usize]).signum(), cos_fold, settings).is_some() {
+                    out.push(*f);
+                } else {
+                    split += 1;
+                    let (t, s) = (c[0].0.min(c[1].0), c[0].0.max(c[1].0));
+                    out.push(Face::Triangle(t));
+                    out.push(Face::Triangle(s));
+                }
+            }
+            Face::Triangle(_) => out.push(*f),
+        }
+    }
+    (out, split)
+}
+
 pub fn quads(positions: &[[f64; 3]], triangles: &[[u32; 3]], uvs: &[[Uv; 3]], settings: &QuadSettings) -> Vec<Face> {
     let mut vtris: Vec<Vec<u32>> = vec![Vec::new(); positions.len()];
     for (t, tri) in triangles.iter().enumerate() {
@@ -616,25 +660,8 @@ pub fn quads(positions: &[[f64; 3]], triangles: &[[u32; 3]], uvs: &[[Uv; 3]], se
                 continue;
             }
             let p = [a, d, b, c].map(|v| positions[v as usize]);
-            let (n1, n2) = (normal([p[0], p[2], p[3]]), normal([p[2], p[0], p[1]]));
-            let (l1, l2) = (length(n1), length(n2));
-            if !(l1 > 0.0 && l2 > 0.0 && dot(n1, n2) > cos_fold * l1 * l2) {
-                continue;
-            }
-            let up = [n1[0] + n2[0], n1[1] + n2[1], n1[2] + n2[2]];
-            if !convex_corners(p, up) {
-                continue;
-            }
-            let q = [uv(t, a), uv(s, d), uv(t, b), uv(t, c)].map(|u| [u[0] as f64, u[1] as f64, 0.0]);
-            let uv_up = [0.0, 0.0, uv_area(uvs[t as usize]).signum()];
-            if uv_up[2] == 0.0 || !convex_corners(q, uv_up) {
-                continue;
-            }
-            let angles = [0, 1, 2, 3].map(|i| angle_at(p[i], p[(i + 1) % 4], p[(i + 3) % 4]));
-            if angles.iter().any(|&x| x < settings.min_corner_deg || x > 180.0 - settings.min_corner_deg) {
-                continue;
-            }
-            let score = angles.iter().map(|&x| (x - 90.0).abs()).fold(0.0, f64::max);
+            let q = [uv(t, a), uv(s, d), uv(t, b), uv(t, c)];
+            let Some(score) = quad_score(p, q, uv_area(uvs[t as usize]).signum(), cos_fold, settings) else { continue };
             candidates.push((score, t, s, [(t, corner(t, a)), (s, corner(s, d)), (t, corner(t, b)), (t, corner(t, c))]));
         }
     }
@@ -930,6 +957,16 @@ mod tests {
             }
         }
         assert!(quads(&p, &tris, &seam, &QuadSettings::default()).iter().all(|f| matches!(f, Face::Triangle(_))));
+        let base_faces = quads(&p, &tris, &uvs, &QuadSettings::default());
+        let (same, none) = clean_quads(&base_faces, &p, &tris, &uvs, &QuadSettings::default());
+        assert_eq!((same.clone(), none), (base_faces.clone(), 0));
+        let bent: Vec<[f64; 3]> = p.iter().enumerate().map(|(i, q)| [q[0], q[1], if i == 12 { 0.002 } else { 0.0 }]).collect();
+        let (kept, split) = clean_quads(&base_faces, &bent, &tris, &uvs, &QuadSettings::default());
+        assert!(split > 0 && split < 16, "{split}");
+        assert_eq!(kept.len(), base_faces.len() + split);
+        let mut seen: Vec<u32> = kept.iter().flat_map(|f| match f { Face::Triangle(t) => vec![*t], Face::Quad(c) => vec![c[0].0, c[1].0] }).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..tris.len() as u32).collect::<Vec<_>>());
         let folded: Vec<[f64; 3]> = p.iter().enumerate().map(|(i, q)| [q[0], q[1], if (i % 5 + i / 5) % 2 == 1 { 0.0008 } else { 0.0 }]).collect();
         for f in quads(&folded, &tris, &uvs, &QuadSettings::default()) {
             if let Face::Quad(c) = f {

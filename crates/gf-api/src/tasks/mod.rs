@@ -257,11 +257,16 @@ pub fn export_obj(opts: &Options) -> Result<Value, String> {
     };
     crate::jobs::progress("place", 0, 1, version.name);
     let placed = placer.place(&positions, &DenseMesh { triangles: &dense.triangles, triangle_uvs: &dense.triangle_uvs }, &base);
+    let written_uvs = placed.triangle_uvs.as_ref().unwrap_or(&base.triangle_uvs);
+    let mut split = 0;
     let faces = quads.then(|| {
         let rest: Vec<[f64; 3]> = base.kept.iter().map(|&k| dense.positions[k as usize]).collect();
-        topology_geom::quads(&rest, &base.triangles, &base.triangle_uvs, &topology_geom::QuadSettings::default())
+        let settings = topology_geom::QuadSettings::default();
+        let paired = topology_geom::quads(&rest, &base.triangles, &base.triangle_uvs, &settings);
+        let (faces, n) = topology_geom::clean_quads(&paired, &placed.game, &base.triangles, written_uvs, &settings);
+        split = n;
+        faces
     });
-    let written_uvs = placed.triangle_uvs.as_ref().unwrap_or(&base.triangle_uvs);
     match &faces {
         Some(faces) => obj::write_faces(out, &placed.game, &base.triangles, written_uvs, faces)?,
         None => obj::write_triangles(out, &placed.game, &base.triangles, written_uvs)?,
@@ -272,9 +277,9 @@ pub fn export_obj(opts: &Options) -> Result<Value, String> {
                            "placement_version": placer.version().to_string(), "measure": measure});
     if let Some(faces) = &faces {
         let quad_count = faces.iter().filter(|f| matches!(f, topology_geom::Face::Quad(_))).count();
-        value["quads"] = json!({"quads": quad_count, "triangles": faces.len() - quad_count, "faces": faces.len(),
+        value["quads"] = json!({"quads": quad_count, "triangles": faces.len() - quad_count, "faces": faces.len(), "split_on_this_mesh": split,
                                 "settings": topology_geom::QuadSettings::default(),
-                                "rule": "pairs paired on the base's rest shape and texture, so every character of the base gets the same faces"});
+                                "rule": "pairs are chosen on the base's rest shape and texture, so characters of one base share them; a pair that is not clean on the written mesh (folded, not convex in 3D or texture, a corner outside the limits) is written as its two triangles"});
     }
     for (k, v) in placed.report {
         value[k] = v;
