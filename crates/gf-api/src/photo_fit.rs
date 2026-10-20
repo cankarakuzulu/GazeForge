@@ -731,8 +731,10 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             write_json(&dest, &read_json(Path::new(table))?)?;
         }
     }
-    let lm = photo::landmark_vertices(&run)?;
     let base = photo::load_base(input)?;
+    let table_source = if opt(input, "base_landmarks").is_some() { "given" } else if run.join("base_landmarks.json").is_file() { "run" } else { "detected" };
+    photo::ensure_base_landmarks(input, &run, &base)?;
+    let lm = photo::landmark_vertices(&run)?;
     let p = &base.dense.positions;
     let tris = &base.dense.triangles;
     let tip = base.tip;
@@ -992,7 +994,8 @@ pub fn fit_photos(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "term_weights": {"landmarks": wl, "outline": wo, "prior": wprior, "symmetry": wsym, "ridge": ridge, "rounds": rounds, "pose_prior_deg": pose_sigma, "sparsity": sparsity, "extra_landmark_weight": extra_lm},
         "samples": {"prior": prior_rows.len(), "symmetry_pairs": sym_pairs.len()},
         "shell_gate": shell, "rounds": log, "term_scales": scales, "load_seconds": load_seconds, "seconds": started.elapsed().as_secs_f64(),
-        "fitted": run.join("fitted_dense.npy").display().to_string()
+        "fitted": run.join("fitted_dense.npy").display().to_string(),
+        "base_landmarks": {"source": table_source, "warning": (table_source == "detected").then_some("detected by the landmarker on a render of the eyeless base: several mm off at the lids and the chin; a table detected on the base with eyes (base_landmarks) fits better")}
     });
     if let Some(st) = &surface {
         report["shell"] = shell_report(st, &x);

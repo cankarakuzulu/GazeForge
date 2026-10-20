@@ -621,7 +621,7 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "wizards.start",
         kind: Kind::Mutation,
-        summary: "Start a wizard run: a folder ROOT/runs/PROJECT/WIZARD-N holding one subfolder per step (its input, its result or job); returns the run's state.",
+        summary: "Start a wizard run: a folder ROOT/runs/PROJECT/WIZARD-N holding steps/STEP per step (its input, its result or job) and the files the steps write ($dir); returns the run's state.",
         limits: "Runs are resumable: wizards.state reads them back at any time; nothing is deleted.",
         input: wizards::start_input,
         output: wizards::run_output,

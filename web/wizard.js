@@ -1,6 +1,6 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-export function createWizards({ api, root, toast, prepare }) {
+export function createWizards({ api, root, toast, prepare, openSpec }) {
   const W = { list: null, def: null, state: null, at: 0, polling: 0, busy: false, prepared: null };
   const box = root;
 
@@ -46,8 +46,9 @@ export function createWizards({ api, root, toast, prepare }) {
   function stepDef(i) { return W.def.steps[i]; }
   function stepState(i) { return W.state.steps[i]; }
 
-  function fieldSchema(step, name) {
-    return step.input_schema?.properties?.[name] || { type: "string" };
+  function fieldSchema(step, f) {
+    const name = typeof f === "string" ? f : f.name;
+    return step.input_schema?.properties?.[name] || (typeof f === "string" ? null : f.schema) || { type: "string" };
   }
 
   function current(i, name) {
@@ -75,7 +76,8 @@ export function createWizards({ api, root, toast, prepare }) {
       return `<div class="wz-row">${lab}<textarea id="${id}" data-name="${esc(name)}" data-kind="json" rows="2">${esc(v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v))}</textarea></div>`;
     }
     const hint = f?.widget ? `${f.widget.replace("_", " ")}${f.ext ? ` ${f.ext}` : ""}` : "";
-    return `<div class="wz-row">${lab}<input id="${id}" type="text" data-name="${esc(name)}" data-kind="text" placeholder="${esc(hint)}" value="${esc(v ?? "")}"></div>`;
+    const pick = f?.widget === "file_open" ? `<button class="small wz-upload" data-for="${id}" title="Choose a file on this computer; it is copied into the run">browse…</button>` : "";
+    return `<div class="wz-row">${lab}<div class="wz-file-in"><input id="${id}" type="text" data-name="${esc(name)}" data-kind="text" placeholder="${esc(hint)}" value="${esc(v ?? "")}">${pick}</div></div>`;
   }
 
   function render() {
@@ -92,9 +94,9 @@ export function createWizards({ api, root, toast, prepare }) {
     box.querySelector(".wz-body").innerHTML = `
       <p class="wz-help">${esc(s.help || s.summary || "")}</p>
       ${s.command ? `<p class="wz-cmd">runs <code>${esc(s.command)}</code> (${esc(s.kind)})</p>` : ""}
-      <div class="wz-form">${common.map((f) => widget(i, f.name, f.label, fieldSchema(s, f.name), f)).join("")}</div>
+      <div class="wz-form">${common.map((f) => widget(i, f.name, f.label, fieldSchema(s, f), f)).join("")}</div>
       ${advanced.length || rest.length ? `<details class="wz-adv"><summary>advanced (${advanced.length + rest.length})</summary>
-        ${advanced.map((f) => widget(i, f.name, f.label, fieldSchema(s, f.name), f)).join("")}
+        ${advanced.map((f) => widget(i, f.name, f.label, fieldSchema(s, f), f)).join("")}
         ${rest.map((n) => widget(i, n, n, fieldSchema(s, n), null)).join("")}</details>` : ""}
       ${hidden.length ? `<details class="wz-adv"><summary>from earlier steps (${hidden.length})</summary>${hidden.join("")}</details>` : ""}
       <div class="wz-result">${result(i)}</div>`;
@@ -105,7 +107,27 @@ export function createWizards({ api, root, toast, prepare }) {
     box.querySelector(".wz-run").disabled = W.busy;
     box.querySelector(".wz-next").disabled = i >= steps.length - 1 || !(st.state === "done" || s.optional);
     box.querySelector(".wz-back").disabled = i === 0;
+    for (const b of box.querySelectorAll(".wz-upload")) b.addEventListener("click", () => upload(b.dataset.for));
+    for (const b of box.querySelectorAll(".wz-open-spec")) b.addEventListener("click", () => openSpec?.(b.dataset.store, b.dataset.spec));
     if (st.state === "running") poll();
+  }
+
+  function upload(inputId) {
+    const chooser = document.createElement("input");
+    chooser.type = "file";
+    chooser.accept = "image/*";
+    chooser.addEventListener("change", async () => {
+      const file = chooser.files?.[0];
+      if (!file) return;
+      const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "") || "upload";
+      try {
+        const r = await fetch(`/v1/upload?run=${encodeURIComponent(W.state.run)}&name=${encodeURIComponent(name)}`, { method: "POST", body: file });
+        const env = await r.json();
+        if (!env.ok) throw new Error(env.error?.message || "upload failed");
+        box.querySelector(`#${CSS.escape(inputId)}`).value = env.result.path;
+      } catch (e) { fail(e); }
+    });
+    chooser.click();
   }
 
   function result(i) {
@@ -114,6 +136,15 @@ export function createWizards({ api, root, toast, prepare }) {
       ${st.error.details && Object.keys(st.error.details).length ? `<details><summary>report</summary><pre>${esc(JSON.stringify(st.error.details, null, 1))}</pre></details>` : ""}</div>`;
     if (!st.result) return st.state === "running" ? `<div class="wz-progress"><div class="bar"><i style="width:0%"></i></div><span class="msg">submitted</span></div>` : "";
     const shows = (s.shows || []).map((sh) => {
+      if (sh.kind === "images") {
+        const list = (sh.from ? resolve(sh.from) : null) || [];
+        return `<div class="wz-images">${list.filter((x) => x?.[sh.path]).map((x) =>
+          `<figure><img src="/v1/wizard-file?run=${encodeURIComponent(W.state.run)}&path=${encodeURIComponent(x[sh.path])}" alt=""><figcaption>${esc(x[sh.label] ?? "")}</figcaption></figure>`).join("")}</div>`;
+      }
+      if (sh.kind === "spec") {
+        const spec = sh.from ? resolve(sh.from) : null, store = sh.store ? resolveRun(sh.store) : null;
+        return spec ? `<div class="wz-file">wrote <code>${esc(spec)}</code> <button class="wz-open-spec" data-spec="${esc(spec)}" data-store="${esc(store ?? "")}">open in the designer</button></div>` : "";
+      }
       if (sh.kind === "glb" || sh.kind === "file") {
         const path = sh.from ? resolve(sh.from) : null;
         return path ? `<div class="wz-file">wrote <code>${esc(path)}</code></div>` : "";
@@ -121,6 +152,11 @@ export function createWizards({ api, root, toast, prepare }) {
       return `<details open><summary>report</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
     });
     return shows.join("") || `<pre>${esc(JSON.stringify(st.result, null, 1))}</pre>`;
+  }
+
+  function resolveRun(binding) {
+    const key = binding.replace(/^\$run\./, "");
+    return W.state.values?.[key] ?? null;
   }
 
   function resolve(binding) {

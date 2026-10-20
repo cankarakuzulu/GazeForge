@@ -9,7 +9,76 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![export()]
+    vec![photos(), export()]
+}
+
+fn photos() -> Value {
+    let fit = "$dir/fit";
+    json!({
+        "id": "photos",
+        "title": "Character from photos",
+        "group": "Characters",
+        "developer": false,
+        "summary": "A front and a profile photo (and optionally the other profile) to a character: checked, landmarked, fitted to the targets through solved cameras, and saved as a spec the designer opens.",
+        "notes": "No texture, hair, eyes or teeth; photos carry no absolute size; likeness is limited by the targets.",
+        "steps": [
+            {"id": "photos", "title": "Photos", "command": null,
+             "help": "A passport-style front (looking straight at the camera, plain background, even light, eyes open, mouth closed) and a true side profile; the other side's profile is optional.",
+             "fields": [
+                 {"name": "front", "label": "front photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
+                 {"name": "profile", "label": "profile photo", "widget": "file_open", "ext": ".png .jpg", "common": true},
+                 {"name": "profile_side", "label": "the profile shows the face's", "common": true, "bind": "=right", "schema": {"enum": ["right", "left"]}},
+                 {"name": "other_profile", "label": "other profile (optional)", "widget": "file_open", "ext": ".png .jpg"},
+                 {"name": "other_profile_side", "label": "the other profile shows the face's", "bind": "=left", "schema": {"enum": ["right", "left"]}},
+             ],
+             "shows": []},
+            {"id": "check", "title": "Check", "command": "photo.check",
+             "help": "Head pose and image quality of each photo against calibrated limits; a failed front or profile stops here. A limit can be allowed by name under advanced, and the run records it.",
+             "fields": [
+                 {"name": "front", "bind": "$photos.input.front", "hidden": true},
+                 {"name": "profile", "bind": "$photos.input.profile", "hidden": true},
+                 {"name": "profile_side", "bind": "$photos.input.profile_side", "hidden": true},
+                 {"name": "run", "bind": "$dir/check", "hidden": true},
+                 {"name": "allow", "label": "allow these failed checks"},
+             ],
+             "shows": [{"kind": "report"}]},
+            {"id": "views", "title": "Landmarks", "command": "photo.views",
+             "help": "The 478 face landmarks, the outline and the profile key points of every photo; look at the overlays before trusting anything.",
+             "fields": [
+                 {"name": "run", "bind": fit, "hidden": true},
+                 {"name": "photos", "hidden": true, "bind": [
+                     {"name": "front", "path": "$photos.input.front", "role": "front"},
+                     {"name": "profile", "path": "$photos.input.profile", "role": "profile", "side": "$photos.input.profile_side"},
+                     {"name": "other_profile", "path": "$photos.input.other_profile", "role": "profile", "side": "$photos.input.other_profile_side"},
+                 ]},
+             ],
+             "shows": [{"kind": "images", "from": "$views.result.views", "path": "overlay", "label": "name"}, {"kind": "report"}]},
+            {"id": "fit", "title": "Fit", "command": "fit.photos",
+             "help": "The targets fitted to every photo's landmarks and outline through solved cameras, with a stay-at-base prior; per photo the landmark and outline errors.",
+             "fields": [
+                 {"name": "run", "bind": fit, "hidden": true},
+                 {"name": "store", "bind": "$run.store", "hidden": true},
+                 {"name": "pack", "bind": "$run.pack", "hidden": true},
+                 {"name": "catalog", "bind": "$run.catalog", "hidden": true},
+                 {"name": "focal_px", "label": "focal length in pixels (if known)", "common": true},
+                 {"name": "base_landmarks", "label": "base landmark table (detected on the base with eyes)", "widget": "file_open", "ext": ".json", "bind": "$run.base_landmarks", "common": true},
+                 {"name": "leave_out", "label": "cross-check: fit without this view"},
+             ],
+             "shows": [{"kind": "report"}]},
+            {"id": "accept", "title": "Accept", "command": "character.create",
+             "help": "The fitted weights saved as a character spec; open it in the designer, where the sliders take over.",
+             "fields": [
+                 {"name": "store", "bind": "$run.store", "hidden": true},
+                 {"name": "pack", "bind": "$run.pack", "hidden": true},
+                 {"name": "catalog", "bind": "$run.catalog", "hidden": true},
+                 {"name": "game", "bind": "$run.game", "hidden": true},
+                 {"name": "weights", "bind": "$fit.result.weights", "hidden": true},
+                 {"name": "out", "label": "spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
+                 {"name": "name", "label": "name", "bind": "=from photos", "common": true},
+             ],
+             "shows": [{"kind": "report"}, {"kind": "spec", "from": "$accept.result.out", "store": "$run.store"}]},
+        ],
+    })
 }
 
 fn export() -> Value {
@@ -115,6 +184,35 @@ fn run_dir(ctx: &Ctx, input: &Value) -> Result<PathBuf, ApiError> {
     Ok(dir)
 }
 
+pub const UPLOAD_LIMIT: usize = 64 * 1024 * 1024;
+
+pub fn run_file(ctx: &Ctx, run: &str, path: &str) -> Result<PathBuf, ApiError> {
+    let dir = run_dir(ctx, &json!({"run": run}))?;
+    let inside = std::fs::canonicalize(&dir).map_err(|e| ApiError::internal(e.to_string()))?;
+    let file = std::fs::canonicalize(path).map_err(|_| ApiError::not_found(format!("no file {path}")))?;
+    if !file.starts_with(&inside) || !file.is_file() {
+        return Err(ApiError::not_found(format!("{path} is not a file of wizard run {run}")));
+    }
+    Ok(file)
+}
+
+pub fn upload(ctx: &Ctx, run: &str, name: &str, bytes: &[u8]) -> Result<PathBuf, ApiError> {
+    let dir = run_dir(ctx, &json!({"run": run}))?;
+    let ok = (1..=128).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.starts_with('.');
+    if !ok {
+        return Err(ApiError::invalid(format!("upload name {name:?}: use 1 to 128 letters, digits, '-', '_' or '.', not starting with '.'")));
+    }
+    if bytes.len() > UPLOAD_LIMIT {
+        return Err(ApiError::invalid(format!("upload of {} bytes is over the {UPLOAD_LIMIT}-byte limit", bytes.len())));
+    }
+    let path = dir.join("uploads").join(name);
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).map_err(|e| ApiError::internal(format!("{}: {e}", d.display())))?;
+    }
+    project::write_atomic(&path, bytes)?;
+    Ok(path)
+}
+
 fn read_json(path: &Path) -> Option<Value> {
     std::fs::read_to_string(path).ok().and_then(|t| crate::exactjson::record(&t).ok())
 }
@@ -183,16 +281,31 @@ fn lookup(path: &str, run: &Value, steps: &Map<String, Value>) -> Option<Value> 
     (!at.is_null()).then_some(at)
 }
 
-fn bound(field: &Value, run: &Value, steps: &Map<String, Value>) -> Option<Value> {
-    let b = field["bind"].as_str()?;
-    if let Some(literal) = b.strip_prefix('=') {
-        return Some(json!(literal));
+fn resolve(b: &Value, run: &Value, steps: &Map<String, Value>, dir: &str) -> Option<Value> {
+    match b {
+        Value::String(s) => {
+            if let Some(literal) = s.strip_prefix('=') {
+                Some(json!(literal))
+            } else if let Some(rest) = s.strip_prefix("$dir") {
+                Some(json!(format!("{dir}{rest}")))
+            } else if let Some(path) = s.strip_prefix('$') {
+                lookup(path, run, steps)
+            } else {
+                Some(b.clone())
+            }
+        }
+        Value::Array(items) => Some(Value::Array(items.iter().filter_map(|x| resolve(x, run, steps, dir)).collect())),
+        Value::Object(m) => m.iter().map(|(k, v)| resolve(v, run, steps, dir).map(|r| (k.clone(), r))).collect::<Option<Map<String, Value>>>().map(Value::Object),
+        other => Some(other.clone()),
     }
-    lookup(b.strip_prefix('$')?, run, steps)
+}
+
+fn bound(field: &Value, run: &Value, steps: &Map<String, Value>, dir: &str) -> Option<Value> {
+    field.get("bind").and_then(|b| resolve(b, run, steps, dir))
 }
 
 fn step_record(dir: &Path, id: &str) -> Value {
-    let at = dir.join(id);
+    let at = dir.join("steps").join(id);
     let mut r = json!({"input": read_json(&at.join("input.json")), "job": read_json(&at.join("job.json")).map(|j| j["id"].clone())});
     if let Some(out) = read_json(&at.join("output.json")) {
         r["result"] = out["result"].clone();
@@ -203,7 +316,7 @@ fn step_record(dir: &Path, id: &str) -> Value {
 }
 
 fn finish_job(ctx: &Ctx, dir: &Path, id: &str) -> Result<(), ApiError> {
-    let at = dir.join(id);
+    let at = dir.join("steps").join(id);
     let Some(job) = read_json(&at.join("job.json")) else { return Ok(()) };
     if at.join("output.json").exists() {
         return Ok(());
@@ -230,7 +343,7 @@ fn state_of(ctx: &Ctx, dir: &Path) -> Result<Value, ApiError> {
         let mut rec = step_record(dir, id);
         let mut proposed = Map::new();
         for f in step["fields"].as_array().into_iter().flatten() {
-            if let Some(v) = bound(f, &run, &done) {
+            if let Some(v) = bound(f, &run, &done, &dir.display().to_string()) {
                 proposed.insert(f["name"].as_str().unwrap_or_default().to_string(), v);
             }
         }
@@ -275,10 +388,10 @@ pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
     }
     let given = Value::Object(given);
-    let here = dir.join(id);
+    let here = dir.join("steps").join(id);
     let _ = std::fs::remove_dir_all(&here);
     for later in &steps[at + 1..] {
-        let d = dir.join(later["id"].as_str().unwrap_or_default());
+        let d = dir.join("steps").join(later["id"].as_str().unwrap_or_default());
         if d.join("input.json").exists() {
             write_json(&d.join("stale"), &json!({"because": id}))?;
         }
@@ -308,6 +421,15 @@ pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
 mod tests {
     use super::*;
 
+    fn refs(b: &Value) -> Vec<String> {
+        match b {
+            Value::String(s) => s.strip_prefix('$').map(|r| vec![r.to_string()]).unwrap_or_default(),
+            Value::Array(a) => a.iter().flat_map(refs).collect(),
+            Value::Object(m) => m.values().flat_map(refs).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     fn props(name: &str) -> Value {
         (find(name).unwrap().input)()["properties"].clone()
     }
@@ -327,14 +449,28 @@ mod tests {
                     if let Some(p) = &schema {
                         assert!(p.get(name).is_some(), "{}.{id}.{name} is not an input of {}", w["id"], step["command"]);
                     }
-                    if let Some(b) = f["bind"].as_str().and_then(|b| b.strip_prefix('$')) {
-                        let head = b.split('.').next().unwrap();
-                        assert!(head == "run" || seen.iter().any(|s| s == head), "{}.{id}.{name} binds {b} before that step", w["id"]);
+                    for b in refs(&f["bind"]) {
+                        assert!(!b.starts_with("dir/steps"), "{}.{id}.{name} binds into the step records: {b}", w["id"]);
+                        let head = b.split(['.', '/']).next().unwrap();
+                        assert!(head == "run" || head == "dir" || seen.iter().any(|s| s == head), "{}.{id}.{name} binds {b} before that step", w["id"]);
                     }
                 }
                 seen.push(id.to_string());
             }
         }
+    }
+
+    #[test]
+    fn templates_resolve_drop_items_whose_values_are_missing_and_keep_literals() {
+        let run = json!({"values": {"store": "S"}});
+        let mut steps = Map::new();
+        steps.insert("photos".into(), json!({"input": {"front": "f.png", "profile": "p.png", "side": "right"}}));
+        let t = json!([{"path": "$photos.input.front", "role": "front"}, {"path": "$photos.input.other", "role": "profile"}, {"path": "$photos.input.profile", "side": "$photos.input.side"}]);
+        assert_eq!(resolve(&t, &run, &steps, "D").unwrap(), json!([{"path": "f.png", "role": "front"}, {"path": "p.png", "side": "right"}]));
+        assert_eq!(resolve(&json!("$dir/fit"), &run, &steps, "D").unwrap(), json!("D/fit"));
+        assert_eq!(resolve(&json!("=left"), &run, &steps, "D").unwrap(), json!("left"));
+        assert_eq!(resolve(&json!("$run.store"), &run, &steps, "D").unwrap(), json!("S"));
+        assert!(resolve(&json!("$run.missing"), &run, &steps, "D").is_none());
     }
 
     #[test]

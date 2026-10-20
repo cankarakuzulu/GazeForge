@@ -191,9 +191,11 @@ impl Offscreen {
                 let w = &mut u.state.wizards;
                 match action {
                     "start" => {
-                        let store = world.session.as_ref().map(|s| s.store.clone()).ok_or("nothing is loaded")?;
+                        if world.session.is_none() {
+                            return Err("nothing is loaded".into());
+                        }
                         w.open = true;
-                        w.start(text("id").ok_or("wizard start needs id")?, &store, world.settle_input(), text("project").unwrap_or("untitled"))?;
+                        w.start(text("id").ok_or("wizard start needs id")?, crate::wizard::run_values(world), world.settle_input(), text("project").unwrap_or("untitled"))?;
                     }
                     "set" | "run" => {
                         w.load_form();

@@ -185,3 +185,9 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .wz-status.st-done { color: var(--ok); }
 .wz-status.st-failed, .wz-status.st-stale, .wz-status.bad { color: var(--warn); }
 @media (max-width: 640px) { .wz-steps { display: none; } .wz-row { grid-template-columns: 1fr; } }
+.wz-file-in { display: flex; gap: 6px; }
+.wz-file-in input { flex: 1; min-width: 0; }
+.wz-images { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+.wz-images figure { margin: 0; flex: 1 1 260px; max-width: 420px; }
+.wz-images img { width: 100%; border: 1px solid var(--line); border-radius: 4px; display: block; }
+.wz-images figcaption { color: var(--muted); font-size: 12px; margin-top: 2px; }

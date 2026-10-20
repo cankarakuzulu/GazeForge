@@ -22,6 +22,32 @@ pub struct Wizards {
     error: Option<String>,
     progress: Option<Value>,
     polled: Option<Instant>,
+    images: BTreeMap<String, Option<egui::TextureHandle>>,
+    pub open_spec: Option<(String, String)>,
+}
+
+fn load_png(path: &str) -> Option<egui::ColorImage> {
+    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).ok()?));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let bytes = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => bytes.to_vec(),
+        png::ColorType::Rgb => bytes.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::Grayscale => bytes.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => bytes.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    Some(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba))
+}
+
+pub fn run_values(world: &crate::world::World) -> Value {
+    match &world.session {
+        Some(s) => json!({"store": s.store, "pack": s.pack, "catalog": s.catalog, "game": s.game}),
+        None => json!({}),
+    }
 }
 
 pub fn ctx() -> Result<Ctx, String> {
@@ -58,9 +84,10 @@ impl Wizards {
         json!({"open": self.open, "wizard": self.def.as_ref().map(|d| d["id"].clone()), "at": self.at, "error": self.error, "run": self.state})
     }
 
-    pub fn start(&mut self, id: &str, store: &str, character: Option<Value>, project: &str) -> Result<(), String> {
+    pub fn start(&mut self, id: &str, values: Value, character: Option<Value>, project: &str) -> Result<(), String> {
+        let store = values["store"].as_str().unwrap_or_default().to_string();
         let def = call("wizards.get", json!({"id": id}))?;
-        let state = call("wizards.start", json!({"wizard": id, "project": project, "values": {"store": store}}))?;
+        let state = call("wizards.start", json!({"wizard": id, "project": project, "values": values}))?;
         let dir = PathBuf::from(state["dir"].as_str().unwrap_or_default());
         let mut prepared = Map::new();
         if let Some(mut input) = character {
@@ -107,7 +134,7 @@ impl Wizards {
             .filter(|f| f["hidden"] != Value::Bool(true))
             .map(|f| {
                 let name = f["name"].as_str().unwrap_or_default().to_string();
-                let schema = props.get(&name).cloned().unwrap_or_else(|| json!({"type": "string"}));
+                let schema = props.get(&name).cloned().or_else(|| f.get("schema").cloned()).unwrap_or_else(|| json!({"type": "string"}));
                 (name.clone(), f["label"].as_str().unwrap_or(&name).to_string(), f["common"] == Value::Bool(true), schema)
             })
             .collect();
@@ -267,7 +294,7 @@ impl Wizards {
             ui.add_space(6.0);
         }
         if let Some(id) = chosen
-            && let Err(e) = self.start(&id, &world.session.as_ref().map(|s| s.store.clone()).unwrap_or_default(), world.settle_input(), project)
+            && let Err(e) = self.start(&id, run_values(world), world.settle_input(), project)
         {
             self.error = Some(e);
         }
@@ -325,6 +352,7 @@ impl Wizards {
                         ui.add(egui::ProgressBar::new(frac).text(format!("{} {}/{} {}", shown(&p["stage"]), shown(&p["done"]), shown(&p["total"]), shown(&p["message"]))));
                     }
                     if !st["result"].is_null() {
+                        self.shows_ui(ui, &s);
                         egui::CollapsingHeader::new("report").id_salt(("wz_report", self.at)).default_open(true).show(ui, |ui| {
                             ui.label(egui::RichText::new(serde_json::to_string_pretty(&st["result"]).unwrap_or_default()).monospace().small());
                         });
@@ -354,6 +382,68 @@ impl Wizards {
                 });
             });
         });
+    }
+
+    fn resolve(&self, binding: &str) -> Value {
+        let path: Vec<&str> = binding.trim_start_matches('$').split('.').collect();
+        let Some(state) = &self.state else { return Value::Null };
+        if path[0] == "run" {
+            return path[1..].iter().fold(state["values"].clone(), |at, p| at[*p].clone());
+        }
+        let Some(k) = (0..self.steps()).find(|&i| self.step_def(i)["id"] == path[0]) else { return Value::Null };
+        let start = match path.get(1) {
+            Some(&"input") => self.step_state(k)["input"].clone(),
+            _ => self.step_state(k)["result"].clone(),
+        };
+        path.iter().skip(2).fold(start, |at, p| at[*p].clone())
+    }
+
+    fn shows_ui(&mut self, ui: &mut egui::Ui, s: &Value) {
+        for sh in s["shows"].as_array().cloned().unwrap_or_default() {
+            match sh["kind"].as_str() {
+                Some("images") => {
+                    let list = sh["from"].as_str().map(|b| self.resolve(b)).unwrap_or(Value::Null);
+                    let key = sh["path"].as_str().unwrap_or("path");
+                    ui.horizontal_wrapped(|ui| {
+                        for item in list.as_array().cloned().unwrap_or_default() {
+                            let Some(path) = item[key].as_str() else { continue };
+                            let tex = self.images.entry(path.to_string()).or_insert_with(|| load_png(path).map(|img| ui.ctx().load_texture(path, img, Default::default())));
+                            ui.vertical(|ui| {
+                                match tex {
+                                    Some(t) => {
+                                        let size = t.size_vec2();
+                                        let w = 260.0_f32.min(size.x);
+                                        ui.image((t.id(), egui::vec2(w, w * size.y / size.x.max(1.0))));
+                                    }
+                                    None => {
+                                        ui.label(format!("cannot read {path}"));
+                                    }
+                                }
+                                ui.label(egui::RichText::new(shown(&item[sh["label"].as_str().unwrap_or("name")])).weak());
+                            });
+                        }
+                    });
+                }
+                Some("spec") => {
+                    let spec = sh["from"].as_str().map(|b| self.resolve(b)).unwrap_or(Value::Null);
+                    let store = sh["store"].as_str().map(|b| self.resolve(b)).unwrap_or(Value::Null);
+                    if let Some(spec) = spec.as_str() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("wrote {spec}"));
+                            if ui.button("open in the designer").clicked() {
+                                self.open_spec = Some((shown(&store), spec.to_string()));
+                            }
+                        });
+                    }
+                }
+                Some("glb") | Some("file") => {
+                    if let Some(path) = sh["from"].as_str().map(|b| self.resolve(b)).and_then(|v| v.as_str().map(str::to_string)) {
+                        ui.label(format!("wrote {path}"));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn field_ui(&mut self, ui: &mut egui::Ui, name: &str, label: &str, schema: &Value) {

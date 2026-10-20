@@ -223,6 +223,13 @@ impl Studio<'_> {
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, dt));
         self.keys_window(&ctx);
         self.s.wizards.show(&ctx, self.world, "untitled");
+        if let Some((store, spec)) = self.s.wizards.open_spec.take() {
+            if !store.is_empty() {
+                self.s.store = store;
+            }
+            self.s.spec = spec;
+            self.load();
+        }
     }
 
     fn tip(&self, what: &str, id: &str) -> String {

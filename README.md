@@ -487,11 +487,19 @@ through another that uses the same directory.
 **Wizards.** A wizard is a guided task whose every step is one registry command, defined as data in `gf-api`:
 `wizards.list` and `wizards.get` (each step with its command, kind, input schema, the fields a form shows, common or
 advanced, and bindings: `$run.NAME`, `$STEP.input.FIELD`, `$STEP.result.PATH`, `=TEXT`). A run is a folder
-`ROOT/runs/PROJECT/WIZARD-N` with one subfolder per step: `wizards.start` makes it, `wizards.step` checks a step's input
+`ROOT/runs/PROJECT/WIZARD-N` (`steps/STEP` holds each step's record, the rest the files its steps write, bound as `$dir`): `wizards.start` makes it, `wizards.step` checks a step's input
 against its command's schema and runs it (or submits it as a job) and marks later steps stale, and `wizards.state` reads
 the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed. An agent
-can drive a wizard with the same calls. The first wizard, `export`, takes a character spec through `export.glb` (with an
-optional obj of the finest level) and `gates.facing`; it writes the same files the CLI writes. In the browser designer
+can drive a wizard with the same calls. `photos` takes a front and a profile photo (and optionally the other profile)
+through `photo.check`, `photo.views` (whose worker now also writes each photo's overlay: landmarks green, outline red,
+profile key points yellow), `fit.photos` and `character.create`, and opens the saved spec in the designer. `export` takes
+a character spec through `export.glb` (with an optional obj of the finest level) and `gates.facing`. Each writes the same
+files its commands write from the CLI. `fit.photos` reports where its base landmark table came from (`base_landmarks`:
+given, already in the run, or detected); with no table it now detects one on a render of the base, as `fit.register`
+does, and warns that a table detected on the base without eyes is several millimetres off at the lids and the chin. Two
+HTTP routes serve the browser's wizards, both loopback-only and confined to a run's folder: `POST /v1/upload?run=&name=`
+(a file chosen in the browser, copied to the run's `uploads/`, up to 64 MB) and `GET /v1/wizard-file?run=&path=` (an
+image a step wrote, such as an overlay). In the browser designer
 the Tasks button (wand icon) lists the wizards and runs them: the current character is saved into the run, each step is
 a form built from its command's schema (the named fields first, every other option under advanced), and a job step
 shows its progress. The native studio has the same Tasks window (the wand in the toolbar), calling the registry

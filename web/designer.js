@@ -930,9 +930,10 @@ function buildControls() {
   $("help").addEventListener("click", (e) => { if (e.target === $("help")) $("help").classList.add("hidden"); });
   D.wizards = createWizards({
     api, root: $("wizard"), toast,
+    openSpec: (s, spec) => { const q = new URLSearchParams(location.search); q.set("store", s || store); q.set("spec", spec); location.search = q.toString(); },
     prepare: async () => ({
       project: P.name || "untitled",
-      values: { store },
+      values: { store, ...D.base },
       after: async (dir) => {
         const spec = `${dir}/character.gfchar.json`;
         const input = { ...settleInput(), out: spec };
