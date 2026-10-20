@@ -14,6 +14,7 @@ mod rig_panel;
 mod script;
 mod session;
 mod shape;
+mod stitch;
 mod studio;
 mod topology;
 mod ui_script;

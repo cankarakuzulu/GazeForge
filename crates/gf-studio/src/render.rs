@@ -120,6 +120,13 @@ struct GpuEyes {
     parts: Vec<(u32, u32, String)>,
 }
 
+struct GpuExtra {
+    key: u64,
+    tri: u32,
+    bind: wgpu::BindGroup,
+    colour: [f32; 3],
+}
+
 struct GpuLook {
     part: String,
     bind: Option<wgpu::BindGroup>,
@@ -166,6 +173,7 @@ enum Draw {
     EyePart(u32, usize, bool),
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
+    Extra(u32, usize),
 }
 
 struct PassPlan {
@@ -197,6 +205,8 @@ pub struct Renderer {
     line_buf: wgpu::Buffer,
     line_cap: u64,
     head: Option<GpuHead>,
+    extras: Vec<GpuExtra>,
+    overlays: Vec<(Vec<V3>, V3)>,
     slots: Vec<Option<SlotTarget>>,
     pub composite: Option<Composite>,
     pub sources: Vec<Source>,
@@ -392,6 +402,8 @@ impl Renderer {
             line_buf,
             line_cap,
             head: None,
+            extras: Vec::new(),
+            overlays: Vec::new(),
             slots: (0..4).map(|_| None).collect(),
             composite: None,
             sources: (0..4).map(|_| Source::Native).collect(),
@@ -416,6 +428,36 @@ impl Renderer {
             self.sync_head(device, queue, &s.head, world.uvs_dirty);
             world.uvs_dirty = false;
         }
+        let mut kept = Vec::new();
+        for e in world.extras.iter().filter(|e| e.visible && !e.indices.is_empty()) {
+            match self.extras.iter().position(|g| g.key == e.key) {
+                Some(i) => kept.push(self.extras.swap_remove(i)),
+                None => kept.push(self.make_extra(device, e)),
+            }
+        }
+        self.extras = kept;
+        self.overlays = world.overlays.iter().map(|o| (o.segments.clone(), o.colour)).collect();
+    }
+
+    fn make_extra(&self, device: &wgpu::Device, e: &crate::world::Extra) -> GpuExtra {
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let buf = |label: &str, bytes: Vec<u8>| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage });
+        let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
+        let entries = [
+            buf("extra indices", u32_bytes(&e.indices)),
+            buf("extra positions", f32_bytes(&e.positions)),
+            buf("extra normals", f32_bytes(&e.normals)),
+            buf("extra reference", f32_bytes(&e.positions)),
+            buf("extra uvs", f32_bytes(&vec![0.0; tri * 6])),
+            buf("extra flags", u32_bytes(&vec![0; tri])),
+            buf("extra verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
+        ];
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("extra"),
+            layout: &self.g1,
+            entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
+        });
+        GpuExtra { key: e.key, tri: tri as u32, bind, colour: e.colour }
     }
 
     fn make_eyes(&self, device: &wgpu::Device, e: &crate::session::EyeMesh) -> GpuEyes {
@@ -678,6 +720,15 @@ impl Renderer {
                     None => first.draws.push(Draw::Eyes(chunk(u, &mut uni))),
                 }
             }
+            for (k, x) in self.extras.iter().enumerate() {
+                let mut u = base;
+                u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
+                u[88] = 0.0;
+                u[92] = 0.0;
+                u[96..98].copy_from_slice(&[0.0, 0.0]);
+                u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, 0.0]);
+                first.draws.push(Draw::Extra(chunk(u, &mut uni), k));
+            }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
             let line = |data: &[V3], col: V3, pipe: LinePipe, cap: Option<usize>, uni: &mut Vec<f32>, lines: &mut Vec<f32>| -> Draw {
@@ -762,6 +813,9 @@ impl Renderer {
                     [t[0], t[1], t[2] + s],
                 ];
                 last.draws.push(line(&seg, [1.0, 0.85, 0.2], LinePipe::Lines, None, &mut uni, &mut lines));
+            }
+            for (seg, col) in &self.overlays {
+                last.draws.push(line(seg, *col, LinePipe::Lines, None, &mut uni, &mut lines));
             }
             passes.push(last);
             plans.push((*r, passes));
@@ -856,6 +910,14 @@ impl Renderer {
                             pass.set_bind_group(1, &e.bind, &[]);
                             pass.set_bind_group(2, bind.or(white).expect("material default"), &[]);
                             pass.draw(first * 3..(first + count) * 3, 0..1);
+                        }
+                        Draw::Extra(c, k) => {
+                            let x = &self.extras[*k];
+                            pass.set_pipeline(&self.mesh[0]);
+                            pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
+                            pass.set_bind_group(1, &x.bind, &[]);
+                            pass.set_bind_group(2, white.expect("material default"), &[]);
+                            pass.draw(0..x.tri * 3, 0..1);
                         }
                         Draw::Points(c, lod) => {
                             let g = self.head.as_ref().expect("head");

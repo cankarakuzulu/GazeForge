@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::face_rig::FaceRig;
+use crate::stitch::Stitch;
 use crate::hud::Hud;
 use crate::i18n::{tr, tr_or, trf};
 use crate::preview::{Normals, Preview, Sampled, Slope, macro_key};
@@ -13,6 +14,22 @@ use crate::shape::{ShapeEvent, ShapeModel, Values};
 use crate::topology::TopologyUi;
 use crate::viewer::{self, Bounds, DISPLACEMENT, MODES, ViewerState};
 use crate::worker::{Done, Job, Jobs, SettleRequest, stamp};
+
+pub struct Extra {
+    pub id: String,
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub colour: [f32; 3],
+    pub visible: bool,
+    pub key: u64,
+}
+
+pub struct Overlay {
+    pub id: String,
+    pub segments: Vec<[f64; 3]>,
+    pub colour: [f64; 3],
+}
 
 pub struct World {
     pub state: ViewerState,
@@ -55,6 +72,10 @@ pub struct World {
     pub poses: Vec<(String, Vec<f32>)>,
     pose_dirty: bool,
     pub face: FaceRig,
+    pub extras: Vec<Extra>,
+    pub overlays: Vec<Overlay>,
+    extra_key: u64,
+    pub stitch: Stitch,
 }
 
 impl Default for World {
@@ -101,6 +122,10 @@ impl Default for World {
             poses: Vec::new(),
             pose_dirty: false,
             face: FaceRig::default(),
+            extras: Vec::new(),
+            overlays: Vec::new(),
+            extra_key: 0,
+            stitch: Stitch::default(),
         }
     }
 }
@@ -179,6 +204,7 @@ impl World {
             self.handle(done);
         }
         self.face_poll();
+        self.stitch_poll();
         if self.preview_dirty {
             self.update_preview();
         }
@@ -202,6 +228,21 @@ impl World {
         }
         self.pose_dirty = true;
         Ok(())
+    }
+
+    pub fn set_extra(&mut self, id: &str, mesh: Option<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])>) {
+        self.extras.retain(|e| e.id != id);
+        if let Some((positions, normals, indices, colour)) = mesh {
+            self.extra_key += 1;
+            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, visible: true, key: self.extra_key });
+        }
+    }
+
+    pub fn set_overlay(&mut self, id: &str, lines: Option<(Vec<[f64; 3]>, [f64; 3])>) {
+        self.overlays.retain(|o| o.id != id);
+        if let Some((segments, colour)) = lines {
+            self.overlays.push(Overlay { id: id.to_string(), segments, colour });
+        }
     }
 
     fn present_pose(&mut self) {
@@ -317,6 +358,9 @@ impl World {
                         self.epoch += 1;
                         self.poses.clear();
                         self.face = FaceRig::default();
+                        self.extras.clear();
+                        self.overlays.clear();
+                        self.stitch = Stitch { store: std::mem::take(&mut self.stitch.store), body: std::mem::take(&mut self.stitch.body), values: self.stitch.values, auto: self.stitch.auto, ..Stitch::default() };
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
                         if let Some((id, _, _)) = self.samples_wanted.take() {
@@ -385,6 +429,7 @@ impl World {
                     if self.face.wanted {
                         self.face_load();
                     }
+                    self.stitch_changed(false);
                     self.prefetch_slopes();
                     self.prefetch_samples();
                 } else {
@@ -575,6 +620,9 @@ impl World {
         let macros: Vec<String> = shape.macros.iter().map(|m| m.name.clone()).filter(|n| out.begin.contains(n)).collect();
         for m in macros {
             self.want_slope(&m);
+        }
+        if out.preview {
+            self.stitch_changed(true);
         }
         if out.settle {
             self.request_settle();

@@ -427,6 +427,7 @@ impl Studio<'_> {
         });
         self.topology_panel(ui);
         self.face_rig_panel(ui);
+        self.stitch_panel(ui);
         if let Some(s) = &self.world.session {
             ui.separator();
             ui.horizontal(|ui| {

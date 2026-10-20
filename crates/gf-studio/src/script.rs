@@ -711,6 +711,41 @@ impl Offscreen {
                 json!({"status": w.face.status, "loaded": w.face.rig.is_some(), "joints": w.face.rig.as_ref().map_or(0, |r| r.joints.len()),
                        "mode": w.face.mode.name(), "active": w.face.active(), "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>()})
             }
+            "stitch" => {
+                match text("do").unwrap_or("summary") {
+                    "go" => {
+                        if let Some(b) = text("body") {
+                            w.stitch.body = b.to_string();
+                        }
+                        if let Some(s) = text("store") {
+                            w.stitch.store = s.to_string();
+                        }
+                        for (i, c) in crate::stitch::CONTROLS.iter().enumerate() {
+                            if let Some(v) = num(c.0) {
+                                w.stitch.values[i] = v;
+                            }
+                        }
+                        w.stitch_go();
+                        w.wait(|w| w.stitch.job.is_none(), num("seconds").unwrap_or(300.0))?;
+                    }
+                    "show" => {
+                        w.stitch.show = step.get("on").and_then(Value::as_bool).unwrap_or(true);
+                        w.stitch_draw();
+                    }
+                    "dump" => {
+                        let m = w.stitch.last.as_ref().ok_or("nothing stitched")?;
+                        let file = out.join(text("file").ok_or("stitch dump needs file")?);
+                        let bytes: Vec<u8> = m.positions.iter().flat_map(|x| x.to_le_bytes()).collect();
+                        std::fs::write(&file, &bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+                    }
+                    "summary" => {}
+                    other => return Err(format!("stitch do is go, show, dump or summary, got {other}")),
+                }
+                w.tick();
+                let m = w.stitch.last.as_ref();
+                json!({"status": w.stitch.status, "pass": w.stitch.pass, "stale": w.stitch.stale, "vertices": m.map(|m| m.positions.len() / 3), "triangles": m.map(|m| m.indices.len() / 3),
+                       "seam_segments": m.map(|m| m.lines.len() / 2), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
+            }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));
                 let bound: Vec<String> = crate::keymap::ACTIONS.iter().map(|a| format!("{}={}", a.0, map.describe(a.0))).collect();
