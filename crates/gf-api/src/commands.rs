@@ -141,6 +141,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: eyes::inventory,
     },
     CommandDef {
+        name: "eyes.textures",
+        kind: Kind::Mutation,
+        summary: "Write the procedural textures of eye models as PNG: the iris (radial fibres, crypts, collarette, pupillary ruff, limbal ring, an optional heterochromia sector) and the sclera (tint and veins), laid out on the UVs of the eyeball's iris and sclera parts.",
+        limits: "Overwrites <id>.iris.png and <id>.sclera.png in out. Deterministic per model (seeded).",
+        input: eyes::textures_input,
+        output: eyes::textures_output,
+        run: eyes::textures,
+    },
+    CommandDef {
         name: "grid.chart",
         kind: Kind::Query,
         summary: "The face chart of a game base: every game vertex's chart coordinate (angle about the head's vertical axis, millimetres below the top of the head), its cell (column letter, row number, keypad subcell), its region, one label anchor per cell, and the chart's sanity figures (cells over the face front, the largest and smallest cell area, folded triangles).",

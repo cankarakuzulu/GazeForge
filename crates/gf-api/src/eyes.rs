@@ -37,6 +37,49 @@ fn unit(v: [f64; 3]) -> Result<[f64; 3], ApiError> {
     Ok(v.map(|x| x / l))
 }
 
+pub const IRIS_SIZE: [usize; 2] = [1024, 256];
+pub const SCLERA_SIZE: [usize; 2] = [512, 256];
+
+pub fn textures_input() -> Value {
+    obj(
+        json!({"models": {"type": "array", "items": {"type": "string"}, "description": "model ids; default: every model of the inventory"},
+               "out": {"type": "string", "minLength": 1, "description": "folder; each model writes <id>.iris.png and <id>.sclera.png"}}),
+        &["out"],
+    )
+}
+
+pub fn textures_output() -> Value {
+    shape(json!({"out": {"type": "string"}, "written": {"type": "array"}, "layout": {"type": "object"}}))
+}
+
+pub fn textures(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let out = Path::new(text(input, "out"));
+    std::fs::create_dir_all(out).map_err(|e| ApiError::invalid(format!("{}: {e}", out.display())))?;
+    let wanted: Option<Vec<String>> = input.get("models").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
+    let all = gf_core::eye_inventory::models();
+    if let Some(w) = &wanted
+        && let Some(missing) = w.iter().find(|id| !all.iter().any(|m| &m.id == *id))
+    {
+        return Err(ApiError::invalid(format!("eye model {missing:?} is not in the inventory")));
+    }
+    let mut written = Vec::new();
+    for m in all.iter().filter(|m| wanted.as_ref().is_none_or(|w| w.contains(&m.id))) {
+        let l = m.shape.layout().map_err(ApiError::invalid)?;
+        let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
+        for (kind, (w, h), pixels) in [
+            ("iris", (IRIS_SIZE[0], IRIS_SIZE[1]), gf_core::eye_texture::iris_rgba(&m.iris, IRIS_SIZE[0], IRIS_SIZE[1])),
+            ("sclera", (SCLERA_SIZE[0], SCLERA_SIZE[1]), gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, SCLERA_SIZE[0], SCLERA_SIZE[1], m.iris.seed)),
+        ] {
+            let path = out.join(format!("{}.{kind}.png", m.id));
+            std::fs::write(&path, gf_io::png::rgba(w, h, &pixels).map_err(ApiError::internal)?).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+            written.push(path.display().to_string());
+        }
+    }
+    Ok(json!({"out": out.display().to_string(), "written": written,
+              "layout": {"iris": "u = angle around the gaze (0..1), v = from the pupil edge (0) to the limbus (1), matching the iris part's UVs",
+                         "sclera": "u = angle around the gaze, v = polar angle from the front pole over pi, matching the sclera part's UVs"}}))
+}
+
 pub fn inventory_input() -> Value {
     obj(json!({"family": {"type": "string", "minLength": 1, "description": "only the models of one family"}}), &[])
 }

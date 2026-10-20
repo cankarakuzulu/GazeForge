@@ -171,7 +171,11 @@ and special: heterochromia, a pale eye, dilated and constricted pupils), each wi
 and cornea looks. A character takes one through `eyeballs.model` (`{"id": "...", "radius_mm": 12}`, the radius in
 [5, 20] mm; the model needs `eyeballs.rig`): the settle, `rig.face` and `export-glb` then build that model's eyes at the
 eye rig's places instead of reading an eyes file (a model wins over `--eyes`), so the character carries its eyes.
-`eyes.generate` takes `model` for the proportions too.
+`eyes.generate` takes `model` for the proportions too. `eyes.textures` writes each model's procedural textures as PNG:
+the iris (1024 x 256: inner and outer colour fields meeting at a wavy collarette, radial fibres, crypts, a pupillary
+ruff, a limbal ring, and the sector of a sectoral heterochromia) and the sclera (512 x 256: tint and veins, strongest at
+the limbus), laid out on the UVs of the eyeball's iris and sclera parts. They are seeded per model, so they are the same
+on every run.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

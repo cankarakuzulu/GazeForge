@@ -7,6 +7,7 @@ pub mod game_mesh;
 pub mod gates;
 pub mod character;
 pub mod eye_inventory;
+pub mod eye_texture;
 pub mod eyerig;
 pub mod hash;
 pub mod head;
