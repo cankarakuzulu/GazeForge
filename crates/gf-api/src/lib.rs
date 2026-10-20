@@ -18,6 +18,7 @@ pub mod photo_fit;
 pub mod photo_gate;
 mod process;
 pub mod tasks;
+pub mod wizards;
 pub mod project;
 pub mod resources;
 pub mod schema;

@@ -32,8 +32,18 @@ pub fn parse(bytes: &[u8], limits: &Limits) -> Result<Value, String> {
     Ok(v)
 }
 
+pub const DOOR_DEPTH: usize = 128;
+
 pub fn text(text: &str) -> Result<Value, String> {
-    parse(text.as_bytes(), &Limits::for_bytes(text.len()))
+    parse(text.as_bytes(), &Limits { depth: DOOR_DEPTH, values: usize::MAX })
+}
+
+pub fn envelope(text: &str) -> Result<Value, String> {
+    parse(text.as_bytes(), &Limits { depth: DOOR_DEPTH + 4, values: usize::MAX })
+}
+
+pub fn record(text: &str) -> Result<Value, String> {
+    parse(text.as_bytes(), &Limits { depth: DOOR_DEPTH + 8, values: usize::MAX })
 }
 
 impl Parser<'_> {

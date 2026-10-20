@@ -17,6 +17,7 @@ pub const ICONS: &[(&str, &str)] = &[
     ("keyboard", include_str!("../../../third_party/lucide/icons/keyboard.svg")),
     ("layout-grid", include_str!("../../../third_party/lucide/icons/layout-grid.svg")),
     ("lightbulb", include_str!("../../../third_party/lucide/icons/lightbulb.svg")),
+    ("list-checks", include_str!("../../../third_party/lucide/icons/list-checks.svg")),
     ("moon", include_str!("../../../third_party/lucide/icons/moon.svg")),
     ("redo-2", include_str!("../../../third_party/lucide/icons/redo-2.svg")),
     ("rotate-3d", include_str!("../../../third_party/lucide/icons/rotate-3d.svg")),

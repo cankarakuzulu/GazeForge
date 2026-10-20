@@ -1,5 +1,6 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
 import { ViewCube, elementName, elementDir, yawPitch } from "./cube.js";
+import { createWizards } from "./wizard.js";
 
 const params = new URLSearchParams(location.search);
 let store = params.get("store");
@@ -34,7 +35,7 @@ const D = {
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
   panelHooks: new Map(), pendingVis: new Map(),
-  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [],
+  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [], eyeLooks: new Map(), eyeBaseKey: null,
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
 };
 window.gfDesigner = D;
@@ -374,6 +375,7 @@ function settleInput() {
 
 function setEyeballs(spec, origin) {
   D.eyeballs = spec ? JSON.parse(JSON.stringify(spec)) : null;
+  refreshEyes().catch((e) => toast(`eyes: ${e.message || e}`));
   for (const cb of D.eyeListeners) { try { cb(origin); } catch (e) { console.error(e); } }
   notify("slider");
   scheduleDirty();
@@ -1047,7 +1049,7 @@ function interaction() {
       if (kl === "n") { e.preventDefault(); newProject(); return; }
     }
     if (k === "Escape" && P.dialogDone) { P.dialogDone(false); return; }
-    if (e.target.matches?.("input[type=text], input[type=search], textarea") || P.dialogDone) return;
+    if (e.target.matches?.("input[type=text], input[type=search], textarea") || e.target.closest?.("#wizard") || P.dialogDone) return;
     if (ctrl && (k === "z" || k === "Z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (ctrl && (k === "y" || ((k === "z" || k === "Z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
     if (ctrl || (e.altKey && k !== "h" && k !== "H")) return;
@@ -1092,7 +1094,8 @@ function interaction() {
 
 function placeEyes(report) {
   if (!D.eyeBase?.length) return;
-  const pos = [], idx = [];
+  const pos = [], idx = [], uvs = [], parts = [];
+  const look = D.eyeBase[0].model ? D.eyeLooks.get(D.eyeBase[0].model) : null;
   for (const e of D.eyeBase) {
     const t = (report || []).find((x) => x.side === e.side);
     const o = pos.length / 3;
@@ -1101,22 +1104,62 @@ function placeEyes(report) {
       if (!t) { pos.push(...p); continue; }
       for (let i = 0; i < 3; i++) pos.push(t.scale * (t.rotation[i][0] * p[0] + t.rotation[i][1] * p[1] + t.rotation[i][2] * p[2]) + t.translation[i]);
     }
+    const first = idx.length / 3;
     for (const x of e.tris) idx.push(x + o);
+    if (e.uvs) for (const u of e.uvs) uvs.push(u);
+    for (const p of e.parts || []) parts.push({ first: first + p.first_triangle, count: p.triangles, look: look ? look.findIndex((l) => l.part === p.name) : -1 });
   }
   D.eyesPlaced = report || null;
-  V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes" }, "eyes");
+  const shaded = look && uvs.length === (pos.length / 3) * 2;
+  V.setExtra("eyes", { positions: pos, indices: idx, color: [0.93, 0.93, 0.95], label: "eyes", uvs: shaded ? uvs : null, parts: shaded ? parts : null, look: shaded ? look : null }, "eyes");
   request(false);
 }
 
-async function loadScene() {
+function eyeInput() {
   const input = { store, ...D.base };
   if (opt("eyes")) input.eyes = opt("eyes");
-  const sc = await api("designer.scene", input);
+  if (D.eyeballs?.model) input.eyeballs = D.eyeballs;
+  return input;
+}
+
+function eyeKey() { return D.eyeballs?.model ? `${D.eyeballs.rig}|${D.eyeballs.model.id}|${D.eyeballs.model.radius_mm ?? 12}` : `file|${opt("eyes") || ""}`; }
+
+async function eyeLook(model) {
+  if (!model || D.eyeLooks.has(model)) return;
+  const r = await api("eyes.look", { model });
+  D.eyeLooks.set(model, r.parts.map((p) => ({
+    part: p.part, colour: p.colour, roughness: p.roughness, glass: p.transmission != null,
+    tex: p.texture ? V.materialTexture(p.texture.width, p.texture.height, new Uint8Array(bytesOf(p.texture.rgba_u8_b64))) : null,
+  })));
+}
+
+function setEyeBase(eyes) {
+  D.eyeBase = eyes.map((e) => ({ side: e.side, verts: decodeF32(e.vertices_f32_b64), tris: decodeU32(e.triangles_u32_b64),
+                                 model: e.model || null, uvs: e.uvs_f32_b64 ? decodeF32(e.uvs_f32_b64) : null, parts: e.parts || null }));
+}
+
+async function refreshEyes() {
+  const key = eyeKey();
+  if (key === D.eyeBaseKey || !D.scene) return;
+  D.eyeBaseKey = key;
+  const r = await api("designer.eyes", eyeInput());
+  if (key !== D.eyeBaseKey) return;
+  await eyeLook(r.eyes[0]?.model);
+  if (key !== D.eyeBaseKey) return;
+  setEyeBase(r.eyes);
+  if (!D.eyeBase.length) V.setExtra("eyes", null);
+  placeEyes(D.settled?.eyes);
+}
+
+async function loadScene() {
+  D.eyeBaseKey = eyeKey();
+  const sc = await api("designer.scene", eyeInput());
   D.scene = { lods: sc.lods.map((l) => ({ target: l.target, triangles: l.triangles, dropped: l.dropped_triangles })), eyes: sc.eyes };
   const head = V.setHead(D.n, D.indices, sc.triangle_uvs_f32_b64 ? decodeF32(sc.triangle_uvs_f32_b64) : null);
   head.label = "head (LOD0)";
   for (const l of sc.lods) V.addHeadLod(decodeU32(l.triangles_u32_b64), decodeF32(l.triangle_uvs_f32_b64), `LOD ${l.target}`);
-  D.eyeBase = sc.eyes.map((e) => ({ side: e.side, verts: decodeF32(e.vertices_f32_b64), tris: decodeU32(e.triangles_u32_b64) }));
+  await eyeLook(sc.eyes[0]?.model);
+  setEyeBase(sc.eyes);
   placeEyes(D.settled?.eyes);
 }
 
@@ -1833,7 +1876,32 @@ async function loadProjectDoc() {
   return doc;
 }
 
+function wireTasks() {
+  D.wizards = createWizards({
+    api, root: $("wizard"), toast,
+    showMesh: (id, spec) => { if (!V) return false; V.setExtra(id, spec); renderVisibility(); request(false); return true; },
+    canShow: () => !!V,
+    openSpec: (s, spec) => { const q = new URLSearchParams(location.search); if (s || store) q.set("store", s || store); q.set("spec", spec); location.search = q.toString(); },
+    prepare: async () => {
+      if (!store || !D.base) return { project: P.name || "untitled", values: store ? { store } : {}, after: async () => ({}) };
+      return {
+        project: P.name || "untitled",
+        values: { store, ...D.base },
+        after: async (dir) => {
+          const spec = `${dir}/character.gfchar.json`;
+          const input = { ...settleInput(), out: spec };
+          delete input.eyes;
+          await api("designer.save", input);
+          return { character: { store, spec }, export: { out: `${dir}/export.glb` } };
+        },
+      };
+    },
+  });
+}
+
 async function main() {
+  $("tasks-btn").addEventListener("click", () => D.wizards.open().catch((e) => toast(`tasks: ${e.message}`)));
+  wireTasks();
   const doc = await loadProjectDoc();
   if (!store) {
     setStatus("preview", "open this page with ?store=<store path> (optional &spec=, &macro=, &eyes=) or ?project=<name>");

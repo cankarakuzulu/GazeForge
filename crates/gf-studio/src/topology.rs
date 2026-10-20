@@ -32,6 +32,8 @@ pub struct TopologyUi {
     session_epoch: u64,
     pub showing_after: bool,
     pub after_game: String,
+    pub job_source: String,
+    pub shapes_dir: String,
 }
 
 #[derive(Clone)]
@@ -61,6 +63,8 @@ impl Default for TopologyUi {
             session_epoch: 0,
             showing_after: false,
             after_game: String::new(),
+            job_source: String::new(),
+            shapes_dir: String::new(),
         }
     }
 }
@@ -144,6 +148,11 @@ impl TopologyUi {
         if self.session_epoch != world.epoch {
             self.session_epoch = world.epoch;
             self.reset();
+            if self.job.is_none() && world.session.as_ref().is_none_or(|s| s.game != self.job_source) {
+                self.record = None;
+                self.error = None;
+                self.after_game.clear();
+            }
         }
         let Some(s) = world.session.as_mut() else {
             self.flagged = None;
@@ -204,12 +213,17 @@ impl TopologyUi {
         if self.job.is_some() {
             return Err("an improve is already running".into());
         }
-        let env = gf_api::call(&Ctx::from_env(), "jobs.submit", &json!({"command": "topology.improve", "input": {"store": store, "game": game}}));
+        let mut input = json!({"store": store, "game": game});
+        if !self.shapes_dir.trim().is_empty() {
+            input["dense"] = json!(self.shapes_dir.trim());
+        }
+        let env = gf_api::call(&crate::wizard::ctx()?, "jobs.submit", &json!({"command": "topology.improve", "input": input}));
         if env["ok"] != true {
             return Err(env.pointer("/error/message").and_then(Value::as_str).unwrap_or("jobs.submit failed").to_string());
         }
         let id = env["result"]["id"].as_str().unwrap_or_default().to_string();
         self.job = Some(id.clone());
+        self.job_source = game.to_string();
         self.record = None;
         self.error = None;
         self.polled = None;
@@ -222,7 +236,7 @@ impl TopologyUi {
             return None;
         }
         self.polled = Some(Instant::now());
-        let env = gf_api::call(&Ctx::from_env(), "jobs.status", &json!({"id": id}));
+        let env = gf_api::call(&crate::wizard::ctx().unwrap_or_else(|_| Ctx::from_env()), "jobs.status", &json!({"id": id}));
         if env["ok"] != true {
             self.job = None;
             self.error = Some(env.pointer("/error/message").and_then(Value::as_str).unwrap_or("jobs.status failed").to_string());
@@ -267,6 +281,9 @@ impl TopologyUi {
             return Ok("triangulation: before".into());
         }
         let game = self.result().and_then(|r| r["game"].as_str()).ok_or("run an improve first")?.to_string();
+        if s.game != self.job_source {
+            return Err(format!("that improve was of another game base ({}); run an improve on this one", short(&self.job_source)));
+        }
         if self.after.is_some() && self.after_game == game {
             self.swap(world, true);
             return Ok("triangulation: after".into());
@@ -379,6 +396,10 @@ impl Studio<'_> {
                     self.act("topology_improve");
                 }
                 ui.label(if running { "improving" } else { "improve" });
+            });
+            ui.horizontal(|ui| {
+                ui.label("extra shapes").on_hover_text("Optional: a dense base folder whose shape keys are scored too (its manifest.json and shape_NAME.npy files); the result depends on the shapes scored");
+                ui.add_enabled(!self.world.topo.running(), egui::TextEdit::singleline(&mut self.world.topo.shapes_dir).hint_text("dense base folder (optional)").desired_width(180.0));
             });
             let t = &self.world.topo;
             if let Some(r) = &t.record

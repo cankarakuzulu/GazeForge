@@ -184,6 +184,46 @@ impl Offscreen {
                 let cam = &st.cams[st.layout.slots()[a]];
                 Ok(json!({"key": text("key"), "status": self.ui.as_ref().map(|u| u.state.status.clone()), "camera": {"name": cam.name, "yaw": cam.goal.yaw, "pitch": cam.goal.pitch, "ortho": cam.ortho}}))
             }
+            "wizard" => {
+                let action = text("action").ok_or("wizard needs action (start, set, run, next, back, wait)")?;
+                let world = &self.world;
+                let u = self.ui.as_mut().ok_or("no interface: run a ui step first")?;
+                let w = &mut u.state.wizards;
+                match action {
+                    "start" => {
+                        if world.session.is_none() {
+                            return Err("nothing is loaded".into());
+                        }
+                        w.open = true;
+                        w.start(text("id").ok_or("wizard start needs id")?, crate::wizard::run_values(world), world.settle_input(), text("project").unwrap_or("untitled"))?;
+                    }
+                    "set" | "run" => {
+                        w.load_form();
+                        for (k, v) in step.get("input").and_then(Value::as_object).into_iter().flatten() {
+                            w.set_field(k, v);
+                        }
+                        if action == "run" {
+                            w.run_step()?;
+                        }
+                    }
+                    "next" => w.go(1),
+                    "back" => w.go(-1),
+                    "wait" => {
+                        let t = std::time::Instant::now();
+                        while w.running() {
+                            if t.elapsed().as_secs_f64() > num("seconds").unwrap_or(600.0) {
+                                return Err("wizard wait timed out".into());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            w.poll()?;
+                        }
+                    }
+                    other => return Err(format!("unknown wizard action {other}")),
+                }
+                let state = w.state();
+                self.ui_frames(2)?;
+                Ok(state)
+            }
             "cube_click" | "cube_drag" => self.cube_step(op, step),
             other => Err(format!("unknown op {other}")),
         }

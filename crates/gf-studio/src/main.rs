@@ -15,6 +15,7 @@ mod studio;
 mod topology;
 mod ui_script;
 mod viewer;
+mod wizard;
 mod worker;
 mod world;
 
@@ -81,6 +82,10 @@ fn main() -> ExitCode {
         let worker = match verb.as_str() {
             "__job-supervise" => Some(gf_api::jobs::supervise(std::path::Path::new(dir), id)),
             "__job-work" => Some(gf_api::jobs::work(std::path::Path::new(dir), id)),
+            "__sleep" => {
+                gf_api::jobs::sleep_child(dir.parse().unwrap_or(0.0));
+                Some(Ok(()))
+            }
             _ => None,
         };
         if let Some(result) = worker {

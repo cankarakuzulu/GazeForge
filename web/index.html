@@ -27,6 +27,7 @@
 <symbol id="i-keyboard" viewBox="0 0 24 24"><path d="M10 8h.01" /> <path d="M12 12h.01" /> <path d="M14 8h.01" /> <path d="M16 12h.01" /> <path d="M18 8h.01" /> <path d="M6 8h.01" /> <path d="M7 16h10" /> <path d="M8 12h.01" /> <rect width="20" height="16" x="2" y="4" rx="2" /></symbol>
 <symbol id="i-layout-grid" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1" /> <rect width="7" height="7" x="14" y="3" rx="1" /> <rect width="7" height="7" x="14" y="14" rx="1" /> <rect width="7" height="7" x="3" y="14" rx="1" /></symbol>
 <symbol id="i-lightbulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" /> <path d="M9 18h6" /> <path d="M10 22h4" /></symbol>
+<symbol id="i-list-checks" viewBox="0 0 24 24"><path d="M13 5h8" /> <path d="M13 12h8" /> <path d="M13 19h8" /> <path d="m3 17 2 2 4-4" /> <path d="m3 7 2 2 4-4" /></symbol>
 <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" /></symbol>
 <symbol id="i-redo-2" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5" /> <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" /></symbol>
 <symbol id="i-rotate-3d" viewBox="0 0 24 24"><path d="m15.194 13.707 3.814 1.86-1.86 3.814" /> <path d="M16.47214 7.52786 A 5 10 0 1 0 13 21.79796" /> <path d="M21.79796 11 A 10 5 0 1 0 19 15.57071" /></symbol>
@@ -58,6 +59,7 @@
     <div class="grp"><select id="mode" title="Render mode of the active viewport (M / Shift+M)"></select><select id="lod" title="Level of detail (, coarser / . finer)"></select></div>
     <div class="grp"><button id="frame" class="ib" title="Frame the head in the active viewport (F)"><svg class="ico"><use href="#i-focus"/></svg></button><button id="proj" class="ib wide" title="Perspective / orthographic (O or 5)"><svg class="ico"><use href="#i-box"/></svg><span>persp</span></button><button id="three" class="ib" title="Three-quarter view (9)"><svg class="ico"><use href="#i-rotate-3d"/></svg></button><button id="home" class="ib" title="Home view of the active viewport, framed (Home)"><svg class="ico"><use href="#i-house"/></svg></button></div>
     <div class="grp"><button id="bad-btn" class="ib" title="Bad triangles: smallest angle under the limit of the Topology panel"><svg class="ico"><use href="#i-triangle-alert"/></svg></button><button id="improve-btn" class="ib" title="Improve the topology of the game base (Topology panel; runs a job)"><svg class="ico"><use href="#i-wand-sparkles"/></svg></button></div>
+    <div class="grp"><button id="tasks-btn" class="ib" title="Tasks: guided wizards, each step one registry command"><svg class="ico"><use href="#i-list-checks"/></svg></button></div>
     <div class="grp"><button id="shot" class="ib" title="PNG of the active view (K); Shift+click or Shift+K for the whole layout"><svg class="ico"><use href="#i-camera"/></svg></button><button id="theme-btn" class="ib" title="Dark / light interface (D)"><svg class="ico"><use href="#i-moon"/></svg></button><button id="help-btn" class="ib" title="Shortcuts (?)"><svg class="ico"><use href="#i-keyboard"/></svg></button></div>
     <div class="grp project"><button id="p-new" class="ib" title="New project (Ctrl+N)"><svg class="ico"><use href="#i-file-plus"/></svg></button><button id="p-open" class="ib" title="Open a project (Ctrl+O)"><svg class="ico"><use href="#i-folder-open"/></svg></button><select id="p-recent" title="Recent projects"><option value="">recent…</option></select><button id="p-save" class="ib" title="Save the project (Ctrl+S)"><svg class="ico"><use href="#i-save"/></svg></button><button id="p-saveas" class="ib" title="Save the project as (Ctrl+Shift+S)"><svg class="ico"><use href="#i-save-all"/></svg></button><span id="p-name" class="pname" title="saved">untitled</span></div>
   </nav>
@@ -177,6 +179,13 @@
     </div>
   </aside>
 </main>
+<div id="wizard" class="wizard hidden">
+  <div class="wz-box">
+    <div class="wz-head"><button class="wz-home small" title="All tasks">tasks</button><b class="wz-title">Tasks</b><button class="wz-peek small" title="Look at the viewport: the task shrinks to this bar until you click it again">look</button><button class="wz-close small" title="Close (the run stays in the project and can be resumed)">×</button></div>
+    <div class="wz-main"><nav class="wz-steps"></nav><div class="wz-body"></div></div>
+    <div class="wz-foot"><span class="wz-status"></span><button class="wz-back">back</button><button class="wz-cancel hidden" title="Cancel the running job of this step">cancel</button><button class="wz-run">run</button><button class="wz-next">next</button></div>
+  </div>
+</div>
 <div id="help" class="help hidden">
   <div class="card">
     <h2>Designer shortcuts</h2>

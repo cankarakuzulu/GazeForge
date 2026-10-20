@@ -434,7 +434,8 @@ pub fn macro_delta_output() -> Value {
 
 pub fn scene_input() -> Value {
     obj(
-        with(base_props(), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file; each eye comes back with its centre, radius, side, gaze and mesh"}})),
+        with(base_props(), json!({"eyes": {"type": "string", "minLength": 1, "description": "optional eyes file; each eye comes back with its centre, radius, side, gaze and mesh"},
+                                  "eyeballs": {"type": "object", "description": "the spec's eyeballs field; with a model, its eyes at the eye rig's places come back instead of the eyes file's, with their UVs, their parts (sclera, cornea, iris, pupil) and the model id (eyes.look shades them)"}})),
         &["store", "pack", "catalog", "game"],
     )
 }
@@ -489,6 +490,50 @@ pub fn scene_mesh(input: &Value) -> Result<SceneMesh, ApiError> {
     Ok(SceneMesh { vertices: loaded.game.kept.len(), triangles: loaded.game.triangles.clone(), triangle_uvs: loaded.game.triangle_uvs.clone(), lods, cached })
 }
 
+pub fn eyes_output() -> Value {
+    shape(json!({"eyes": {"type": "array"}}))
+}
+
+pub fn eyes(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    Ok(json!({"eyes": scene_eyes(input)?}))
+}
+
+pub fn scene_eyes(input: &Value) -> Result<Vec<Value>, ApiError> {
+    let model = match input.get("eyeballs") {
+        Some(v) => {
+            let eb: gf_core::eyerig::EyeballSpec = serde_json::from_value(v.clone()).map_err(|e| ApiError::invalid(format!("eyeballs: {e}")))?;
+            let problems = eb.canonical().problems();
+            if !problems.is_empty() {
+                return Err(ApiError::invalid(problems.join("; ")).details(json!({"problems": problems})));
+            }
+            let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
+            gf_io::character::model_eyes_for(&store, text(input, "catalog"), &eb).map_err(ApiError::invalid)?.map(|eyes| (eb, eyes))
+        }
+        None => None,
+    };
+    let (model_id, list) = match model {
+        Some((eb, eyes)) => (eb.model.map(|m| m.id), eyes),
+        None => match input.get("eyes").and_then(Value::as_str) {
+            Some(p) => (None, gf_io::load_eyes(Path::new(p)).map_err(ApiError::invalid)?),
+            None => (None, Vec::new()),
+        },
+    };
+    Ok(list
+        .iter()
+        .map(|e| {
+            let triangles: Vec<u8> = e.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+            let mut v = json!({"centre": e.centre, "radius": e.radius, "side": if e.centre[0] < 0.0 { "right" } else { "left" }, "gaze": e.gaze(),
+                               "vertices_f32_b64": f32_base64(e.vertices.iter().flatten().copied()), "triangles_u32_b64": base64(&triangles)});
+            if let Some(id) = &model_id {
+                v["model"] = json!(id);
+                v["uvs_f32_b64"] = json!(f32_base64(e.uvs.iter().flatten().copied()));
+                v["parts"] = json!(e.parts.iter().map(|p| json!({"name": p.name, "first_triangle": p.first_triangle, "triangles": p.triangles})).collect::<Vec<_>>());
+            }
+            v
+        })
+        .collect())
+}
+
 pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let mesh = scene_mesh(input)?;
     let lods: Vec<Value> = mesh
@@ -500,18 +545,7 @@ pub fn scene(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                    "triangles_u32_b64": base64(&bytes), "triangle_uvs_f32_b64": f32_base64(l.triangle_uvs.iter().copied())})
         })
         .collect();
-    let eyes: Vec<Value> = match input.get("eyes").and_then(Value::as_str) {
-        Some(p) => gf_io::load_eyes(Path::new(p))
-            .map_err(ApiError::invalid)?
-            .iter()
-            .map(|e| {
-                let triangles: Vec<u8> = e.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
-                json!({"centre": e.centre, "radius": e.radius, "side": if e.centre[0] < 0.0 { "right" } else { "left" }, "gaze": e.gaze(),
-                       "vertices_f32_b64": f32_base64(e.vertices.iter().flatten().copied()), "triangles_u32_b64": base64(&triangles)})
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    let eyes = scene_eyes(input)?;
     let base_uvs = f32_base64(mesh.triangle_uvs.iter().flatten().flatten().map(|&x| x as f64));
     Ok(json!({"vertices": mesh.vertices, "triangles": mesh.triangles.len(), "triangle_uvs_f32_b64": base_uvs, "lods": lods, "eyes": eyes, "cached": mesh.cached,
               "definition": "each coarser level's triangles as indices into the finest game base's vertex order (the levels are nested subsets of it); a triangle with a vertex outside the finest level is dropped and counted"}))

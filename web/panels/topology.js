@@ -48,6 +48,7 @@ window.GF.registerPanel({
       <label class="line">smallest angle under <input type="range" class="below" min="2" max="30" step="1" value="10"> <span class="below-v">10</span> deg</label>
       <div class="note count"></div>
       <div class="note base">measuring the base…</div>
+      <label class="line" title="Optional: a dense base folder whose shape keys are scored too (its manifest.json and shape_NAME.npy files); the result depends on the shapes scored">extra shapes <input type="text" class="shapes" placeholder="dense base folder (optional)"></label>
       <div class="line"><button class="ib wide improve" title="Re-cut the triangles of this game base by edge flips over the same vertices, scored over the shape range, and store the result as a new game base (a job)"><svg class="ico"><use href="#i-wand-sparkles"/></svg><span>improve</span></button></div>
       <progress class="prog hidden" max="1" value="0"></progress>
       <div class="note msg"></div>
@@ -119,7 +120,9 @@ window.GF.registerPanel({
       prog.value = 0;
       msg.textContent = "submitting";
       try {
-        const sub = await api.call("jobs.submit", { command: "topology.improve", input: { store: c0.store, game: c0.game } });
+        const input = { store: c0.store, game: c0.game }, shapes = $(".shapes").value.trim();
+        if (shapes) input.dense = shapes;
+        const sub = await api.call("jobs.submit", { command: "topology.improve", input });
         st.job = sub.id;
         for (;;) {
           const r = await api.call("jobs.status", { id: st.job, wait_s: 0.5 });

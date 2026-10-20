@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
 use crate::tasks::api;
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -117,11 +117,20 @@ pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
         name: "designer.scene",
         kind: Kind::Query,
-        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes of an optional eyes file (centre, radius, side, gaze and mesh).",
-        limits: "A level with a vertex outside the finest level drops that triangle and counts it; eyes are the file's spheres, not a placed eye mesh.",
+        summary: "The viewer's scene extras for a game base: its coarser levels of detail as triangles over the finest level's vertices, and the eyes (centre, radius, side, gaze and mesh) of an eye model (eyeballs with a model, with UVs and parts) or of an optional eyes file.",
+        limits: "A level with a vertex outside the finest level drops that triangle and counts it; the eyes are at their rest place, before the character moves them (designer.settle reports each eye's transform).",
         input: designer::scene_input,
         output: designer::scene_output,
         run: designer::scene,
+    },
+    CommandDef {
+        name: "designer.eyes",
+        kind: Kind::Query,
+        summary: "Only the eyes of designer.scene: an eye model's eyes (eyeballs with a model) or an eyes file's, at their rest place, for a client that changes the model without reloading the scene.",
+        limits: "The same eyes and format as designer.scene's eyes; no levels of detail.",
+        input: designer::scene_input,
+        output: designer::eyes_output,
+        run: designer::eyes,
     },
     CommandDef {
         name: "eyes.generate",
@@ -140,6 +149,15 @@ pub static REGISTRY: &[CommandDef] = &[
         input: eyes::inventory_input,
         output: eyes::inventory_output,
         run: eyes::inventory,
+    },
+    CommandDef {
+        name: "eyes.look",
+        kind: Kind::Query,
+        summary: "How one eye model is shaded, part by part (sclera, cornea, iris, pupil): base colour, roughness, transmission and index of refraction, blending, and the iris and sclera textures as RGBA pixels - the same values the glb export writes as materials.",
+        limits: "Textures are procedural (seeded per model) at 1024x256 (iris) and 512x256 (sclera); textures false returns only their sizes.",
+        input: eyes::look_input,
+        output: eyes::look_output,
+        run: eyes::look_command,
     },
     CommandDef {
         name: "eyes.textures",
@@ -221,6 +239,15 @@ pub static REGISTRY: &[CommandDef] = &[
         input: status_input,
         output: job_output,
         run: jobs::cancel,
+    },
+    CommandDef {
+        name: "jobs.list",
+        kind: Kind::Query,
+        summary: "The jobs in the jobs folder, newest first: id, command, state, submitted / started / finished times (ms since the epoch), progress while it runs, and the error or ok of a finished one.",
+        limits: "Lists one jobs folder (GAZEFORGE_JOBS, else <temp>/gazeforge-jobs); jobs are never deleted by the server.",
+        input: jobs_list_input,
+        output: jobs_list_output,
+        run: jobs::list,
     },
     CommandDef {
         name: "debug.slow",
@@ -600,6 +627,60 @@ pub static REGISTRY: &[CommandDef] = &[
         output: api::argv_output,
         run: api::topology_inspect,
     },
+    CommandDef {
+        name: "wizards.list",
+        kind: Kind::Query,
+        summary: "The GUI wizards: guided tasks whose every step is one registry command (id, title, group, summary, step count).",
+        limits: "Developer wizards are listed only with developer true. A wizard adds no capability: each step runs the same command the CLI, HTTP and MCP run.",
+        input: wizards::list_input,
+        output: wizards::list_output,
+        run: wizards::list,
+    },
+    CommandDef {
+        name: "wizards.get",
+        kind: Kind::Query,
+        summary: "One wizard's definition: its steps, each with its command, kind, input schema, the fields a form shows (common or advanced, widget hints, bindings to run values and earlier steps) and what the step shows when it ends.",
+        limits: "Bindings: $run.NAME (a value given to wizards.start), $STEP.input.FIELD, $STEP.result.PATH, =TEXT (a literal).",
+        input: wizards::get_input,
+        output: wizards::get_output,
+        run: wizards::get,
+    },
+    CommandDef {
+        name: "wizards.start",
+        kind: Kind::Mutation,
+        summary: "Start a wizard run: a folder ROOT/runs/PROJECT/WIZARD-N holding steps/STEP per step (its input, its result or job) and the files the steps write ($dir); returns the run's state.",
+        limits: "Runs are resumable: wizards.state reads them back at any time; nothing is deleted.",
+        input: wizards::start_input,
+        output: wizards::run_output,
+        run: wizards::start,
+    },
+    CommandDef {
+        name: "wizards.state",
+        kind: Kind::Query,
+        summary: "A wizard run's state: per step open, running, done, failed or stale, the proposed input (bindings resolved), the input given, the result or error and the job id; a finished job's result is collected here.",
+        limits: "A step's state is read from its folder; editing an earlier step marks the later ones stale until they run again.",
+        input: wizards::state_input,
+        output: wizards::run_output,
+        run: wizards::state,
+    },
+    CommandDef {
+        name: "wizards.runs",
+        kind: Kind::Query,
+        summary: "A project's wizard runs, newest first: run id, wizard, start time and each step's state, so a client can resume one with wizards.state.",
+        limits: "Only runs whose run record reads are listed; a run of a wizard that no longer exists is skipped.",
+        input: wizards::runs_input,
+        output: wizards::runs_output,
+        run: wizards::runs,
+    },
+    CommandDef {
+        name: "wizards.step",
+        kind: Kind::Mutation,
+        summary: "Run one wizard step: its fields (hidden and bound fields not given take their bound values) are checked against the step command's schema and the command runs, or is submitted as a job; later steps that ran are marked stale.",
+        limits: "Steps run in order: a step needs every earlier non-optional step done. A job step returns at once; wizards.state collects its result.",
+        input: wizards::step_input,
+        output: wizards::run_output,
+        run: wizards::step,
+    },
 ];
 
 pub fn obj(properties: Value, required: &[&str]) -> Value {
@@ -730,6 +811,14 @@ fn status_input() -> Value {
     obj(json!({"id": {"type": "string", "minLength": 1}, "wait_s": {"type": "number", "minimum": 0, "maximum": 600}}), &["id"])
 }
 
+fn jobs_list_input() -> Value {
+    obj(json!({"limit": {"type": "integer", "minimum": 1, "description": "at most this many, newest first (default 50)"}}), &[])
+}
+
+fn jobs_list_output() -> Value {
+    shape(json!({"jobs_dir": {"type": "string"}, "total": {"type": "integer"}, "jobs": {"type": "array"}}))
+}
+
 fn job_output() -> Value {
     shape(json!({"id": {"type": "string"}, "command": {"type": "string"}, "state": {"type": "string"},
                  "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]},
@@ -785,21 +874,33 @@ fn manifests<T: serde::de::DeserializeOwned>(store: &Store, kind: &str) -> Resul
         .collect()
 }
 
+fn imported(store: &Store, kind: &str, reference: &str) -> Value {
+    let path = store.root.join(kind).join(format!("{}.json", reference.trim_start_matches("sha256:")));
+    std::fs::metadata(path).and_then(|m| m.modified()).map_or(Value::Null, |t| json!(project::utc(t)))
+}
+
 fn store_list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let store = open_store(input)?;
     let packs: Vec<Value> = manifests::<PackManifest>(&store, "packs")?
         .into_iter()
-        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some()}))
+        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some(), "imported": imported(&store, "packs", &r)}))
         .collect();
     let catalogs: Vec<Value> = manifests::<CatalogManifest>(&store, "catalogs")?
         .into_iter()
-        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len()}))
+        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len(), "imported": imported(&store, "catalogs", &r)}))
         .collect();
     let games: Vec<Value> = manifests::<GameManifest>(&store, "game")?
         .into_iter()
-        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len()}))
+        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len(), "imported": imported(&store, "game", &r)}))
         .collect();
-    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games}))
+    let eyerigs: Vec<Value> = match store.root.join("eyerigs").is_dir() {
+        true => manifests::<Value>(&store, "eyerigs")?
+            .into_iter()
+            .map(|(r, m)| json!({"eyerig": r, "catalog": m["catalog"], "format": m["format"], "usable": m["format"] == gf_core::eyerig::FORMAT, "imported": imported(&store, "eyerigs", &r)}))
+            .collect(),
+        false => Vec::new(),
+    };
+    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games, "eyerigs": eyerigs}))
 }
 
 fn load_catalog(store: &Store, reference: &str) -> Result<CatalogManifest, ApiError> {

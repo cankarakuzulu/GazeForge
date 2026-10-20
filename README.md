@@ -181,6 +181,10 @@ materials: the sclera and the iris textured (the PNGs embedded in the glb), a ne
 `KHR_materials_transmission` and `KHR_materials_ior` (the model's index of refraction, 1.376) and alpha blending at a low
 base alpha, so a viewer without transmission still shows the iris through it. Without a rig the eyes are nodes
 `Eye_L` / `Eye_R`; with `--rig head` they are children of the eye joints. Eyes from an eyes file export as before.
+`eyes.look` returns one model's shading part by part (base colour, roughness, transmission and index of refraction,
+blending, and the iris and sclera textures as RGBA pixels), the same values the glb writes. `designer.scene` and
+`designer.eyes` (only the eyes, for a client that changes the model) take the spec's `eyeballs`: with a model they return
+its eyes at their rest place with UVs and parts instead of an eyes file's.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 
@@ -448,8 +452,13 @@ handler and return the same envelope, byte for byte (`crates/gf-cli/tests/confor
 | conflict | 7 | 409 |
 
 Commands: `commands.list`, `store.list`, `catalog.list`, `character.create`, `character.validate`, `character.evaluate`,
-`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, and `debug.slow` (a deliberately slow job that exists
-to prove cancel). `commands.list` returns every schema; the argv commands above are unchanged.
+`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, `jobs.list`, and `debug.slow` (a deliberately slow job
+that exists to prove cancel), among others; `commands.list` returns every command with its schema; the argv commands above
+are unchanged. `store.list` gives each pack, catalog, game base and eye rig with the time it was imported (an eye rig of
+an older format is listed as not usable rather than failing the listing); `jobs.list` gives the jobs folder's jobs, newest
+first, with their state, times and progress. The browser designer's Store and Jobs panels and the studio's Tasks window
+(Jobs, Store) are built on them: what the store holds by date, never a pasted sha256, and every job with its progress and
+a cancel button.
 
 **The argv commands in the registry.** Every argv command has a registry twin: `store.import_pack`, `store.import_catalog`,
 `store.import_game`, `store.import_eyerig`, `base.build`, `export.obj`, `export.glb`, `lids.collide`, `gates.shell`,
@@ -466,7 +475,11 @@ gazeforge call jobs.submit --input '{"command": "export.obj", "input": {"dense":
 ```
 
 Every front door and the job records parse JSON with a correctly rounded float parser, so a number reaches the command
-with the bits it was written with, and a job's result reads back unchanged.
+with the bits it was written with, and a job's result reads back unchanged (input nesting up to 128 levels, as before).
+A twin's JSON option (`sliders`, `macro_base`) is handed to the command as text and parsed the way the argv option is,
+so a 17-digit number there can still move by one ulp, exactly as it does on the command line. A field the chosen
+placement does not read (or `lids_*` without `lids: auto`, `body_*` without `body`) passes the schema and is refused when
+the job runs.
 
 `character.measure` evaluates a spec and reports straight-line distances in millimetres between landmark vertices of
 the dense base, with the base's value and the difference: nose width at the alae, nose length (nasion to tip), nose
@@ -506,11 +519,41 @@ set when `ok` is false. A client configuration:
 
 **Jobs.** `jobs.submit {"command": NAME, "input": {...}}` runs a command in a worker process and returns at once;
 `jobs.status {"id", "wait_s"}` reads its record (`queued`, `running`, `done`, `failed`, `cancelled`, with the result
-when done); `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
+when done); while a job runs, `progress` holds the stage, done, total and message its command last reported (export
+stages, path steps, photo-pipeline stages; at most one write every 200 ms within a stage), and a failed or cancelled
+job keeps it to show where it stopped; `jobs.cancel {"id"}` kills the worker and every process it started. On Windows each worker runs inside a Job
 Object that is killed as a whole and closed on exit; the record's `worker_processes_left` is the job object's own count
 after the kill. Elsewhere the worker gets its own process group, which is killed, and that count is null. Jobs live in
 `GAZEFORGE_JOBS`, else `<temp>/gazeforge-jobs`, so a job submitted through one front door can be read or cancelled
 through another that uses the same directory.
+
+**Wizards.** A wizard is a guided task whose every step is one registry command, defined as data in `gf-api`:
+`wizards.list` and `wizards.get` (each step with its command, kind, input schema, the fields a form shows, common or
+advanced, and bindings: `$run.NAME`, `$STEP.input.FIELD`, `$STEP.result.PATH`, `=TEXT`). A run is a folder
+`ROOT/runs/PROJECT/WIZARD-N` (`steps/STEP` holds each step's record, the rest the files its steps write, bound as `$dir`): `wizards.start` makes it, `wizards.step` checks a step's input
+against its command's schema and runs it (or submits it as a job) and marks later steps stale, and `wizards.state` reads
+the run back, resolves each step's proposed input and collects finished jobs, so a run can be left and resumed;
+`wizards.runs` lists a project's runs, newest first, and both clients offer them under "recent runs". A step's input is
+checked before anything of the earlier attempt is removed (a step without a command against its fields), re-running a
+running job step cancels that job first, and a job whose record is gone fails only its own step. An agent
+can drive a wizard with the same calls. The wizards: `setup` (a store from a dense base folder, its targets, a game
+base and the eye rig), `build_base` (a game base built and imported), `create` (a character from target weights,
+validated), `photos`, `export`, `body` (a body pack), and, behind a "developer tasks" toggle, `check` (shell gates),
+`lids` (eyelids out of the eyeballs) and `macros` (macro weights and label tables). `photos` takes a front and a profile photo (and optionally the other profile)
+through `photo.check`, `photo.views` (whose worker now also writes each photo's overlay: landmarks green, outline red,
+profile key points yellow), `fit.photos` and `character.create`, and opens the saved spec in the designer. `export` takes
+a character spec through `export.glb` (with an optional obj of the finest level) and `gates.facing`. Each writes the same
+files its commands write from the CLI. `fit.photos` reports where its base landmark table came from (`base_landmarks`:
+given, already in the run, or detected, which a re-run keeps reporting while the run still holds the detected table); with no table it now detects one on a render of the base, as `fit.register`
+does, and warns that a table detected on the base without eyes is several millimetres off at the lids and the chin. Two
+HTTP routes serve the browser's wizards, both loopback-only and confined to a run's folder: `POST /v1/upload?run=&name=`
+(a file chosen in the browser, copied to the run's `uploads/`, up to 64 MB) and `GET /v1/wizard-file?run=&path=` (an
+image a step wrote, such as an overlay). In the browser designer
+the Tasks button (wand icon) lists the wizards and runs them: the current character is saved into the run, each step is
+a form built from its command's schema (the named fields first, every other option under advanced), and a job step
+shows its progress. The native studio has the same Tasks window (the wand in the toolbar), calling the registry
+in-process; its job steps run through the `gazeforge` tool installed next to it, and the `--script` op `wizard` (`start`,
+`set`, `run`, `next`, `back`, `wait`) drives it for checks.
 
 ### Designer
 
@@ -626,7 +669,9 @@ re-stitched after the settle when "Re-stitch after every change" is on). The Fac
 moves and refits after the settle.
 
 The Topology panel (`topology.js`) shows the triangles whose smallest angle on the settled character is under a limit
-(the toolbar's warning-triangle button toggles it), runs `topology.improve` as a job with its progress, shows the
+(the toolbar's warning-triangle button toggles it), runs `topology.improve` as a job with its progress (an optional
+"extra shapes" folder is passed as `dense`; the store does not keep a dense folder's shape keys, so a result scored
+without them is a different base), shows the
 numbers before and after, draws the improved base beside the head (settled on it), and reloads the page on the new base
 (the `game` URL parameter, which `designer.sliders` takes as `game`). Its default base, when no spec names one, is the
 store's largest base that is not a topology result.
@@ -637,10 +682,13 @@ store's largest base that is not a topology result.
 
 `api.eyes` gives `get()` and `set(eyeballs)` (the character's `eyeballs`, see Characters; `set` settles), `rig()` (the
 catalog's eye rig), `placed()` (the last settle's eye report) and `hasEyes()`. The Eyes panel (`web/panels/eyes.js`) is
-built on it: follow the sockets, link left and right (default), and per eye the out, up and forward offsets, pitch, yaw,
-roll and scale relative to the socket; each slider release joins undo and redo. The page draws the eyes file's own eye
-meshes and places them from each settle's eye report, so an eye moves when the settle lands (no live preview between
-settles in the browser; the native studio previews it).
+built on it: an eye model picker (the inventory by family, or the eyes file) with its radius, follow the sockets, link
+left and right (default), and per eye the out, up and forward offsets, pitch, yaw, roll and scale relative to the
+socket; each change joins undo and redo. The page draws the eye model's eyes (or the eyes file's meshes) and places them
+from each settle's eye report, so an eye moves when the settle lands (no live preview between settles in the browser; the
+native studio previews it). In the lit render modes (clay, flat, Blinn-Phong, anisotropic) a model's eyes are shaded
+from `eyes.look`: the textured sclera and iris, a near-black pupil, and a glossy cornea drawn over them with blending
+(Fresnel reflection and a sharp highlight); the other modes draw them like any mesh.
 
 ### Grid and addresses
 
@@ -743,8 +791,10 @@ toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eye
 character's `eyeballs` following (a new character starts that way when the catalog has an eye rig), each settle places
 the eyes and the drawn meshes move with them. The **Eyes** tab turns following on and off and sets each eye's offset,
 rotation and scale relative to its socket, linked between the sides by default; while a slider moves, the eye moves on
-the last settled socket, and the settle that follows clears the lids against it. Eye edits join undo and redo and are
-saved with the spec.
+the last settled socket, and the settle that follows clears the lids against it. The tab also picks an eye model from
+the inventory and its radius (needs the catalog's eye rig): the studio rebuilds the eyes at once and draws them in the
+lit modes like the browser does (textured sclera and iris, near-black pupil, a blended glossy cornea); other modes draw
+the plain geometry. Eye edits join undo and redo and are saved with the spec.
 
 Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
 weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the

@@ -91,6 +91,21 @@ def profile_keys(img, side):
     return out
 
 
+def overlay(img, rec, ol, path):
+    out = img.copy()
+    r = max(1, int(round(max(img.shape[:2]) / 600)))
+    if ol is not None:
+        for u, v in ol[:, :2].astype(int):
+            cv2.circle(out, (int(u), int(v)), r, (0, 0, 255), -1)
+    for u, v in rec.get("landmarks") or []:
+        cv2.circle(out, (int(round(u)), int(round(v))), r, (0, 220, 0), -1)
+    for key in (rec.get("keys") or {}).values():
+        if isinstance(key, (list, tuple)) and len(key) >= 2:
+            cv2.circle(out, (int(round(key[0])), int(round(key[1]))), 4 * r, (0, 220, 255), max(1, r))
+    cv2.imwrite(path, out)
+    return path
+
+
 def views(args):
     run = args["run"]
     os.makedirs(os.path.join(run, "views"), exist_ok=True)
@@ -147,6 +162,7 @@ def views(args):
             problems += [f"{p['name']}: {c['name']}: {c['reason']}" for c in rec["checks"] if not c["pass"]]
         elif role == "front" and face is None:
             problems.append(f"{p['name']}: no face found in the front photo")
+        rec["overlay"] = overlay(img, rec, ol if sil is not None else None, os.path.join(run, "views", f"{p['name']}_overlay.png"))
         if i in required:
             failures += problems
         elif problems:

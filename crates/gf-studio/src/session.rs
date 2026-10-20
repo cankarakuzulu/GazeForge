@@ -219,6 +219,16 @@ pub struct EyeMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<f32>,
+    pub parts: Vec<EyePart>,
+    pub model: Option<String>,
+    pub key: u64,
+}
+
+pub struct EyePart {
+    pub first: usize,
+    pub count: usize,
+    pub name: String,
 }
 
 pub struct EyeBase {
@@ -231,10 +241,17 @@ pub struct EyeBase {
 }
 
 pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
-    let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut positions, mut normals, mut indices, mut uvs, mut parts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut bases = Vec::new();
     for e in eyes {
         let first = positions.len() / 3;
+        let first_triangle = indices.len() / 3;
+        if e.uvs.len() == e.vertices.len() {
+            uvs.extend(e.uvs.iter().flatten().map(|&x| x as f32));
+        } else {
+            uvs.extend(std::iter::repeat_n(0.0f32, e.vertices.len() * 2));
+        }
+        parts.extend(e.parts.iter().map(|p| EyePart { first: first_triangle + p.first_triangle, count: p.triangles, name: p.name.clone() }));
         let mut n = vec![[0.0f64; 3]; e.vertices.len()];
         for t in &e.triangles {
             let [a, b, c] = t.map(|i| e.vertices[i as usize]);
@@ -249,7 +266,7 @@ pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
         for (p, m) in e.vertices.iter().zip(n.iter_mut()) {
             let out = [p[0] - e.centre[0], p[1] - e.centre[1], p[2] - e.centre[2]];
             let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
-            let s = if m[0] * out[0] + m[1] * out[1] + m[2] * out[2] < 0.0 { -1.0 } else { 1.0 };
+            let s = if e.parts.is_empty() && m[0] * out[0] + m[1] * out[1] + m[2] * out[2] < 0.0 { -1.0 } else { 1.0 };
             *m = if l > 0.0 { m.map(|x| s * x / l) } else { out };
         }
         positions.extend(e.vertices.iter().flatten().map(|&x| x as f32));
@@ -257,7 +274,7 @@ pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
         indices.extend(e.triangles.iter().flatten().map(|&i| first as u32 + i));
         bases.push(EyeBase { side: usize::from(e.centre[0] < 0.0), centre: e.centre, gaze: e.gaze(), first, positions: e.vertices.clone(), normals: n });
     }
-    (EyeMesh { positions, normals, indices }, bases)
+    (EyeMesh { positions, normals, indices, uvs, parts, model: None, key: 0 }, bases)
 }
 
 fn invert(t: &Similarity) -> Similarity {
@@ -304,6 +321,16 @@ pub struct Session {
     pub eye_bases: Vec<EyeBase>,
     pub settled_eyes: Vec<(usize, Similarity)>,
     pub settled_eyeballs: Option<EyeballSpec>,
+    pub eye_key: String,
+    pub eye_error: Option<String>,
+    eye_generation: u64,
+}
+
+fn eye_key(eyeballs: Option<&EyeballSpec>, eyes_file: Option<&str>) -> String {
+    match eyeballs.and_then(|e| e.model.as_ref().map(|m| (e, m))) {
+        Some((e, m)) => format!("model|{}|{}|{}", e.rig.as_deref().unwrap_or_default(), m.id, m.radius_mm),
+        None => format!("file|{}", eyes_file.unwrap_or_default()),
+    }
 }
 
 fn err(e: ApiError) -> String {
@@ -379,6 +406,9 @@ impl Session {
             eye_bases,
             settled_eyes: Vec::new(),
             settled_eyeballs: None,
+            eye_key: eye_key(None, eyes_file),
+            eye_error: None,
+            eye_generation: 0,
         };
         s.settle()?;
         Ok((s, sl))
@@ -445,7 +475,37 @@ impl Session {
         Ok(())
     }
 
+    pub fn sync_eye_model(&mut self, live: Option<&EyeballSpec>) -> Result<bool, String> {
+        let key = eye_key(live, self.eyes_file.as_deref());
+        if key == self.eye_key {
+            return Ok(false);
+        }
+        let model = live.and_then(|e| e.model.as_ref()).map(|m| m.id.clone());
+        let eyes = match live.filter(|e| e.model.is_some()) {
+            Some(eb) => {
+                let store = gf_io::store::Store::open(std::path::Path::new(&self.store))?;
+                gf_io::character::model_eyes_for(&store, &self.catalog, eb)?.unwrap_or_default()
+            }
+            None => match &self.eyes_file {
+                Some(p) => gf_io::load_eyes(std::path::Path::new(p))?,
+                None => Vec::new(),
+            },
+        };
+        let (mut mesh, bases) = eye_meshes(&eyes);
+        self.eye_generation += 1;
+        mesh.key = self.eye_generation;
+        mesh.model = model;
+        self.head.eyes = (!eyes.is_empty()).then_some(mesh);
+        self.eye_bases = bases;
+        self.eye_key = key;
+        Ok(true)
+    }
+
     pub fn preview_eyes(&mut self, live: Option<&EyeballSpec>) {
+        match self.sync_eye_model(live) {
+            Ok(_) => self.eye_error = None,
+            Err(e) => self.eye_error = Some(e),
+        }
         let Some(mesh) = self.head.eyes.as_mut() else { return };
         for base in &self.eye_bases {
             let settled = self.settled_eyes.iter().find(|(s, _)| *s == base.side).map(|(_, t)| t);
@@ -588,6 +648,22 @@ mod tests {
                 assert!((0..3).map(|i| d[i] * m.normals[v * 3 + i] as f64).sum::<f64>() > 0.0);
             }
         }
+    }
+
+    #[test]
+    fn a_model_eye_mesh_keeps_its_uvs_and_offsets_each_eyes_parts() {
+        let mesh = gf_geom::eyeball::EyeballShape::default().mesh().unwrap();
+        let eyes: Vec<Eye> = [[0.03, -0.11, 1.5], [-0.03, -0.11, 1.5]]
+            .iter()
+            .map(|&c| gf_geom::lids::eye_from_mesh(c, 0.012, [0.0, -1.0, 0.0], &mesh.placed(c, [0.0, -1.0, 0.0]).unwrap()).unwrap())
+            .collect();
+        let (m, _) = eye_meshes(&eyes);
+        let per_eye = eyes[0].triangles.len();
+        assert_eq!(m.uvs.len(), m.positions.len() / 3 * 2);
+        assert_eq!(m.parts.len(), 8);
+        assert_eq!(m.parts[4].first, per_eye);
+        assert_eq!(m.parts.iter().map(|p| p.count).sum::<usize>(), per_eye * 2);
+        assert_eq!(m.parts.iter().map(|p| p.name.as_str()).take(4).collect::<Vec<_>>(), gf_geom::eyeball::PARTS);
     }
 
     #[test]

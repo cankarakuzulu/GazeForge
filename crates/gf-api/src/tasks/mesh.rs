@@ -626,29 +626,22 @@ fn delta(a: Point, b: Point) -> [f32; 3] {
 }
 
 fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Material>, String> {
-    let l = m.shape.layout()?;
-    let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
-    let [iw, ih] = crate::eyes::IRIS_SIZE;
-    let [sw, sh] = crate::eyes::SCLERA_SIZE;
-    let iris = gf_io::png::rgba(iw, ih, &gf_core::eye_texture::iris_rgba(&m.iris, iw, ih))?;
-    let sclera = gf_io::png::rgba(sw, sh, &gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, sw, sh, m.iris.seed))?;
-    let plain = |name: &str, colour: [f32; 4], texture: Option<Vec<u8>>, roughness: f32| gltf::Material {
-        name: format!("{}_{name}", m.id),
-        base_color: colour,
-        base_texture: texture,
-        metallic: 0.0,
-        roughness,
-        transmission: None,
-        ior: None,
-        blend: false,
-        double_sided: false,
-    };
-    Ok(vec![
-        plain("sclera", [1.0; 4], Some(sclera), 0.35),
-        gltf::Material { transmission: Some(1.0), ior: Some(m.cornea.ior), blend: true, ..plain("cornea", [1.0, 1.0, 1.0, 0.08], None, m.cornea.roughness) },
-        plain("iris", [1.0; 4], Some(iris), 0.55),
-        plain("pupil", [0.01, 0.01, 0.01, 1.0], None, 0.9),
-    ])
+    crate::eyes::look(m)?
+        .into_iter()
+        .map(|p| {
+            Ok(gltf::Material {
+                name: format!("{}_{}", m.id, p.part),
+                base_color: p.colour,
+                base_texture: p.texture.map(|t| gf_io::png::rgba(t.width, t.height, &t.rgba)).transpose()?,
+                metallic: 0.0,
+                roughness: p.roughness,
+                transmission: p.transmission,
+                ior: p.ior,
+                blend: p.blend,
+                double_sided: false,
+            })
+        })
+        .collect()
 }
 
 fn eye_part_mesh(eye: &lids::Eye, name: &str, joint: Option<usize>, origin: Point, vertices: &[Point]) -> gltf::PartMesh {

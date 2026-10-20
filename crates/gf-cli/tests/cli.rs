@@ -7,6 +7,7 @@ use serde_json::Value;
 
 fn fixture(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("gazeforge-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
     let dense = root.join("dense");
     let base = root.join("base");
     std::fs::create_dir_all(&dense).unwrap();
@@ -280,6 +281,22 @@ fn store_fixture(name: &str) -> (PathBuf, String, String, String) {
     let (ok, game) = gazeforge(&["store", "import-game", "--store", s.to_str().unwrap(), "--base", root.join("base").to_str().unwrap(), "--pack", &pack]);
     assert!(ok, "{game}");
     (root, pack, cat["catalog"].as_str().unwrap().to_string(), game["game_base"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn store_list_dates_items_and_lists_an_old_eye_rig_as_unusable_instead_of_failing() {
+    let (root, pack, catalog, _) = store_fixture("storelist");
+    let s = root.join("store");
+    std::fs::create_dir_all(s.join("eyerigs")).unwrap();
+    let old = gf_core::hash::canonical_bytes(&serde_json::json!({"format": "gazeforge.eyerig/1", "catalog": catalog}));
+    std::fs::write(s.join("eyerigs").join(format!("{}.json", gf_core::hash::sha256_hex(&old))), &old).unwrap();
+    let (ok, listed) = gazeforge(&["call", "store.list", "--input", &format!(r#"{{"store": {:?}}}"#, s.to_str().unwrap())]);
+    assert!(ok, "{listed}");
+    let r = &listed["result"];
+    assert_eq!(r["packs"][0]["pack"], pack.as_str());
+    assert!(r["packs"][0]["imported"].as_str().is_some_and(|t| t.len() == 24 && t.ends_with('Z')), "{r}");
+    assert_eq!(r["eyerigs"][0]["usable"], Value::Bool(false));
+    assert_eq!(r["eyerigs"][0]["catalog"], catalog.as_str());
 }
 
 #[test]

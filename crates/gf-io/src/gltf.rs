@@ -650,22 +650,53 @@ pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
     let bin = bytes.get(28 + json_len..28 + json_len + bin_len).ok_or("the binary chunk is truncated")?;
     let mut meshes = Vec::new();
     for mesh in doc["meshes"].as_array().ok_or("the glb has no meshes")? {
-        let primitive = &mesh["primitives"][0];
-        let attribute = |name: &str| primitive["attributes"][name].as_u64();
-        let positions = read_vec3(&doc, bin, attribute("POSITION").ok_or("a primitive has no POSITION")?)?;
-        let normals = match attribute("NORMAL") {
-            Some(i) => read_vec3(&doc, bin, i)?,
-            None => Vec::new(),
-        };
-        let indices = read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?;
-        let mut morphs = Vec::new();
-        for target in primitive["targets"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
-            let p = read_vec3(&doc, bin, target["POSITION"].as_u64().ok_or("a morph target has no POSITION")?)?;
-            let q = match target["NORMAL"].as_u64() {
-                Some(i) => read_vec3(&doc, bin, i)?,
-                None => vec![[0.0; 3]; p.len()],
+        let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+        let mut morphs: Vec<MorphData> = Vec::new();
+        let mut groups: Vec<(&Value, u32)> = Vec::new();
+        for primitive in mesh["primitives"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let attributes = &primitive["attributes"];
+            let offset = match groups.iter().find(|(a, _)| *a == attributes) {
+                Some((_, o)) => *o,
+                None => {
+                    let offset = positions.len() as u32;
+                    let attribute = |name: &str| attributes[name].as_u64();
+                    let p = read_vec3(&doc, bin, attribute("POSITION").ok_or("a primitive has no POSITION")?)?;
+                    let n = match attribute("NORMAL") {
+                        Some(i) => read_vec3(&doc, bin, i)?,
+                        None => Vec::new(),
+                    };
+                    if !n.is_empty() || !normals.is_empty() {
+                        normals.resize(positions.len(), [0.0; 3]);
+                        normals.extend(if n.is_empty() { vec![[0.0; 3]; p.len()] } else { n });
+                    }
+                    let targets = primitive["targets"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+                    if morphs.len() < targets.len() {
+                        morphs.resize_with(targets.len(), || MorphData { positions: vec![[0.0; 3]; positions.len()], normals: vec![[0.0; 3]; positions.len()] });
+                    }
+                    for (k, m) in morphs.iter_mut().enumerate() {
+                        let (dp, dn) = match targets.get(k) {
+                            Some(target) => {
+                                let dp = read_vec3(&doc, bin, target["POSITION"].as_u64().ok_or("a morph target has no POSITION")?)?;
+                                let dn = match target["NORMAL"].as_u64() {
+                                    Some(i) => read_vec3(&doc, bin, i)?,
+                                    None => vec![[0.0; 3]; dp.len()],
+                                };
+                                (dp, dn)
+                            }
+                            None => (vec![[0.0; 3]; p.len()], vec![[0.0; 3]; p.len()]),
+                        };
+                        m.positions.extend(dp);
+                        m.normals.extend(dn);
+                    }
+                    positions.extend(p);
+                    groups.push((attributes, offset));
+                    offset
+                }
             };
-            morphs.push(MorphData { positions: p, normals: q });
+            indices.extend(read_indices(&doc, bin, primitive["indices"].as_u64().ok_or("a primitive has no indices")?)?.into_iter().map(|i| i + offset));
+        }
+        if positions.is_empty() {
+            return Err(format!("mesh {} has no primitives", mesh["name"].as_str().unwrap_or("")));
         }
         let morph_names = mesh["extras"]["targetNames"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
         meshes.push(ReadMesh { name: mesh["name"].as_str().unwrap_or("").to_string(), positions, normals, indices, morph_names, morphs });

@@ -17,7 +17,7 @@ import sys
 VERSION = "1.60.0"
 ICONS = [
     "box", "camera", "chart-scatter", "circle-help", "columns-2", "crosshair", "eye", "file-plus", "flip-horizontal-2",
-    "focus", "folder-open", "gauge", "grid-3x3", "house", "images", "keyboard", "layout-grid", "lightbulb", "moon",
+    "focus", "folder-open", "gauge", "grid-3x3", "house", "images", "keyboard", "layout-grid", "lightbulb", "list-checks", "moon",
     "redo-2", "rotate-3d", "rotate-ccw", "ruler", "save", "save-all", "scan-eye", "scan-search", "scissors-line-dashed",
     "slice", "square", "sun", "sun-moon", "triangle-alert", "undo-2", "vector-square", "wand-sparkles", "x",
 ]
