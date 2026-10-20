@@ -86,7 +86,10 @@ pub const GRID_MM: f32 = 4.0;
 
 pub fn stamp_images(store: &Store, skin: &SkinSpec) -> Result<gf_core::skin_authored::Images, String> {
     let mut images = gf_core::skin_authored::Images::new();
-    for stamp in skin.layers.iter().flat_map(|l| &l.stamps) {
+    for stamp in skin.layers.iter().flat_map(|l| &l.marks).filter_map(|m| match m {
+        gf_core::skin_authored::Mark::Stamp(s) => Some(s),
+        gf_core::skin_authored::Mark::Stroke(_) => None,
+    }) {
         let key = (stamp.image.clone(), stamp.channel.clone());
         if images.contains_key(&key) {
             continue;
@@ -162,7 +165,7 @@ pub fn layers(_: &Ctx, _: &Value) -> Result<Value, ApiError> {
             let rows: Vec<Value> = styles
                 .iter()
                 .filter_map(|style| {
-                    let probe = sl::SkinLayer { name: "x".into(), kind: kind.to_string(), style: style.to_string(), live: None, amount: 0.0, variant: 0.0, seed: 0, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() };
+                    let probe = sl::SkinLayer { name: "x".into(), kind: kind.to_string(), style: style.to_string(), live: None, amount: 0.0, variant: 0.0, seed: 0, colour: None, procedural: None, marks: Vec::new() };
                     let r = probe.response()?;
                     Some(json!({"style": style, "colour": r.colour, "opacity": r.opacity, "roughness": r.roughness, "spread": r.spread,
                                 "variant": r.variant.map(|(name, colour, roughness)| json!({"name": name, "colour": colour, "roughness": roughness}))}))
@@ -173,10 +176,10 @@ pub fn layers(_: &Ctx, _: &Value) -> Result<Value, ApiError> {
         .collect();
     let presets: Vec<Value> = gf_core::skin_authored::presets().into_iter().map(|(name, layers)| json!({"name": name, "layers": layers})).collect();
     Ok(json!({"extension": sl::EXTENSION, "kinds": kinds, "presets": presets, "max_live": sl::MAX_LIVE, "default_size": sl::DEFAULT_SIZE,
-              "layer": "{name: [a-z][a-z0-9_]*, kind, style, live: true (default) | false, amount: 0..1 (live: the default; baked: how much is painted in), variant: 0..1 (the second state), seed, colour: optional linear rgb, procedural: true (default) | false, stamps: [...], strokes: [...]}",
+              "layer": "{name: [a-z][a-z0-9_]*, kind, style, live: true (default) | false, amount: 0..1 (live: the default; baked: how much is painted in), variant: 0..1 (the second state), seed, colour: optional linear rgb, procedural: true (default) | false, marks: [{stroke: {...}} | {stamp: {...}}, ...] in the order they apply}",
               "stroke": "{mode: add (default) | erase, radius_mm, strength: 0..1 (default 1), hardness: 0..1 (default 0.5), points: [[x, y, z] millimetres on the neutral base]}",
               "stamp": "{image: a reference from skin.stamp, channel: alpha (default) | luminance, at: [x, y, z] mm on the neutral base, normal: [x, y, z], angle_deg, size_mm (the image's width), strength, mode: add | erase}",
-              "mask_order": "procedural pattern, then stamps, then strokes, each in order; add takes the larger value, erase multiplies by one minus its value"}))
+              "mask_order": "the procedural pattern, then the marks in their order; add takes the larger value, erase multiplies by one minus its value"}))
 }
 
 pub fn landmarks_input() -> Value {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::hash;
-use crate::skin_authored::{self, Grid, Images, Stamp, Stroke};
+use crate::skin_authored::{self, Grid, Images, Mark};
 use crate::skin_map::{NONE, TexelMap};
 use crate::skin_regions::{self, Regions};
 use crate::skin_texture::{SkinLook, SkinTextures, cells, fbm3, smoothstep, to_linear, to_srgb};
@@ -52,9 +52,7 @@ pub struct SkinLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procedural: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stamps: Vec<Stamp>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub strokes: Vec<Stroke>,
+    pub marks: Vec<Mark>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -678,9 +676,9 @@ mod tests {
             landmarks: hash::reference(&"b".repeat(64)),
             size: 1024,
             layers: vec![
-                SkinLayer { name: "blood".into(), kind: "blood".into(), style: "drips".into(), live: None, amount: 0.25, variant: 0.0, seed: 3, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
-                SkinLayer { name: "dust".into(), kind: "grime".into(), style: "dust".into(), live: Some(false), amount: 0.5, variant: 0.0, seed: 1, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
-                SkinLayer { name: "mud".into(), kind: "grime".into(), style: "mud".into(), live: Some(true), amount: 0.0, variant: 0.3, seed: 2, colour: None, procedural: None, stamps: Vec::new(), strokes: Vec::new() },
+                SkinLayer { name: "blood".into(), kind: "blood".into(), style: "drips".into(), live: None, amount: 0.25, variant: 0.0, seed: 3, colour: None, procedural: None, marks: Vec::new() },
+                SkinLayer { name: "dust".into(), kind: "grime".into(), style: "dust".into(), live: Some(false), amount: 0.5, variant: 0.0, seed: 1, colour: None, procedural: None, marks: Vec::new() },
+                SkinLayer { name: "mud".into(), kind: "grime".into(), style: "mud".into(), live: Some(true), amount: 0.0, variant: 0.3, seed: 2, colour: None, procedural: None, marks: Vec::new() },
             ],
         }
     }
@@ -692,7 +690,7 @@ mod tests {
         bad.layers[0].name = "Blood-1".into();
         bad.layers[1].style = "glitter".into();
         bad.layers[2].amount = 1.5;
-        bad.layers.push(SkinLayer { name: "mud_wet".into(), kind: "paint".into(), style: "chin".into(), live: None, amount: 0.1, variant: 0.5, seed: 0, colour: Some([2.0, 0.0, 0.0]), procedural: None, stamps: Vec::new(), strokes: Vec::new() });
+        bad.layers.push(SkinLayer { name: "mud_wet".into(), kind: "paint".into(), style: "chin".into(), live: None, amount: 0.1, variant: 0.5, seed: 0, colour: Some([2.0, 0.0, 0.0]), procedural: None, marks: Vec::new() });
         bad.size = 100;
         let p = bad.problems().join(" | ");
         for needle in ["lowercase identifier", "glitter", "amount 1.5", "mud_wet", "has no variant state", "colour must be", "skin.size"] {

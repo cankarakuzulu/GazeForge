@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::mpsc::Receiver;
 
 use gf_api::skin_work::{Dirty, SkinWork};
-use gf_core::skin_authored::{Stamp, Stroke};
+use gf_core::skin_authored::{Mark, Stamp, Stroke};
 use gf_core::skin_layers::{SkinLayer, SkinSpec};
 use gf_io::store::Store;
 use serde_json::{Value, json};
@@ -122,8 +122,7 @@ pub fn new_layer(spec: &SkinSpec, kind: &str, style: &str) -> SkinLayer {
         seed: 1 + spec.layers.len() as u32,
         colour: None,
         procedural: None,
-        stamps: Vec::new(),
-        strokes: Vec::new(),
+        marks: Vec::new(),
     }
 }
 
@@ -157,6 +156,7 @@ impl World {
         }
         let landmarks = env["result"]["landmarks"].as_str().unwrap_or_default().to_string();
         self.skin.spec = Some(SkinSpec { look, landmarks, size: gf_core::skin_layers::DEFAULT_SIZE, layers: Vec::new() });
+        self.skin.work = None;
         self.skin.done.clear();
         self.skin.undone.clear();
         self.skin_write_character();
@@ -237,24 +237,23 @@ impl World {
         if *spec == before {
             return;
         }
-        self.skin.done.push(before);
-        if self.skin.done.len() > HISTORY_LIMIT {
-            self.skin.done.remove(0);
-        }
-        self.skin.undone.clear();
         let n = spec.layers.len();
+        self.skin_push_history(before);
         self.skin.selected = self.skin.selected.min(n.saturating_sub(1));
         self.skin_write_character();
         self.skin_rebuild();
     }
 
+    fn skin_push_history(&mut self, spec: SkinSpec) {
+        self.skin.done.push(spec);
+        let over = self.skin.done.len().saturating_sub(HISTORY_LIMIT);
+        self.skin.done.drain(..over);
+        self.skin.undone.clear();
+    }
+
     pub fn skin_checkpoint(&mut self) {
         let Some(spec) = self.skin.spec.clone() else { return };
-        self.skin.done.push(spec);
-        if self.skin.done.len() > HISTORY_LIMIT {
-            self.skin.done.remove(0);
-        }
-        self.skin.undone.clear();
+        self.skin_push_history(spec);
     }
 
     pub fn skin_tweak(&mut self, f: impl FnOnce(&mut SkinSpec)) {
@@ -282,7 +281,7 @@ impl World {
     pub fn skin_pick(&self, r: &Rect, px: f64, py: f64) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
         let s = self.session.as_ref()?;
         let work = self.skin.work.as_ref()?;
-        let hit = render::pick_triangle(&self.state, &s.head, r, px, py)?;
+        let hit = render::pick_triangle(&self.state, &s.head, r, px, py, Some(0))?;
         let (mm, n) = work.neutral_point(hit.triangle, hit.bary)?;
         Some((mm, n, hit.point))
     }
@@ -298,15 +297,19 @@ impl World {
         }
         let Some((mm, _, _)) = self.skin_pick(r, px, py) else { return false };
         let b = self.skin.brush.clone();
-        let spec = self.skin.spec.as_mut().expect("spec");
-        self.skin.done.push(spec.clone());
-        self.skin.undone.clear();
-        spec.layers[index].strokes.push(Stroke { mode: if b.erase { "erase" } else { "add" }.into(), radius_mm: b.radius_mm, strength: b.strength, hardness: b.hardness, points: vec![mm] });
+        let before = self.skin.spec.clone().expect("ready");
+        let spec = self.skin.spec.as_mut().expect("ready");
+        spec.layers[index].marks.push(Mark::Stroke(Stroke { mode: if b.erase { "erase" } else { "add" }.into(), radius_mm: b.radius_mm, strength: b.strength, hardness: b.hardness, points: vec![mm] }));
         gf_core::skin_authored::canonical(&mut spec.layers[index]);
-        let mm = *spec.layers[index].strokes.last().and_then(|s| s.points.last()).expect("pushed above");
+        let Some(Mark::Stroke(s)) = spec.layers[index].marks.last() else { unreachable!("a stroke was pushed above") };
+        let mm = s.points[0];
+        if !self.skin_repaint_dab(index, mm, mm) {
+            self.skin.spec = Some(before);
+            return false;
+        }
+        self.skin_push_history(before);
         self.skin.painting = Some(index);
         self.skin.last_screen = Some((px, py));
-        self.skin_repaint_dab(index, mm, mm);
         true
     }
 
@@ -325,7 +328,7 @@ impl World {
         let Some(index) = self.skin.painting else { return };
         let Some((mm, _, _)) = self.skin_pick(r, px, py) else { return };
         let Some(layer) = self.skin.spec.as_mut().and_then(|s| s.layers.get_mut(index)) else { return };
-        let Some(stroke) = layer.strokes.last_mut() else { return };
+        let Some(Mark::Stroke(stroke)) = layer.marks.last_mut() else { return };
         let last = *stroke.points.last().expect("a stroke has a point");
         let step = (stroke.radius_mm * 0.25).max(0.05);
         if (0..3).map(|k| (mm[k] - last[k]).powi(2)).sum::<f64>().sqrt() < step {
@@ -333,8 +336,13 @@ impl World {
         }
         stroke.points.push(mm);
         gf_core::skin_authored::canonical(layer);
-        let mm = *layer.strokes.last().and_then(|s| s.points.last()).expect("pushed above");
-        self.skin_repaint_dab(index, last, mm);
+        let Some(Mark::Stroke(stroke)) = layer.marks.last() else { return };
+        let mm = *stroke.points.last().expect("pushed above");
+        if !self.skin_repaint_dab(index, last, mm)
+            && let Some(Mark::Stroke(stroke)) = self.skin.spec.as_mut().and_then(|s| s.layers.get_mut(index)).and_then(|l| l.marks.last_mut())
+        {
+            stroke.points.pop();
+        }
     }
 
     pub fn skin_paint_end(&mut self) {
@@ -348,19 +356,32 @@ impl World {
         self.skin.painting.is_some()
     }
 
-    fn skin_repaint_dab(&mut self, index: usize, a: [f64; 3], b: [f64; 3]) {
+    fn skin_repaint_dab(&mut self, index: usize, a: [f64; 3], b: [f64; 3]) -> bool {
         let r = self.skin.brush.radius_mm + 0.5;
         let lo = [0, 1, 2].map(|k| (a[k].min(b[k]) - r) as f32);
         let hi = [0, 1, 2].map(|k| (a[k].max(b[k]) + r) as f32);
-        let (Some(work), Some(spec)) = (self.skin.work.as_mut(), self.skin.spec.as_ref()) else { return };
-        match work.repaint(spec, index, (lo, hi)) {
-            Ok(d) => self.skin.mark(d),
-            Err(e) => self.skin.status = trf("skin.failed", &[("error", &e)]),
+        self.skin_repaint(index, (lo, hi))
+    }
+
+    fn skin_repaint(&mut self, index: usize, region: ([f32; 3], [f32; 3])) -> bool {
+        let (Some(work), Some(spec)) = (self.skin.work.as_mut(), self.skin.spec.as_ref()) else { return false };
+        match work.repaint(spec, index, region) {
+            Ok(d) => {
+                self.skin.mark(d);
+                true
+            }
+            Err(e) => {
+                self.skin.status = trf("skin.failed", &[("error", &e)]);
+                false
+            }
         }
     }
 
     pub fn skin_load_stamp(&mut self) -> Result<(), String> {
         let (store, _) = self.skin_store_input().ok_or_else(|| tr("studio.load_first").to_string())?;
+        if !self.skin.ready() {
+            return Err(tr("skin.updating").to_string());
+        }
         let env = gf_api::call(&gf_api::Ctx::from_env(), "skin.stamp", &json!({"store": store, "image": self.skin.stamp_path}));
         if env["ok"] != true {
             return Err(env["error"]["message"].as_str().unwrap_or("skin.stamp failed").to_string());
@@ -388,6 +409,12 @@ impl World {
             return false;
         }
         let Some((mm, n, _)) = self.skin_pick(r, px, py) else { return false };
+        let Some((store, _)) = self.skin_store_input() else { return false };
+        let loaded = Store::open(Path::new(&store)).and_then(|st| self.skin.work.as_mut().map_or(Err("no skin".into()), |w| w.load_stamp(&st, &image, "alpha")));
+        if let Err(e) = loaded {
+            self.skin.status = trf("skin.failed", &[("error", &e)]);
+            return false;
+        }
         let stamp = Stamp {
             image,
             channel: "alpha".into(),
@@ -398,19 +425,20 @@ impl World {
             strength: self.skin.stamp_strength,
             mode: if self.skin.brush.erase { "erase" } else { "add" }.into(),
         };
-        let reach = stamp.size_mm * 0.75 + 0.5;
-        let spec = self.skin.spec.as_mut().expect("spec");
-        self.skin.done.push(spec.clone());
-        self.skin.undone.clear();
-        spec.layers[index].stamps.push(stamp);
+        let before = self.skin.spec.clone().expect("ready");
+        let spec = self.skin.spec.as_mut().expect("ready");
+        spec.layers[index].marks.push(Mark::Stamp(stamp));
         gf_core::skin_authored::canonical(&mut spec.layers[index]);
-        let lo = mm.map(|x| (x - reach) as f32);
-        let hi = mm.map(|x| (x + reach) as f32);
-        let (Some(work), Some(spec)) = (self.skin.work.as_mut(), self.skin.spec.as_ref()) else { return false };
-        match work.repaint(spec, index, (lo, hi)) {
-            Ok(d) => self.skin.mark(d),
-            Err(e) => self.skin.status = trf("skin.failed", &[("error", &e)]),
+        let Some(Mark::Stamp(placed)) = spec.layers[index].marks.last() else { unreachable!("a stamp was pushed above") };
+        let Some(region) = self.skin.work.as_ref().and_then(|w| w.stamp_box(placed)) else {
+            self.skin.spec = Some(before);
+            return false;
+        };
+        if !self.skin_repaint(index, region) {
+            self.skin.spec = Some(before);
+            return false;
         }
+        self.skin_push_history(before);
         self.skin_write_character();
         true
     }

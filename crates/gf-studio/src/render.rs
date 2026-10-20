@@ -454,7 +454,12 @@ impl Renderer {
             skin.dirty = None;
             return;
         }
-        let Some(work) = skin.work.as_ref() else { return };
+        let Some(work) = skin.work.as_ref() else {
+            if !skin.busy() {
+                self.skin = None;
+            }
+            return;
+        };
         let Some(mut d) = skin.dirty.take() else { return };
         let size = work.size;
         if self.skin.as_ref().is_none_or(|t| t.size != size) {
@@ -1066,17 +1071,17 @@ pub struct Hit {
 }
 
 pub fn pick(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64) -> Option<(f64, V3)> {
-    pick_triangle(st, head, rect, px, py).map(|h| (h.distance, h.point))
+    pick_triangle(st, head, rect, px, py, None).map(|h| (h.distance, h.point))
 }
 
-pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64) -> Option<Hit> {
+pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64, lod: Option<usize>) -> Option<Hit> {
     let nx = (px / rect.w as f64) * 2.0 - 1.0;
     let ny = 1.0 - (py / rect.h as f64) * 2.0;
     let (o, d) = st.cams[rect.cam].ray(nx, ny, rect.w as f64 / rect.h as f64);
     let planes = viewer::planes(&st.opts, &st.bounds);
     let (lo, hi) = viewer::box_world(&st.opts, &st.bounds);
     let cut = |p: V3| planes.iter().any(|q| dot(q.n, p) > q.d) || (st.opts.clip_box.on && (0..3).all(|k| p[k] > lo[k] && p[k] < hi[k]));
-    let lod = &head.lods[st.vp[rect.slot].lod.min(head.lods.len() - 1)];
+    let lod = &head.lods[lod.unwrap_or(st.vp[rect.slot].lod).min(head.lods.len() - 1)];
     let pos = &head.positions;
     let g = |i: u32| [pos[i as usize * 3] as f64, pos[i as usize * 3 + 1] as f64, pos[i as usize * 3 + 2] as f64];
     let mut best: Option<Hit> = None;

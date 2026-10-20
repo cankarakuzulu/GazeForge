@@ -34,6 +34,7 @@ pub struct UiState {
     texture_generation: u64,
     drag: Option<(usize, bool, f32)>,
     skin_rect: Option<viewer::Rect>,
+    pub skin_colour_layer: Option<usize>,
     pub render_ms: f64,
     pub frame_ms: f64,
     pub show_help: bool,
@@ -74,6 +75,7 @@ impl UiState {
             texture_generation: 0,
             drag: None,
             skin_rect: None,
+            skin_colour_layer: None,
             render_ms: 0.0,
             frame_ms: 0.0,
             show_help: false,
@@ -521,7 +523,7 @@ impl Studio<'_> {
         };
         let skin_button = !(secondary || middle || shift);
         if tool == crate::skin::Tool::Brush && skin_button {
-            if (resp.drag_started() || resp.clicked())
+            if (resp.drag_started() || (resp.clicked() && !resp.double_clicked()))
                 && let Some(p) = resp.interact_pointer_pos()
             {
                 let r = at(p);
@@ -534,14 +536,16 @@ impl Studio<'_> {
                 let (px, py) = local(p, &r);
                 self.world.skin_paint_to(&r, px, py);
             }
-            if resp.drag_stopped() || resp.clicked() || (self.s.skin_rect.is_some() && !self.world.skin_painting()) {
-                self.world.skin_paint_end();
-                self.s.skin_rect = None;
-            }
+        }
+        let primary_down = ui.input(|i| i.pointer.primary_down());
+        if (self.s.skin_rect.is_some() || self.world.skin_painting()) && (resp.drag_stopped() || resp.clicked() || !primary_down || !self.world.skin_painting()) {
+            self.world.skin_paint_end();
+            self.s.skin_rect = None;
         }
         if tool == crate::skin::Tool::Stamp
             && skin_button
             && resp.clicked()
+            && !resp.double_clicked()
             && let Some(p) = resp.interact_pointer_pos()
         {
             let r = at(p);
@@ -586,6 +590,7 @@ impl Studio<'_> {
             }
         }
         if resp.double_clicked()
+            && tool == crate::skin::Tool::None
             && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), &self.world.session)
         {
             let r = at(p);

@@ -66,7 +66,7 @@ fn layer_key(l: &SkinLayer) -> String {
 }
 
 fn authored_key(l: &SkinLayer) -> String {
-    let v = serde_json::json!({"stamps": l.stamps, "strokes": l.strokes});
+    let v = serde_json::json!({"marks": l.marks});
     gf_core::hash::sha256_hex(&serde_json::to_vec(&v).unwrap_or_default())
 }
 
@@ -151,12 +151,18 @@ impl SkinWork {
         if cache.key != layer_key(layer) {
             return Err(format!("layer {index} changed since the last sync"));
         }
-        cache.authored = authored_key(layer);
         let touched = sa::region_texels(&self.grid, &self.texels, region);
+        let backup: Vec<f32> = touched.iter().map(|&k| cache.values[k as usize]).collect();
         for &k in &touched {
             cache.values[k as usize] = cache.procedural[k as usize];
         }
-        sa::apply(&mut cache.values, &self.texels, &self.grid, layer, &self.images, Some(region))?;
+        if let Err(e) = sa::apply(&mut cache.values, &self.texels, &self.grid, layer, &self.images, Some(region)) {
+            for (&k, v) in touched.iter().zip(backup) {
+                cache.values[k as usize] = v;
+            }
+            return Err(e);
+        }
+        cache.authored = authored_key(layer);
         if touched.is_empty() {
             return Ok(None);
         }
@@ -232,6 +238,10 @@ impl SkinWork {
         let nn = [0, 1, 2].map(|k| bary[0] * na[k] + bary[1] * nb[k] + bary[2] * nc[k]);
         let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt().max(1e-12);
         Some((mm, nn.map(|x| x / l)))
+    }
+
+    pub fn stamp_box(&self, stamp: &gf_core::skin_authored::Stamp) -> Option<([f32; 3], [f32; 3])> {
+        self.images.get(&(stamp.image.clone(), stamp.channel.clone())).map(|img| sa::stamp_box(stamp, img))
     }
 
     pub fn load_stamp(&mut self, store: &Store, image: &str, channel: &str) -> Result<(), String> {

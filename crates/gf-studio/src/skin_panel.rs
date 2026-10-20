@@ -141,6 +141,7 @@ impl Studio<'_> {
         let mut live = l.is_live();
         let mut procedural = l.is_procedural();
         let mut started = false;
+        let mut dragging = false;
         ui.horizontal(|ui| {
             ui.checkbox(&mut live, tr("skin.live")).on_hover_text(tr("skin.live_title"));
             ui.checkbox(&mut procedural, tr("skin.procedural")).on_hover_text(tr("skin.procedural_title"));
@@ -153,31 +154,38 @@ impl Studio<'_> {
         }
         let amount = ui.add(egui::Slider::new(&mut l.amount, 0.0..=1.0).text(tr("skin.amount")).fixed_decimals(2));
         started |= amount.drag_started();
+        dragging |= amount.dragged();
         if let Some((state, _, _)) = response.and_then(|r| r.variant) {
             let v = ui.add(egui::Slider::new(&mut l.variant, 0.0..=1.0).text(tr(&format!("skin.variant.{state}"))).fixed_decimals(2));
             started |= v.drag_started();
+            dragging |= v.dragged();
         }
+        let mut colour_changed = false;
         ui.horizontal(|ui| {
             let mut c = l.colour.unwrap_or_else(|| response.map_or([0.5; 3], |r| r.colour.map(|x| x as f64))).map(|x| x as f32);
             ui.label(tr("skin.colour"));
             if egui::color_picker::color_edit_button_rgb(ui, &mut c).changed() {
                 l.colour = Some(c.map(|x| x as f64));
+                colour_changed = true;
             }
             if l.colour.is_some() && ui.small_button(tr("skin.colour_reset")).clicked() {
                 l.colour = None;
             }
             ui.label(tr("skin.seed"));
-            ui.add(egui::DragValue::new(&mut l.seed).range(0..=999_999));
+            let seed = ui.add(egui::DragValue::new(&mut l.seed).range(0..=999_999));
+            started |= seed.drag_started();
+            dragging |= seed.dragged();
         });
-        ui.label(egui::RichText::new(trf("skin.authored", &[("strokes", &l.strokes.len().to_string()), ("stamps", &l.stamps.len().to_string())])).weak());
+        let (strokes, stamps) = (gf_core::skin_authored::strokes(&l), gf_core::skin_authored::stamps(&l));
+        ui.label(egui::RichText::new(trf("skin.authored", &[("strokes", &strokes.to_string()), ("stamps", &stamps.to_string())])).weak());
         let mut remove = false;
         let mut moved: Option<isize> = None;
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!l.strokes.is_empty(), egui::Button::new(tr("skin.clear_strokes"))).clicked() {
-                l.strokes.clear();
+            if ui.add_enabled(strokes > 0, egui::Button::new(tr("skin.clear_strokes"))).clicked() {
+                l.marks.retain(|m| !matches!(m, gf_core::skin_authored::Mark::Stroke(_)));
             }
-            if ui.add_enabled(!l.stamps.is_empty(), egui::Button::new(tr("skin.clear_stamps"))).clicked() {
-                l.stamps.clear();
+            if ui.add_enabled(stamps > 0, egui::Button::new(tr("skin.clear_stamps"))).clicked() {
+                l.marks.retain(|m| !matches!(m, gf_core::skin_authored::Mark::Stamp(_)));
             }
             if ui.small_button(tr("skin.up")).clicked() {
                 moved = Some(-1);
@@ -205,18 +213,17 @@ impl Studio<'_> {
             return;
         }
         if l == layer {
+            if !colour_changed {
+                self.s.skin_colour_layer = None;
+            }
             return;
         }
-        let only_values = l.strokes == layer.strokes && l.stamps == layer.stamps && l.kind == layer.kind && l.style == layer.style && l.seed == layer.seed && l.procedural == layer.procedural;
-        if started || !only_values || amount.drag_stopped() {
+        let colour_run = colour_changed && self.s.skin_colour_layer == Some(i);
+        if started || (!dragging && !colour_run) {
             self.world.skin_checkpoint();
         }
-        let dragging = amount.dragged();
-        if dragging || only_values {
-            self.world.skin_tweak(|s| s.layers[i] = l);
-        } else {
-            self.world.skin_edit(|s| s.layers[i] = l);
-        }
+        self.s.skin_colour_layer = if colour_changed { Some(i) } else { None };
+        self.world.skin_tweak(|s| s.layers[i] = l);
     }
 
     fn skin_tools_ui(&mut self, ui: &mut egui::Ui) {

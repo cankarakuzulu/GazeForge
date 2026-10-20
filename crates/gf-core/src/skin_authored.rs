@@ -58,6 +58,13 @@ pub struct Stamp {
     pub mode: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum Mark {
+    Stroke(Stroke),
+    Stamp(Stamp),
+}
+
 pub struct Grey {
     pub width: usize,
     pub height: usize,
@@ -98,35 +105,38 @@ fn finite3(p: &[f64; 3]) -> bool {
 pub fn problems(layer: &SkinLayer, at: &str) -> Vec<String> {
     let mut out = Vec::new();
     let unit = |x: f64| x.is_finite() && (0.0..=1.0).contains(&x);
-    for (i, s) in layer.strokes.iter().enumerate() {
-        let at = format!("{at}.strokes[{i}]");
-        if !MODES.contains(&s.mode.as_str()) {
-            out.push(format!("{at}: mode {:?} is not add or erase", s.mode));
-        }
-        if !(s.radius_mm.is_finite() && (RADIUS_MM[0]..=RADIUS_MM[1]).contains(&s.radius_mm)) {
-            out.push(format!("{at}: radius_mm {} is outside [{}, {}]", s.radius_mm, RADIUS_MM[0], RADIUS_MM[1]));
-        }
-        if !unit(s.strength) || !unit(s.hardness) {
-            out.push(format!("{at}: strength and hardness must be in [0, 1]"));
-        }
-        if s.points.is_empty() || s.points.len() > MAX_POINTS || !s.points.iter().all(finite3) {
-            out.push(format!("{at}: points must be 1 to {MAX_POINTS} finite [x, y, z] in millimetres"));
-        }
-    }
-    for (i, s) in layer.stamps.iter().enumerate() {
-        let at = format!("{at}.stamps[{i}]");
-        if let Err(e) = hash::parse_reference(&s.image) {
-            out.push(format!("{at}.image: {e}"));
-        }
-        if !CHANNELS.contains(&s.channel.as_str()) || !MODES.contains(&s.mode.as_str()) {
-            out.push(format!("{at}: channel must be alpha or luminance and mode add or erase"));
-        }
-        if !(s.size_mm.is_finite() && (STAMP_MM[0]..=STAMP_MM[1]).contains(&s.size_mm)) {
-            out.push(format!("{at}: size_mm {} is outside [{}, {}]", s.size_mm, STAMP_MM[0], STAMP_MM[1]));
-        }
-        let n2: f64 = s.normal.iter().map(|x| x * x).sum();
-        if !finite3(&s.at) || !finite3(&s.normal) || n2 < 1e-12 || !s.angle_deg.is_finite() || !unit(s.strength) {
-            out.push(format!("{at}: at, normal (not zero), angle_deg and strength (in [0, 1]) must be finite"));
+    for (i, m) in layer.marks.iter().enumerate() {
+        let at = format!("{at}.marks[{i}]");
+        match m {
+            Mark::Stroke(s) => {
+                if !MODES.contains(&s.mode.as_str()) {
+                    out.push(format!("{at}: mode {:?} is not add or erase", s.mode));
+                }
+                if !(s.radius_mm.is_finite() && (RADIUS_MM[0]..=RADIUS_MM[1]).contains(&s.radius_mm)) {
+                    out.push(format!("{at}: radius_mm {} is outside [{}, {}]", s.radius_mm, RADIUS_MM[0], RADIUS_MM[1]));
+                }
+                if !unit(s.strength) || !unit(s.hardness) {
+                    out.push(format!("{at}: strength and hardness must be in [0, 1]"));
+                }
+                if s.points.is_empty() || s.points.len() > MAX_POINTS || !s.points.iter().all(finite3) {
+                    out.push(format!("{at}: points must be 1 to {MAX_POINTS} finite [x, y, z] in millimetres"));
+                }
+            }
+            Mark::Stamp(s) => {
+                if let Err(e) = hash::parse_reference(&s.image) {
+                    out.push(format!("{at}.image: {e}"));
+                }
+                if !CHANNELS.contains(&s.channel.as_str()) || !MODES.contains(&s.mode.as_str()) {
+                    out.push(format!("{at}: channel must be alpha or luminance and mode add or erase"));
+                }
+                if !(s.size_mm.is_finite() && (STAMP_MM[0]..=STAMP_MM[1]).contains(&s.size_mm)) {
+                    out.push(format!("{at}: size_mm {} is outside [{}, {}]", s.size_mm, STAMP_MM[0], STAMP_MM[1]));
+                }
+                let n2: f64 = s.normal.iter().map(|x| x * x).sum();
+                if !finite3(&s.at) || !finite3(&s.normal) || n2 < 1e-12 || !s.angle_deg.is_finite() || !unit(s.strength) {
+                    out.push(format!("{at}: at, normal (not zero), angle_deg and strength (in [0, 1]) must be finite"));
+                }
+            }
         }
     }
     out
@@ -137,19 +147,31 @@ pub fn canonical(layer: &mut SkinLayer) {
         let v = (x / q).round() * q;
         if v == 0.0 { 0.0 } else { v }
     };
-    for s in &mut layer.strokes {
-        s.radius_mm = r(s.radius_mm, 1e-3);
-        s.strength = r(s.strength, 1e-4);
-        s.hardness = r(s.hardness, 1e-4);
-        s.points.iter_mut().for_each(|p| *p = p.map(|x| r(x, 1e-3)));
+    for m in &mut layer.marks {
+        match m {
+            Mark::Stroke(s) => {
+                s.radius_mm = r(s.radius_mm, 1e-3);
+                s.strength = r(s.strength, 1e-4);
+                s.hardness = r(s.hardness, 1e-4);
+                s.points.iter_mut().for_each(|p| *p = p.map(|x| r(x, 1e-3)));
+            }
+            Mark::Stamp(s) => {
+                s.at = s.at.map(|x| r(x, 1e-3));
+                s.normal = s.normal.map(|x| r(x, 1e-6));
+                s.angle_deg = r(s.angle_deg, 1e-3);
+                s.size_mm = r(s.size_mm, 1e-3);
+                s.strength = r(s.strength, 1e-4);
+            }
+        }
     }
-    for s in &mut layer.stamps {
-        s.at = s.at.map(|x| r(x, 1e-3));
-        s.normal = s.normal.map(|x| r(x, 1e-6));
-        s.angle_deg = r(s.angle_deg, 1e-3);
-        s.size_mm = r(s.size_mm, 1e-3);
-        s.strength = r(s.strength, 1e-4);
-    }
+}
+
+pub fn strokes(layer: &SkinLayer) -> usize {
+    layer.marks.iter().filter(|m| matches!(m, Mark::Stroke(_))).count()
+}
+
+pub fn stamps(layer: &SkinLayer) -> usize {
+    layer.marks.iter().filter(|m| matches!(m, Mark::Stamp(_))).count()
 }
 
 pub struct Grid {
@@ -241,20 +263,50 @@ fn nearest_normal(grid: &Grid, texels: &[Option<Texel>], p: [f32; 3], r: f32) ->
         .map(|t| t.n)
 }
 
-pub fn bounds(layer: &SkinLayer) -> Vec<([f32; 3], [f32; 3])> {
-    let mut out = Vec::new();
-    for s in &layer.strokes {
-        let r = s.radius_mm as f32;
-        for p in dabs(s) {
-            out.push((p.map(|x| x - r), p.map(|x| x + r)));
+struct StampFrame {
+    c: [f32; 3],
+    n: [f32; 3],
+    side: [f32; 3],
+    up: [f32; 3],
+    half: f32,
+    aspect: f32,
+}
+
+fn stamp_frame(s: &Stamp, img: &Grey) -> StampFrame {
+    let half = s.size_mm as f32 * 0.5;
+    let aspect = img.height as f32 / img.width.max(1) as f32;
+    let n = norm(f32x3(s.normal));
+    let up = if n[2].abs() > 0.95 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let side0 = norm(cross(up, n));
+    let up0 = cross(n, side0);
+    let (sa, ca) = (s.angle_deg as f32).to_radians().sin_cos();
+    StampFrame {
+        c: f32x3(s.at),
+        n,
+        side: [0, 1, 2].map(|k| ca * side0[k] + sa * up0[k]),
+        up: [0, 1, 2].map(|k| -sa * side0[k] + ca * up0[k]),
+        half,
+        aspect,
+    }
+}
+
+pub fn stamp_box(s: &Stamp, img: &Grey) -> ([f32; 3], [f32; 3]) {
+    let f = stamp_frame(s, img);
+    let reach = (f.half * f.half * (2.0 + f.aspect * f.aspect)).sqrt() + 0.01;
+    (f.c.map(|x| x - reach), f.c.map(|x| x + reach))
+}
+
+pub fn mark_box(m: &Mark, images: &Images) -> Result<([f32; 3], [f32; 3]), String> {
+    match m {
+        Mark::Stroke(s) => {
+            let r = s.radius_mm as f32 + 0.01;
+            let d = dabs(s);
+            let lo = [0, 1, 2].map(|k| d.iter().map(|p| p[k]).fold(f32::INFINITY, f32::min) - r);
+            let hi = [0, 1, 2].map(|k| d.iter().map(|p| p[k]).fold(f32::NEG_INFINITY, f32::max) + r);
+            Ok((lo, hi))
         }
+        Mark::Stamp(s) => images.get(&(s.image.clone(), s.channel.clone())).map(|img| stamp_box(s, img)).ok_or_else(|| format!("image {} ({}) was not loaded", s.image, s.channel)),
     }
-    for s in &layer.stamps {
-        let r = s.size_mm as f32 * 0.75;
-        let c = f32x3(s.at);
-        out.push((c.map(|x| x - r), c.map(|x| x + r)));
-    }
-    out
 }
 
 fn overlaps(a: &([f32; 3], [f32; 3]), b: &([f32; 3], [f32; 3])) -> bool {
@@ -271,74 +323,66 @@ fn combine(values: &mut [f32], k: usize, v: f32, mode: &str) {
 
 pub fn apply(values: &mut [f32], texels: &[Option<Texel>], grid: &Grid, layer: &SkinLayer, images: &Images, region: Option<([f32; 3], [f32; 3])>) -> Result<(), String> {
     let inside = |p: [f32; 3]| region.is_none_or(|(lo, hi)| (0..3).all(|k| p[k] >= lo[k] && p[k] <= hi[k]));
-    for (i, s) in layer.stamps.iter().enumerate() {
-        let img = images.get(&(s.image.clone(), s.channel.clone())).ok_or_else(|| format!("stamp {i}: image {} ({}) was not loaded", s.image, s.channel))?;
-        let half = s.size_mm as f32 * 0.5;
-        let aspect = img.height as f32 / img.width.max(1) as f32;
-        let n = norm(f32x3(s.normal));
-        let up = if n[2].abs() > 0.95 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
-        let side0 = norm(cross(up, n));
-        let up0 = cross(n, side0);
-        let (sa, ca) = (s.angle_deg as f32).to_radians().sin_cos();
-        let side = [0, 1, 2].map(|k| ca * side0[k] + sa * up0[k]);
-        let upv = [0, 1, 2].map(|k| -sa * side0[k] + ca * up0[k]);
-        let c = f32x3(s.at);
-        let reach = half * aspect.max(1.0);
-        let b = (c.map(|x| x - reach), c.map(|x| x + reach));
-        if region.is_some_and(|r| !overlaps(&b, &r)) {
-            continue;
-        }
-        let mut seen: Vec<(usize, f32)> = Vec::new();
-        for k in grid.within(b.0, b.1) {
-            let k = k as usize;
-            let Some(t) = texels[k].as_ref() else { continue };
-            if !inside(t.mm) || dot(t.n, n) < 0.2 {
-                continue;
-            }
-            let d = sub(t.mm, c);
-            if dot(d, n).abs() > half {
-                continue;
-            }
-            let u = dot(d, side) / (2.0 * half) + 0.5;
-            let v = 0.5 - dot(d, upv) / (2.0 * half * aspect);
-            if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
-                continue;
-            }
-            seen.push((k, img.sample(u, v) * s.strength as f32));
-        }
-        for (k, v) in seen {
-            combine(values, k, v, &s.mode);
-        }
-    }
-    for s in &layer.strokes {
-        let r = s.radius_mm as f32;
-        let inner = r * s.hardness as f32 * 0.999;
-        let mut stroke: HashMap<usize, f32> = HashMap::new();
-        for p in dabs(s) {
-            let b = (p.map(|x| x - r), p.map(|x| x + r));
-            if region.is_some_and(|reg| !overlaps(&b, &reg)) {
-                continue;
-            }
-            let Some(dn) = nearest_normal(grid, texels, p, r * 0.25) else { continue };
-            for k in grid.within(b.0, b.1) {
-                let k = k as usize;
-                let Some(t) = texels[k].as_ref() else { continue };
-                if !inside(t.mm) || dot(t.n, dn) < 0.3 {
+    for (i, m) in layer.marks.iter().enumerate() {
+        let mut touched: HashMap<usize, f32> = HashMap::new();
+        let mode = match m {
+            Mark::Stamp(s) => {
+                let img = images.get(&(s.image.clone(), s.channel.clone())).ok_or_else(|| format!("mark {i}: image {} ({}) was not loaded", s.image, s.channel))?;
+                let b = stamp_box(s, img);
+                if region.is_some_and(|r| !overlaps(&b, &r)) {
                     continue;
                 }
-                let d = dot(sub(t.mm, p), sub(t.mm, p)).sqrt();
-                if d > r {
-                    continue;
+                let f = stamp_frame(s, img);
+                for k in grid.within(b.0, b.1) {
+                    let k = k as usize;
+                    let Some(t) = texels[k].as_ref() else { continue };
+                    if !inside(t.mm) || dot(t.n, f.n) < 0.2 {
+                        continue;
+                    }
+                    let d = sub(t.mm, f.c);
+                    if dot(d, f.n).abs() > f.half {
+                        continue;
+                    }
+                    let u = dot(d, f.side) / (2.0 * f.half) + 0.5;
+                    let v = 0.5 - dot(d, f.up) / (2.0 * f.half * f.aspect);
+                    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+                        continue;
+                    }
+                    touched.insert(k, img.sample(u, v) * s.strength as f32);
                 }
-                let v = (1.0 - smoothstep(inner, r, d)) * s.strength as f32;
-                let e = stroke.entry(k).or_insert(0.0);
-                *e = e.max(v);
+                &s.mode
             }
-        }
-        let mut keys: Vec<usize> = stroke.keys().copied().collect();
+            Mark::Stroke(s) => {
+                let r = s.radius_mm as f32;
+                let inner = r * s.hardness as f32 * 0.999;
+                for p in dabs(s) {
+                    let b = (p.map(|x| x - r), p.map(|x| x + r));
+                    if region.is_some_and(|reg| !overlaps(&b, &reg)) {
+                        continue;
+                    }
+                    let Some(dn) = nearest_normal(grid, texels, p, r * 0.25) else { continue };
+                    for k in grid.within(b.0, b.1) {
+                        let k = k as usize;
+                        let Some(t) = texels[k].as_ref() else { continue };
+                        if !inside(t.mm) || dot(t.n, dn) < 0.3 {
+                            continue;
+                        }
+                        let d = dot(sub(t.mm, p), sub(t.mm, p)).sqrt();
+                        if d > r {
+                            continue;
+                        }
+                        let v = (1.0 - smoothstep(inner, r, d)) * s.strength as f32;
+                        let e = touched.entry(k).or_insert(0.0);
+                        *e = e.max(v);
+                    }
+                }
+                &s.mode
+            }
+        };
+        let mut keys: Vec<usize> = touched.keys().copied().collect();
         keys.sort_unstable();
         for k in keys {
-            combine(values, k, stroke[&k], &s.mode);
+            combine(values, k, touched[&k], mode);
         }
     }
     Ok(())
@@ -360,8 +404,7 @@ pub fn presets() -> Vec<(&'static str, Vec<SkinLayer>)> {
         seed,
         colour,
         procedural: None,
-        stamps: Vec::new(),
-        strokes: Vec::new(),
+        marks: Vec::new(),
     };
     vec![
         ("field-grime", vec![layer("dust", "grime", "dust", 0.3, 11, None), layer("dirt", "grime", "dirt", 0.0, 12, None)]),
@@ -393,8 +436,7 @@ mod tests {
 
     fn layer(strokes: Vec<Stroke>, stamps: Vec<Stamp>) -> SkinLayer {
         let mut l = presets()[0].1[0].clone();
-        l.strokes = strokes;
-        l.stamps = stamps;
+        l.marks = strokes.into_iter().map(Mark::Stroke).chain(stamps.into_iter().map(Mark::Stamp)).collect();
         l
     }
 
@@ -496,5 +538,52 @@ mod tests {
                 assert!(problems(l, name).is_empty());
             }
         }
+    }
+
+    fn star(img: &mut Images, w: usize, h: usize) {
+        img.insert(("sha256:x".into(), "alpha".into()), Grey { width: w, height: h, values: vec![1.0; w * h] });
+    }
+
+    fn stamp(at: [f64; 3], size: f64, angle: f64, mode: &str) -> Stamp {
+        Stamp { image: "sha256:x".into(), channel: "alpha".into(), at, normal: [0.0, -1.0, 0.0], angle_deg: angle, size_mm: size, strength: 1.0, mode: mode.into() }
+    }
+
+    #[test]
+    fn marks_apply_in_authoring_order() {
+        let t = plane();
+        let grid = Grid::new(&t, 4.0);
+        let mut img = Images::new();
+        star(&mut img, 4, 4);
+        let erase = Stroke { mode: "erase".into(), radius_mm: 6.0, strength: 1.0, hardness: 1.0, points: vec![[15.0, 0.0, 15.0]] };
+        let run = |marks: Vec<Mark>| {
+            let mut l = presets()[0].1[0].clone();
+            l.marks = marks;
+            let mut v = vec![0.0; t.len()];
+            apply(&mut v, &t, &grid, &l, &img, None).unwrap();
+            v[30 * 60 + 30]
+        };
+        assert_eq!(run(vec![Mark::Stroke(erase.clone()), Mark::Stamp(stamp([15.0, 0.0, 15.0], 4.0, 0.0, "add"))]), 1.0, "a stamp placed after an erase shows");
+        assert_eq!(run(vec![Mark::Stamp(stamp([15.0, 0.0, 15.0], 4.0, 0.0, "add")), Mark::Stroke(erase)]), 0.0, "an erase after a stamp removes it");
+        let paint = Stroke { mode: "add".into(), radius_mm: 6.0, strength: 1.0, hardness: 1.0, points: vec![[15.0, 0.0, 15.0]] };
+        assert_eq!(run(vec![Mark::Stroke(paint), Mark::Stamp(stamp([15.0, 0.0, 15.0], 4.0, 0.0, "erase"))]), 0.0, "an erase stamp removes brush paint");
+    }
+
+    #[test]
+    fn a_tall_rotated_stamp_repainted_through_its_own_box_equals_a_full_apply() {
+        let t = plane();
+        let grid = Grid::new(&t, 4.0);
+        let mut img = Images::new();
+        star(&mut img, 2, 16);
+        let s = stamp([15.0, 0.0, 15.0], 3.0, 37.0, "add");
+        let l = layer(vec![], vec![s.clone()]);
+        let mut full = vec![0.0; t.len()];
+        apply(&mut full, &t, &grid, &l, &img, None).unwrap();
+        let b = mark_box(&Mark::Stamp(s), &img).unwrap();
+        let mut part = vec![0.0; t.len()];
+        apply(&mut part, &t, &grid, &l, &img, Some(b)).unwrap();
+        assert_eq!(part, full);
+        let covered = full.iter().filter(|&&v| v > 0.0).count();
+        let reach_axis = |k: usize| t.iter().zip(&full).filter(|(_, v)| **v > 0.0).map(|(x, _)| (x.as_ref().unwrap().mm[k] - 15.0).abs()).fold(0.0f32, f32::max);
+        assert!(covered > 30 && reach_axis(2) > 1.5 * 3.0 * 0.75, "the stamp must reach past the old 0.75 x size box: {covered} texels, z reach {}", reach_axis(2));
     }
 }
