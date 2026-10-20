@@ -8,6 +8,8 @@ mod render;
 mod script;
 mod session;
 mod shape;
+mod studio;
+mod ui_script;
 mod viewer;
 mod worker;
 mod world;

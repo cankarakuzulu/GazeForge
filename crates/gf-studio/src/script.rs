@@ -18,8 +18,8 @@ pub struct Offscreen {
     pub world: World,
     pub width: u32,
     pub height: u32,
-    epoch: u64,
     pub godot: Option<Arc<godot::Host>>,
+    pub(crate) ui: Option<crate::ui_script::OffUi>,
 }
 
 fn ms(t: Instant) -> f64 {
@@ -62,7 +62,7 @@ impl Offscreen {
     pub fn new(width: u32, height: u32) -> Result<Offscreen, String> {
         let gpu = Gpu::headless()?;
         let renderer = Renderer::new(&gpu.device);
-        Ok(Offscreen { gpu, renderer, world: World::default(), width, height, epoch: 0, godot: None })
+        Ok(Offscreen { gpu, renderer, world: World::default(), width, height, godot: None, ui: None })
     }
 
     fn drag(&mut self, step: &Value) -> Result<Value, String> {
@@ -156,14 +156,7 @@ impl Offscreen {
     pub fn render(&mut self) -> Result<Value, String> {
         let t = Instant::now();
         self.world.tick();
-        if self.world.epoch != self.epoch {
-            self.renderer.clear_head();
-            self.epoch = self.world.epoch;
-        }
-        if let Some(s) = &self.world.session {
-            self.renderer.sync_head(&self.gpu.device, &self.gpu.queue, &s.head, self.world.uvs_dirty);
-            self.world.uvs_dirty = false;
-        }
+        self.renderer.sync_world(&self.gpu.device, &self.gpu.queue, &mut self.world);
         let head = self.world.session.as_ref().map(|s| &s.head);
         let f = self.renderer.render(&self.gpu.device, &self.gpu.queue, &self.world.state, head, self.width, self.height);
         let encoded = ms(t);
@@ -405,6 +398,9 @@ impl Offscreen {
 
     pub fn step(&mut self, step: &Value, out: &Path) -> Result<Value, String> {
         let op = step.get("op").and_then(Value::as_str).ok_or("each step needs op")?;
+        if op.starts_with("ui") || op.starts_with("cube_") {
+            return self.ui_step(op, step, out);
+        }
         if op.starts_with("godot_") || (op == "source" && step.get("kind").and_then(Value::as_str) == Some("godot")) {
             return self.godot_step(op, step, out);
         }

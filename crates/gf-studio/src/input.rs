@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn showing_values_off_any_grid_emits_no_event() {
-        let Some(font) = crate::app::system_font() else { return };
+        let Some(font) = crate::studio::system_font() else { return };
         let ctx = egui::Context::default();
         let mut fonts = egui::FontDefinitions::empty();
         fonts.font_data.insert("ui".into(), std::sync::Arc::new(egui::FontData::from_owned(font)));
