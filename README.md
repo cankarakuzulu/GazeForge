@@ -786,6 +786,16 @@ the same orbit, pan, zoom, pivot, focus, perspective and orthographic cameras, n
 quad layouts and the LOD switch. Each viewport slot takes its pixels from a frame source: the built-in renderer, or an
 external source that hands back RGBA frames for the slot's camera and size.
 
+The side panel carries the browser's Face rig, Body and Timeline panels and its projects, ported command for command:
+the face rig (`rig.face`; blend shapes or joints, presets, the 51 shapes, a manual joint pose, the joint overlay), the body
+stitch (`character.stitch`; the body as an extra mesh, the seam as overlay lines, a head scale shown as a pose), the
+facial animation timeline (clips, capture from video or images, CSV import, playback with the head rotation turning the
+eyes too) and projects (open with relinking, save, save as, characters, notes, autosave and recovery, portable export).
+A project saved by either client opens in the other: the studio writes the face rig, body and timeline states in the
+browser's formats and keeps the panel states and viewer state it does not use. `GAZEFORGE_FACE_MORPHS` and
+`GAZEFORGE_FACE_PREFIX` play the role of the browser's `face_morphs` and `face_prefix`. The script ops `rig`, `stitch`,
+`timeline` and `project` drive them headlessly; each port's pose, body and project equal the browser's on the same input.
+
 `--eyes` takes the same eyes file as the browser designer: its eye meshes are drawn in the built-in renderer (the `eyes`
 toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. With the
 character's `eyeballs` following (a new character starts that way when the catalog has an eye rig), each settle places
