@@ -14,6 +14,7 @@ mod shape;
 mod studio;
 mod ui_script;
 mod viewer;
+mod wizard;
 mod worker;
 mod world;
 

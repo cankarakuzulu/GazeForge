@@ -16,7 +16,7 @@ use crate::script::write_png;
 use crate::viewer::{self, Layout, MODES};
 use crate::world::World;
 
-const RIGHT_GROUP_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 2.0;
+const RIGHT_GROUP_WIDTH: f32 = 5.0 * 28.0 + 4.0 * 2.0;
 const CLIP_SLIDER_WIDTH: f32 = 230.0;
 
 pub struct UiState {
@@ -39,6 +39,7 @@ pub struct UiState {
     pub cubes: Vec<CubeSpot>,
     pub cube_hover: Option<(usize, Element)>,
     pub cube_drag: Option<usize>,
+    pub wizards: crate::wizard::Wizards,
 }
 
 pub struct UiArgs {
@@ -75,6 +76,7 @@ impl UiState {
             cubes: Vec::new(),
             cube_hover: None,
             cube_drag: None,
+            wizards: Default::default(),
         })
     }
 }
@@ -146,6 +148,7 @@ impl Studio<'_> {
         match id {
             "screenshot" | "screenshot_layout" => self.s.status = self.screenshot(id == "screenshot_layout"),
             "help" => self.s.show_help = !self.s.show_help,
+            "tasks" => self.s.wizards.open = !self.s.wizards.open,
             "interface_theme" => self.s.flip_theme = true,
             "save_spec" => self.save(),
             _ => {
@@ -219,6 +222,7 @@ impl Studio<'_> {
         egui::Panel::left("side").default_size(300.0).show(ui, |ui| self.side(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, dt));
         self.keys_window(&ctx);
+        self.s.wizards.show(&ctx, self.world, "untitled");
     }
 
     fn tip(&self, what: &str, id: &str) -> String {
@@ -327,6 +331,7 @@ impl Studio<'_> {
         let dark = self.world.state.opts.dark;
         let buttons = [
             ("help", "keyboard", self.s.show_help, self.tip("Keys and mouse", "help")),
+            ("tasks", "wand-sparkles", self.s.wizards.open, "Tasks: guided wizards, each step one registry command".to_string()),
             ("interface_theme", if light { "sun" } else { "moon" }, false,
              self.tip(if light { "Light interface: switch to dark" } else { "Dark interface: switch to light" }, "interface_theme")),
             ("theme", "sun-moon", !dark, self.tip(if dark { "Dark viewport: switch to light" } else { "Light viewport: switch to dark" }, "theme")),
