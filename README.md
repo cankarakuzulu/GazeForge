@@ -185,6 +185,49 @@ base alpha, so a viewer without transmission still shows the iris through it. Wi
 blending, and the iris and sclera textures as RGBA pixels), the same values the glb writes. `designer.scene` and
 `designer.eyes` (only the eyes, for a client that changes the model) take the spec's `eyeballs`: with a model they return
 its eyes at their rest place with UVs and parts instead of an eyes file's.
+**Procedural skin (in progress).** `skin.models` lists skin presets (12 today, fair to deep, young to elder, with and
+without stubble); `skin.generate` writes one for a game base as three PNGs on its UVs: albedo, a tangent-space normal map
+and an occlusion-roughness-metallic map (glTF's packing: roughness in green, metallic in blue). A look is data: tone from
+two pigments (`melanin`, `haemoglobin`) and an `undertone`, regional `redness` (cheeks, nose, ears, chin), `lip_tint`,
+`under_eye`, `freckles` and `freckle_size_mm`, `moles`, `pores`, `age` (spots, forehead and under-eye lines), `stubble`
+with its `hair` colour, and T-zone `oil`; `skin` overrides any field of the preset. Every texel is evaluated at its point
+on the neutral base's surface, in millimetres, so the skin has no UV seams and the same detail size everywhere, and it
+follows every character built on that base. Detail finer than about two texels fades out instead of aliasing, so a
+1024 texture is smooth and a 4096 one shows pores. The regions (lips, inner mouth, nose, cheeks, forehead, chin, upper
+lip, beard zone, under-eyes, eyelids, ears, scalp, neck, T-zone) come from the base's landmark table (`landmarks`:
+MediaPipe landmark to dense vertex) and the ears from how far the surface stands out of a smoothed head; `regions: true`
+also writes a picture of them.
+`skin.project` makes a skin from the photos of a photos-path run (`views.json`, the fitted cameras in `fit_photos.json`,
+`fitted_dense.npy`): each texel's point on the fitted head goes through every photo's camera, counts where the fitted
+mesh's z-buffer shows it, and is weighted by how squarely it faces the camera and how far it lies from the head's outline
+in the photo. The eyes and brows (`brows: keep` keeps the brows) are masked by the front photo's landmarks, the scalp and
+the inside of the mouth by their regions, and hair by the photo itself (pixels much darker or greyer than the plain skin,
+with a soft margin; the beard zone is exempt, so a beard stays in the texture), as are bluish pixels (clothing). Each view
+is delit by a spherical-harmonics shading fit on plain skin (forehead, cheeks, nose; first order when a view sees little
+of it) and gain-matched to the front on their overlap. A view whose camera does not register the mesh (more than 4 % of
+the head falls on the photo's background) is not used, and the report says so. What no photo sees takes the mirrored side,
+then the procedural skin of `look` with its tone fitted to the photos and its colour pulled to theirs by a gain field
+spread over the mesh. It writes the albedo, the look's normal and roughness maps, the procedural skin alone in the photos'
+colour (`generated`), and a confidence map. The albedo is as photographed: its brightness is the photo's at the shading of
+the median plain-skin texel. Limits: cast shadows (under the chin), ambient occlusion and specular light are not modelled
+(highlights are down-weighted where another view sees the texel, kept where none does), and the seam between projected and
+filled skin can show at the hairline.
+**Skin in the glb, and live layers.** A character spec can carry `skin`: a `look` (a preset with any fields changed), the
+base's landmark table as a store reference (`skin.landmarks` checks a table and puts it in the store), a texture `size`
+(default 2048) and `layers`. A layer has a `name`, a `kind` and `style` - grime (`dust`, `sand`, `dirt`, `mud`), blood
+(`drips`, `splatter`), paint (`eye-band`, `cheek-stripes`, `chin`) - an `amount`, a second state `variant` (wet dirt and
+mud, dried blood), a `seed` and an optional linear `colour`; `live: false` paints it into the textures, otherwise a
+renderer drives it. `skin.layers` lists the kinds and styles with their colours and roughness. Each layer's mask is
+evaluated on the neutral base in millimetres, like the skin: grime gathers in creases, on upward-facing skin and on the
+lower face; blood runs down the surface from wound sites; paint is placed by the landmarks. With `skin` in the spec,
+`export-glb` gives every head level of detail one textured material: the baked skin in the core glTF material, so any
+viewer shows it, and the live layers in the [`GAZEFORGE_skin`](extensions/GAZEFORGE_skin/README.md) material extension -
+a mask per layer (four per RGBA texture) whose value orders where the layer reaches first, so one parameter both places it
+and grows it from 0 to 1. A layer baked at an amount equals the same layer drawn live at that amount (measured: no 8-bit
+difference). [`clients/godot-addon`](clients/godot-addon/addons/gazeforge_skin/README.md) is a Godot 4 addon that turns
+such materials into shader materials whose uniforms are the layers' parameters, so a game sets `blood` or `mud_wet` by
+name. Limits: layers change colour and roughness, not relief; masks are procedural (no painting or stamps yet); the body
+of `--body` gets no skin material.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

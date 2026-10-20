@@ -14,6 +14,22 @@ open, with its last measurement, rather than left out.
   `topology inspect` / `topology.inspect` reports a base's triangle quality. On the test store's 20,000-vertex base:
   triangles under 10 degrees at rest 777 -> 544, under 5 degrees 90 -> 66, over the whole range 5,468 -> 3,947; no scored
   shape gains a triangle under 5 or 10 degrees or a turned triangle.
+- **Skin.** `skin.generate` writes a procedural skin for a game base (albedo, tangent-space normal, occlusion-roughness-
+  metallic), evaluated on the neutral base's surface in millimetres so it has no UV seams; 12 presets in `skin.models`.
+  `skin.project` projects a photos-path run's photos onto the texels through the fitted cameras, delit and gain-matched,
+  and fills what no photo sees from the mirrored side and a tone-fitted procedural skin.
+- **Skin layers and the `GAZEFORGE_skin` glTF extension.** A character spec can carry `skin`: a look, the base's landmark
+  table (`skin.landmarks` puts it in the store), a texture size and layers - grime (dust, sand, dirt, mud), blood (drips,
+  splatter), paint (eye-band, cheek-stripes, chin) - each baked into the textures or live. `export-glb` then gives every
+  head level of detail a textured material: the baked skin in the core glTF material, so any viewer shows it, and the
+  live layers in the [`GAZEFORGE_skin`](extensions/GAZEFORGE_skin/README.md) extension as masks a renderer drives by
+  name (amount, and a second state such as wet or dried). `skin.layers` lists the kinds and styles. Measured: with no
+  baked layers the exported textures equal `skin.generate`'s exactly; a layer baked at an amount equals the same layer
+  live at that amount (max difference 0 in 8 bits). Not yet: relief (layers change colour and roughness only), painted or
+  stamped masks, a textured body.
+- **Godot addon** (`clients/godot-addon`). Imports `GAZEFORGE_skin` materials, in the editor and at run time, as shader
+  materials with one uniform per layer parameter; masks arrive lossless; invalid extensions are refused with the core
+  material kept. Measured on Godot 4.7.2 (Forward+): the rendered layers match the format's math within 1 in 8 bits.
 - **Quads for OBJ.** `export-obj --quads on` writes clean triangle pairs as quads (off by default).
 - **Designers.** A Topology tool in the browser and the native studio: bad-triangle highlight, improve as a job with
   progress, the numbers and the look before and after, and designing on the improved base. `designer.sliders` takes an

@@ -358,7 +358,7 @@ mod tests {
         let o = m.apply(ShapeEvent::Reset);
         assert!(o.settle && m.history.undone.is_empty());
         assert_eq!(m.live, m.start);
-        let c = m.character(&Character { name: "x".into(), placement: "f5/1".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null }, &m.live);
+        let c = m.character(&Character { name: "x".into(), placement: "f5/1".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, skin: Value::Null }, &m.live);
         assert_eq!(c.weights.len(), 1);
         assert!(c.macros.is_null());
     }

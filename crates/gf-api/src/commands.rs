@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
 use crate::tasks::api;
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, wizards};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, skin, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -167,6 +167,51 @@ pub static REGISTRY: &[CommandDef] = &[
         input: eyes::textures_input,
         output: eyes::textures_output,
         run: eyes::textures,
+    },
+    CommandDef {
+        name: "skin.models",
+        kind: Kind::Query,
+        summary: "The procedural skin presets: tone (melanin, haemoglobin, undertone), regional redness, lips, under-eyes, freckles, moles, pores, age, stubble and its hair colour, T-zone oil.",
+        limits: "Presets are starting points; skin.generate takes a preset and overrides any field.",
+        input: skin::models_input,
+        output: skin::models_output,
+        run: skin::models,
+    },
+    CommandDef {
+        name: "skin.generate",
+        kind: Kind::Mutation,
+        summary: "Write a procedural skin for a game base as PNG: albedo, a tangent-space normal map (pores, fine lines) and an occlusion-roughness-metallic map, laid out on the game base's UVs. The skin is evaluated on the neutral base's surface in millimetres, so it has no UV seams and follows every character built on that base.",
+        limits: "Overwrites <id>.albedo.png, <id>.normal.png and <id>.orm.png in out. Deterministic per look (seeded). Needs the base's landmark table for its regions.",
+        input: skin::generate_input,
+        output: skin::generate_output,
+        run: skin::generate,
+    },
+    CommandDef {
+        name: "skin.layers",
+        kind: Kind::Query,
+        summary: "The layer kinds and styles a character spec's skin.layers can name (grime: dust, sand, dirt, mud; blood: drips, splatter; paint: eye-band, cheek-stripes, chin), each with its colour, opacity, roughness, edge spread and second state (wet, dry). A live layer is exported as a mask a renderer drives through the GAZEFORGE_skin glTF extension; a baked one is painted into the base textures.",
+        limits: "Masks are procedural, placed by the base's landmark table and seeded; painted or stamped masks are not available yet.",
+        input: skin::layers_input,
+        output: skin::layers_output,
+        run: skin::layers,
+    },
+    CommandDef {
+        name: "skin.landmarks",
+        kind: Kind::Mutation,
+        summary: "Put a base's landmark table (JSON {\"vertices\": {MediaPipe landmark: dense vertex}}) into the store, after checking it against the game base's pack and the landmarks the skin regions and layers need. Returns the reference a character spec's skin.landmarks takes.",
+        limits: "Checks indices and presence only, not where the landmarks sit on the face.",
+        input: skin::landmarks_input,
+        output: skin::landmarks_output,
+        run: skin::landmarks,
+    },
+    CommandDef {
+        name: "skin.project",
+        kind: Kind::Mutation,
+        summary: "Project the photos of a photos-path run onto the game base's texels, through the fitted cameras: visibility by the fitted mesh's z-buffer, weights by facing and distance from the outline, eyes and brows masked by the front photo's landmarks, delit by a spherical-harmonics shading fit, each view gain-matched to the front. What no photo sees takes the mirrored side, then a procedural skin whose tone is fitted to the photos and whose colour is pulled to the photos' by a gain field spread over the mesh. Also writes the procedural skin alone (generated) and a confidence map.",
+        limits: "Cast shadows, ambient occlusion and specular light are not modelled (highlights are down-weighted, not removed). Hair on the forehead or temples is projected as skin. Needs the run's views.json, fit_photos.json and fitted_dense.npy, and Python with numpy and opencv.",
+        input: skin::project_input,
+        output: skin::project_output,
+        run: skin::project,
     },
     CommandDef {
         name: "grid.chart",
@@ -959,6 +1004,7 @@ fn character_create(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         macros: None,
         residual: None,
         eyeballs: None,
+        skin: None,
     }
     .canonical();
     let (problems, _) = ch::problems(&store, &spec, None);

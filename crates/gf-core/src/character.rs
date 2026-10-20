@@ -9,6 +9,7 @@ use crate::head::HEAD_SCALE_RANGE;
 use crate::macros::{self, Mode};
 use crate::placement::PlacementVersion;
 use crate::residual;
+use crate::skin_layers::SkinSpec;
 
 pub const FORMAT: &str = "gazeforge.character/1";
 pub const WEIGHT_STEP: f64 = 1e-6;
@@ -59,6 +60,8 @@ pub struct Spec {
     pub residual: Option<ResidualRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eyeballs: Option<EyeballSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<SkinSpec>,
 }
 
 pub fn round_weight(w: f64) -> f64 {
@@ -71,6 +74,7 @@ impl Spec {
         let mut out = self.clone();
         out.weights = self.weights.iter().map(|(k, &w)| (k.clone(), round_weight(w))).filter(|(_, w)| *w != 0.0).collect();
         out.eyeballs = self.eyeballs.as_ref().map(EyeballSpec::canonical);
+        out.skin = self.skin.as_ref().map(SkinSpec::canonical);
         out
     }
 
@@ -133,6 +137,9 @@ impl Spec {
         if let Some(e) = &self.eyeballs {
             out.extend(e.canonical().problems());
         }
+        if let Some(s) = &self.skin {
+            out.extend(s.problems());
+        }
         out
     }
 }
@@ -170,6 +177,7 @@ mod tests {
             macros: None,
             residual: None,
             eyeballs: None,
+            skin: None,
         }
     }
 

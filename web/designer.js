@@ -366,6 +366,7 @@ function weightsMap() {
 
 function settleInput() {
   const input = { store, pack: D.base.pack, catalog: D.base.catalog, game: D.base.game, placement: D.start.placement, name: D.start.name, weights: weightsMap(), residual: D.start.residual };
+  if (D.start.skin) input.skin = D.start.skin;
   if (D.macros?.available && (D.start.macros || Object.keys(D.macroW).some((k) => D.macroW[k] !== D.macroBase[k]))) {
     input.macros = { sliders: { ...D.macroW }, mode: D.start.macros?.mode || "gf", head_scale: D.start.macros?.head_scale ?? 1 };
     input.macro = opt("macro");

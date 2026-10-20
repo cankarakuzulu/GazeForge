@@ -1,0 +1,76 @@
+{
+ "material": "skin",
+ "defaults": {
+  "blood": 0.0,
+  "blood_dry": 0.0,
+  "mud": 0.3,
+  "mud_wet": 0.25,
+  "paint": 0.0,
+  "soot": 0.0,
+  "scar": 0.0,
+  "scar_healed": 0.0,
+  "sweat": 0.0
+ },
+ "configs": [
+  {
+   "name": "c0_defaults",
+   "values": {}
+  },
+  {
+   "name": "c1_half",
+   "values": {
+    "blood": 0.5,
+    "blood_dry": 0.0,
+    "mud": 0.5,
+    "mud_wet": 0.0,
+    "paint": 0.5,
+    "soot": 0.5,
+    "scar": 0.5,
+    "scar_healed": 0.0,
+    "sweat": 0.5
+   }
+  },
+  {
+   "name": "c2_most",
+   "values": {
+    "blood": 0.85,
+    "blood_dry": 0.5,
+    "mud": 0.85,
+    "mud_wet": 0.5,
+    "paint": 0.85,
+    "soot": 0.85,
+    "scar": 0.85,
+    "scar_healed": 0.5,
+    "sweat": 0.85
+   }
+  },
+  {
+   "name": "c3_full",
+   "values": {
+    "blood": 1.0,
+    "blood_dry": 1.0,
+    "mud": 1.0,
+    "mud_wet": 1.0,
+    "paint": 1.0,
+    "soot": 1.0,
+    "scar": 1.0,
+    "scar_healed": 1.0,
+    "sweat": 1.0
+   }
+  },
+  {
+   "name": "c4_mixed",
+   "values": {
+    "blood": 0.95,
+    "blood_dry": 0.2,
+    "mud": 0.6,
+    "mud_wet": 0.8,
+    "paint": 0.7,
+    "soot": 0.9,
+    "scar": 0.4,
+    "scar_healed": 0.3,
+    "sweat": 1.0
+   }
+  }
+ ]
+}

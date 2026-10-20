@@ -1273,6 +1273,7 @@ mod tests {
                 gf_io::gltf::MorphData { positions: vec![[0.0, 0.1, 0.0]; 3], normals: vec![[0.0; 3]; 3] },
             ],
             skin: None,
+            material: None,
         };
         let (bytes, _) = gf_io::gltf::glb(&[lod], &["jawOpen".into(), "eyeBlinkLeft".into()], gf_io::gltf::Sparse::Never, json!({}), "test").unwrap();
         let take = synthetic(12, 30.0);
@@ -1303,6 +1304,7 @@ mod tests {
             indices: vec![0, 1, 2],
             morphs: vec![g::MorphData { positions: vec![[0.0, 0.0, 0.1]; 3], normals: vec![[0.0; 3]; 3] }],
             skin: Some(g::SkinData { joints: vec![[1, 0, 0, 0]; 3], weights: vec![[1.0, 0.0, 0.0, 0.0]; 3], joints_1: Vec::new(), weights_1: Vec::new() }),
+            material: None,
         };
         let pose = [0.0, 0.0, (0.2f32).sin(), (0.2f32).cos()];
         let rig = g::Rig {
@@ -1385,6 +1387,7 @@ mod tests {
             indices: vec![0, 1, 2],
             morphs: (0..2).map(|_| g::MorphData { positions: vec![[0.0, 0.0, -0.0015], [0.0; 3], [0.0; 3]], normals: vec![[0.0; 3]; 3] }).collect(),
             skin: None,
+            material: None,
         };
         let names = vec!["a".to_string(), "b".to_string()];
         let (bytes, _) = g::glb(&[lod], &names, g::Sparse::Never, json!({}), "test").unwrap();

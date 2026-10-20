@@ -148,6 +148,7 @@ pub struct Character {
     pub macros: Value,
     pub residual: Value,
     pub eyeballs: Value,
+    pub skin: Value,
 }
 
 pub struct SettleOut {
@@ -378,6 +379,7 @@ impl Session {
             macros: st["macros"].clone(),
             residual: st["residual"].clone(),
             eyeballs: st["eyeballs"].clone(),
+            skin: st["skin"].clone(),
         };
         let t = Instant::now();
         let scene = designer::scene_mesh(&json!({"store": store, "pack": pack, "catalog": catalog, "game": game})).map_err(err)?;
@@ -422,6 +424,9 @@ impl Session {
                                "name": c.name, "weights": c.weights, "residual": c.residual});
         if let Some(e) = &self.eyes_file {
             input["eyes"] = json!(e);
+        }
+        if !c.skin.is_null() {
+            input["skin"] = c.skin.clone();
         }
         if !c.eyeballs.is_null() {
             input["eyeballs"] = c.eyeballs.clone();
@@ -518,7 +523,7 @@ impl Session {
     }
 
     pub fn reference_input(&self) -> Value {
-        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, ..self.start.clone() };
+        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, skin: Value::Null, ..self.start.clone() };
         let mut input = self.settle_input(&neutral, false);
         input.as_object_mut().map(|o| o.remove("residual"));
         input

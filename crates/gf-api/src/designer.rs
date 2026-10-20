@@ -336,6 +336,10 @@ fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Resu
         Some(e) => Some(serde_json::from_value::<EyeballSpec>(e.clone()).map_err(|e| ApiError::invalid(format!("eyeballs: {e}")))?),
         None => None,
     };
+    let skin = match input.get("skin").filter(|e| !e.is_null()) {
+        Some(e) => Some(serde_json::from_value::<gf_core::skin_layers::SkinSpec>(e.clone()).map_err(|e| ApiError::invalid(format!("skin: {e}")))?),
+        None => None,
+    };
     let spec = Spec {
         format: FORMAT.into(),
         name: input.get("name").and_then(Value::as_str).unwrap_or("character").to_string(),
@@ -349,6 +353,7 @@ fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Resu
         macros,
         residual,
         eyeballs,
+        skin,
     }
     .canonical();
     let mut problems = spec.problems();
@@ -399,6 +404,7 @@ fn character_props() -> Value {
            "macros": {"type": ["object", "null"], "description": "{sliders: {name: value}, mode: gf|mpfb, head_scale}; sliders not given keep the pack's macro_base"},
            "macro": {"type": "string", "minLength": 1, "description": "path of the macro definition file, needed when macros are set"},
            "residual": {"type": ["object", "null"], "description": "a spec's residual reference, as designer.sliders returns it in start"},
+           "skin": {"type": ["object", "null"], "description": "a spec's skin (look, landmarks, size, layers), as designer.sliders returns it in start; kept unchanged so a save does not drop it"},
            "eyeballs": {"type": ["object", "null"], "description": "{follow: makehuman-helper/1|none, rig: the catalog's eye rig (designer.sliders gives it as eyerig), left/right: {offset_mm: [out, up, forward], rotation_deg: [pitch up, yaw out, roll], scale}}; with an eyes file, the eyeballs follow the sockets and take the adjustments, and the eyelid clearance uses the moved eyes"}})
 }
 
@@ -665,8 +671,8 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     };
     let new_eyeballs = eyerig.as_ref().map(|r| EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(r.clone()), model: None, left: Default::default(), right: Default::default() });
     let start = match &spec {
-        Some(s) => json!({"name": s.name, "placement": s.base.placement, "weights": s.weights, "macros": s.macros, "residual": s.residual, "eyeballs": s.eyeballs}),
-        None => json!({"name": "character", "placement": gp::DEFAULT.to_string(), "weights": {}, "macros": null, "residual": null, "eyeballs": new_eyeballs}),
+        Some(s) => json!({"name": s.name, "placement": s.base.placement, "weights": s.weights, "macros": s.macros, "residual": s.residual, "eyeballs": s.eyeballs, "skin": s.skin}),
+        None => json!({"name": "character", "placement": gp::DEFAULT.to_string(), "weights": {}, "macros": null, "residual": null, "eyeballs": new_eyeballs, "skin": null}),
     };
     Ok(json!({"pack": pack, "catalog": catalog, "game": game, "head_categories": HEAD_CATEGORIES, "categories": categories,
               "targets": targets, "eyerig": eyerig, "eyerig_problem": eyerig_problem,

@@ -38,6 +38,7 @@ pub struct Lod {
     pub indices: Vec<u32>,
     pub morphs: Vec<MorphData>,
     pub skin: Option<SkinData>,
+    pub material: Option<usize>,
 }
 
 pub struct Attachment {
@@ -213,12 +214,22 @@ pub struct Material {
     pub name: String,
     pub base_color: [f32; 4],
     pub base_texture: Option<Vec<u8>>,
+    pub normal_texture: Option<Vec<u8>>,
+    pub orm_texture: Option<Vec<u8>>,
     pub metallic: f32,
     pub roughness: f32,
     pub transmission: Option<f32>,
     pub ior: Option<f32>,
     pub blend: bool,
     pub double_sided: bool,
+    pub extension: Option<MaterialExtension>,
+}
+
+pub struct MaterialExtension {
+    pub name: &'static str,
+    /// Every object in `value` with an integer `index` names a slot of `textures`; the writer turns it into the glTF texture index.
+    pub value: Value,
+    pub textures: Vec<Vec<u8>>,
 }
 
 pub struct PartMesh {
@@ -243,15 +254,29 @@ pub fn glb_full(
     glb_with_parts(lods, extra, morph_names, mode, extras, generator, rig, &[], &[])
 }
 
-fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, images: &mut Vec<Value>, used: &mut Vec<&'static str>) -> Value {
+fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, images: &mut Vec<Value>, used: &mut Vec<&'static str>) -> Result<Value, String> {
     let mut pbr = json!({"baseColorFactor": m.base_color, "metallicFactor": m.metallic, "roughnessFactor": m.roughness});
-    if let Some(png) = &m.base_texture {
+    let mut texture = |png: &Vec<u8>, suffix: &str| -> usize {
         let view = b.view(png, None);
-        images.push(json!({"bufferView": view, "mimeType": "image/png", "name": m.name}));
+        images.push(json!({"bufferView": view, "mimeType": "image/png", "name": format!("{}{suffix}", m.name)}));
         textures.push(json!({"source": images.len() - 1, "sampler": 0}));
-        pbr["baseColorTexture"] = json!({"index": textures.len() - 1});
+        textures.len() - 1
+    };
+    if let Some(png) = &m.base_texture {
+        pbr["baseColorTexture"] = json!({"index": texture(png, "")});
+    }
+    let normal = m.normal_texture.as_ref().map(|png| texture(png, "_normal"));
+    let orm = m.orm_texture.as_ref().map(|png| texture(png, "_orm"));
+    if let Some(i) = orm {
+        pbr["metallicRoughnessTexture"] = json!({"index": i});
     }
     let mut out = json!({"name": m.name, "pbrMetallicRoughness": pbr});
+    if let Some(i) = normal {
+        out["normalTexture"] = json!({"index": i});
+    }
+    if let Some(i) = orm {
+        out["occlusionTexture"] = json!({"index": i});
+    }
     if m.double_sided {
         out["doubleSided"] = json!(true);
     }
@@ -267,10 +292,31 @@ fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, image
         ext.insert("KHR_materials_ior".into(), json!({"ior": i}));
         used.push("KHR_materials_ior");
     }
+    if let Some(e) = &m.extension {
+        let slots: Vec<usize> = e.textures.iter().enumerate().map(|(k, png)| texture(png, &format!("_{}{k}", e.name.to_lowercase()))).collect();
+        let mut value = e.value.clone();
+        relink(&mut value, &slots)?;
+        ext.insert(e.name.into(), value);
+        used.push(e.name);
+    }
     if !ext.is_empty() {
         out["extensions"] = Value::Object(ext);
     }
-    out
+    Ok(out)
+}
+
+fn relink(value: &mut Value, slots: &[usize]) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(index) = map.get_mut("index").filter(|i| i.is_u64()) {
+                let slot = index.as_u64().unwrap_or(0) as usize;
+                *index = json!(*slots.get(slot).ok_or_else(|| format!("an extension names texture slot {slot}, it has {}", slots.len()))?);
+            }
+            map.values_mut().filter(|v| v.is_object() || v.is_array()).try_for_each(|v| relink(v, slots))
+        }
+        Value::Array(items) => items.iter_mut().try_for_each(|v| relink(v, slots)),
+        _ => Ok(()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -331,6 +377,12 @@ pub fn glb_with_parts(
                                      "normal": q_kind, "normal_entries": q_entries}));
         }
         let mut primitive = json!({"attributes": {"POSITION": position, "NORMAL": normal, "TEXCOORD_0": uv}, "indices": indices, "mode": 4});
+        if let Some(m) = lod.material {
+            if m >= materials.len() {
+                return Err(format!("{}: names material {m}, there are {}", lod.name, materials.len()));
+            }
+            primitive["material"] = json!(m);
+        }
         if let Some(skin) = &lod.skin {
             if rig.is_none() || skin.joints.len() != n || skin.weights.len() != n {
                 return Err(format!("{}: skin data without a rig or with the wrong vertex count", lod.name));
@@ -486,7 +538,7 @@ pub fn glb_with_parts(
     }
     let (mut material_values, mut textures, mut images, mut used) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for m in materials {
-        let v = material_json(&mut b, m, &mut textures, &mut images, &mut used);
+        let v = material_json(&mut b, m, &mut textures, &mut images, &mut used)?;
         material_values.push(v);
     }
     used.sort();
@@ -717,6 +769,7 @@ mod tests {
             indices: vec![0, 1, 2, 2, 1, 3],
             morphs: vec![MorphData { positions: morph, normals: vec![[0.0; 3]; 4] }],
             skin: None,
+            material: None,
         }
     }
 
@@ -773,6 +826,54 @@ mod tests {
         assert_eq!(report[0]["morphs"][0]["position"], "sparse");
         let (_, dense) = glb(&[lod(vec![[0.1; 3]; 4])], &["m".into()], Sparse::Auto, json!({}), "test").unwrap();
         assert_eq!(dense[0]["morphs"][0]["position"], "dense");
+    }
+
+    fn material(extension: Option<MaterialExtension>) -> Material {
+        Material {
+            name: "head_skin".into(),
+            base_color: [1.0; 4],
+            base_texture: Some(vec![1, 2, 3]),
+            normal_texture: Some(vec![4, 5]),
+            orm_texture: None,
+            metallic: 0.0,
+            roughness: 1.0,
+            transmission: None,
+            ior: None,
+            blend: false,
+            double_sided: false,
+            extension,
+        }
+    }
+
+    #[test]
+    fn a_material_extension_gets_its_textures_relinked_and_the_lod_its_material() {
+        let value = json!({"version": 1, "live": [{"mask": {"index": 1, "channel": 2}}, {"mask": {"index": 0, "channel": 0}}]});
+        let ext = MaterialExtension { name: "GAZEFORGE_skin", value, textures: vec![vec![9; 5], vec![8; 6]] };
+        let mut head = lod(vec![[0.0; 3]; 4]);
+        head.material = Some(0);
+        let (bytes, _) = glb_with_parts(&[head], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(Some(ext))]).unwrap();
+        let doc = document(&bytes);
+        assert_eq!(doc["meshes"][0]["primitives"][0]["material"], 0);
+        assert_eq!(doc["extensionsUsed"], json!(["GAZEFORGE_skin"]));
+        assert!(doc.get("extensionsRequired").is_none());
+        let e = &doc["materials"][0]["extensions"]["GAZEFORGE_skin"];
+        assert_eq!(e["live"][0]["mask"], json!({"index": 3, "channel": 2}));
+        assert_eq!(e["live"][1]["mask"], json!({"index": 2, "channel": 0}));
+        assert_eq!(doc["textures"].as_array().unwrap().len(), 4);
+        let image = doc["textures"][3]["source"].as_u64().unwrap() as usize;
+        let view = &doc["bufferViews"][doc["images"][image]["bufferView"].as_u64().unwrap() as usize];
+        assert_eq!(view["byteLength"], 6);
+        assert_eq!(doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"], 0);
+        assert_eq!(doc["materials"][0]["normalTexture"]["index"], 1);
+    }
+
+    #[test]
+    fn a_missing_material_or_texture_slot_is_refused() {
+        let mut head = lod(vec![[0.0; 3]; 4]);
+        head.material = Some(1);
+        assert!(glb_with_parts(&[head], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(None)]).is_err());
+        let ext = MaterialExtension { name: "GAZEFORGE_skin", value: json!({"live": [{"mask": {"index": 2}}]}), textures: vec![vec![1]] };
+        assert!(glb_with_parts(&[lod(vec![[0.0; 3]; 4])], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(Some(ext))]).is_err());
     }
 
     #[test]

@@ -1227,6 +1227,7 @@ pub(crate) fn settle_export(ctx: &Ctx, input: &Value, run: &Path, spec_path: &Pa
         macros: None,
         residual: None,
         eyeballs: None,
+        skin: None,
     };
     let (parametric, _) = ch::evaluate(&store, &spec, None).map_err(ApiError::invalid)?;
     let target = read_f64_points(&run.join("fitted_dense.npy"))?;

@@ -1,0 +1,3 @@
+.godot/
+tests/assets/*.import
+tests/assets/*.png
