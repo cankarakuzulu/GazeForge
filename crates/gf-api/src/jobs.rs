@@ -158,6 +158,23 @@ pub fn status(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     wait_for(&dir, input.get("wait_s").and_then(Value::as_f64).unwrap_or(0.0))
 }
 
+pub fn list(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let limit = input.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(&ctx.jobs_dir).into_iter().flatten().flatten() {
+        let dir = entry.path();
+        let Some(record) = std::fs::read_to_string(dir.join("job.json")).ok().and_then(|t| crate::exactjson::record(&t).ok()) else { continue };
+        let record = with_progress(&dir, record);
+        rows.push(json!({"id": record["id"], "command": record["command"], "state": record["state"], "submitted_ms": record["submitted_ms"],
+                         "started_ms": record.get("started_ms"), "finished_ms": record.get("finished_ms"), "progress": record.get("progress"),
+                         "error": record.get("error").and_then(|e| e.get("message")), "ok": record.get("result").and_then(|r| r.get("ok"))}));
+    }
+    rows.sort_by(|a, b| b["submitted_ms"].as_u64().cmp(&a["submitted_ms"].as_u64()));
+    let total = rows.len();
+    rows.truncate(limit);
+    Ok(json!({"jobs_dir": ctx.jobs_dir.display().to_string(), "total": total, "jobs": rows}))
+}
+
 pub fn cancel(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let dir = job_dir(&ctx.jobs_dir, text(input, "id"))?;
     let record = read_record(&dir)?;

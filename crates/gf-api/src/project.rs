@@ -79,7 +79,11 @@ pub fn recovery_path(root: &Path, name: &str) -> PathBuf {
 }
 
 pub fn now_utc() -> String {
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    utc(SystemTime::now())
+}
+
+pub fn utc(time: SystemTime) -> String {
+    let d = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let z = days + 719_468;

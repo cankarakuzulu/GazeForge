@@ -414,8 +414,13 @@ handler and return the same envelope, byte for byte (`crates/gf-cli/tests/confor
 | conflict | 7 | 409 |
 
 Commands: `commands.list`, `store.list`, `catalog.list`, `character.create`, `character.validate`, `character.evaluate`,
-`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, and `debug.slow` (a deliberately slow job that exists
-to prove cancel). `commands.list` returns every schema; the argv commands above are unchanged.
+`character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, `jobs.list`, and `debug.slow` (a deliberately slow job
+that exists to prove cancel), among others; `commands.list` returns every command with its schema; the argv commands above
+are unchanged. `store.list` gives each pack, catalog, game base and eye rig with the time it was imported (an eye rig of
+an older format is listed as not usable rather than failing the listing); `jobs.list` gives the jobs folder's jobs, newest
+first, with their state, times and progress. The browser designer's Store and Jobs panels and the studio's Tasks window
+(Jobs, Store) are built on them: what the store holds by date, never a pasted sha256, and every job with its progress and
+a cancel button.
 
 **The argv commands in the registry.** Every argv command has a registry twin: `store.import_pack`, `store.import_catalog`,
 `store.import_game`, `store.import_eyerig`, `base.build`, `export.obj`, `export.glb`, `lids.collide`, `gates.shell`,

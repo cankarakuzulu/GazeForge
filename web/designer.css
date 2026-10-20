@@ -192,3 +192,11 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .wz-images img { width: 100%; border: 1px solid var(--line); border-radius: 4px; display: block; }
 .wz-images figcaption { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .wz-dev { display: block; color: var(--muted); margin-bottom: 10px; }
+.job { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.job-head { display: flex; gap: 8px; align-items: center; }
+.job-head b { flex: 1; overflow-wrap: anywhere; }
+.job-state { color: var(--muted); }
+.job.st-done .job-state { color: var(--ok); }
+.job.st-failed .job-state, .job.st-cancelled .job-state { color: var(--warn); }
+.store-table { width: 100%; border-collapse: collapse; margin: 2px 0 8px; font-size: 12px; }
+.store-table th, .store-table td { text-align: left; padding: 1px 4px; border-bottom: 1px solid var(--line); }

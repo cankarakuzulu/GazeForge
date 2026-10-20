@@ -241,6 +241,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: jobs::cancel,
     },
     CommandDef {
+        name: "jobs.list",
+        kind: Kind::Query,
+        summary: "The jobs in the jobs folder, newest first: id, command, state, submitted / started / finished times (ms since the epoch), progress while it runs, and the error or ok of a finished one.",
+        limits: "Lists one jobs folder (GAZEFORGE_JOBS, else <temp>/gazeforge-jobs); jobs are never deleted by the server.",
+        input: jobs_list_input,
+        output: jobs_list_output,
+        run: jobs::list,
+    },
+    CommandDef {
         name: "debug.slow",
         kind: Kind::Job,
         summary: "A deliberately slow job: sleeps, with child processes that also sleep. It exists to prove cancel.",
@@ -775,6 +784,14 @@ fn status_input() -> Value {
     obj(json!({"id": {"type": "string", "minLength": 1}, "wait_s": {"type": "number", "minimum": 0, "maximum": 600}}), &["id"])
 }
 
+fn jobs_list_input() -> Value {
+    obj(json!({"limit": {"type": "integer", "minimum": 1, "description": "at most this many, newest first (default 50)"}}), &[])
+}
+
+fn jobs_list_output() -> Value {
+    shape(json!({"jobs_dir": {"type": "string"}, "total": {"type": "integer"}, "jobs": {"type": "array"}}))
+}
+
 fn job_output() -> Value {
     shape(json!({"id": {"type": "string"}, "command": {"type": "string"}, "state": {"type": "string"},
                  "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]},
@@ -830,21 +847,33 @@ fn manifests<T: serde::de::DeserializeOwned>(store: &Store, kind: &str) -> Resul
         .collect()
 }
 
+fn imported(store: &Store, kind: &str, reference: &str) -> Value {
+    let path = store.root.join(kind).join(format!("{}.json", reference.trim_start_matches("sha256:")));
+    std::fs::metadata(path).and_then(|m| m.modified()).map_or(Value::Null, |t| json!(project::utc(t)))
+}
+
 fn store_list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let store = open_store(input)?;
     let packs: Vec<Value> = manifests::<PackManifest>(&store, "packs")?
         .into_iter()
-        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some()}))
+        .map(|(r, m)| json!({"pack": r, "vertices": m.vertices, "faces": m.faces, "macro_base": m.macro_base.is_some(), "imported": imported(&store, "packs", &r)}))
         .collect();
     let catalogs: Vec<Value> = manifests::<CatalogManifest>(&store, "catalogs")?
         .into_iter()
-        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len()}))
+        .map(|(r, m)| json!({"catalog": r, "pack": m.pack, "targets": m.targets.len(), "imported": imported(&store, "catalogs", &r)}))
         .collect();
     let games: Vec<Value> = manifests::<GameManifest>(&store, "game")?
         .into_iter()
-        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len()}))
+        .map(|(r, m)| json!({"game": r, "pack": m.pack, "vertices": m.vertices, "triangles": m.triangles, "lods": m.lods.len(), "imported": imported(&store, "game", &r)}))
         .collect();
-    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games}))
+    let eyerigs: Vec<Value> = match store.root.join("eyerigs").is_dir() {
+        true => manifests::<Value>(&store, "eyerigs")?
+            .into_iter()
+            .map(|(r, m)| json!({"eyerig": r, "catalog": m["catalog"], "format": m["format"], "usable": m["format"] == gf_core::eyerig::FORMAT, "imported": imported(&store, "eyerigs", &r)}))
+            .collect(),
+        false => Vec::new(),
+    };
+    Ok(json!({"packs": packs, "catalogs": catalogs, "game_bases": games, "eyerigs": eyerigs}))
 }
 
 fn load_catalog(store: &Store, reference: &str) -> Result<CatalogManifest, ApiError> {

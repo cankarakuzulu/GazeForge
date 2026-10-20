@@ -25,6 +25,8 @@ pub struct Wizards {
     images: BTreeMap<String, Option<egui::TextureHandle>>,
     pub open_spec: Option<(String, String)>,
     developer: bool,
+    jobs_cache: Option<(Instant, Value)>,
+    store_cache: Option<(String, Value)>,
 }
 
 fn load_png(path: &str) -> Option<egui::ColorImage> {
@@ -302,6 +304,91 @@ impl Wizards {
         {
             self.error = Some(e);
         }
+        ui.separator();
+        egui::CollapsingHeader::new("Jobs").id_salt("wz_jobs").show(ui, |ui| self.jobs_ui(ui));
+        egui::CollapsingHeader::new("Store").id_salt("wz_store").show(ui, |ui| self.store_ui(ui, world));
+    }
+
+    fn jobs_ui(&mut self, ui: &mut egui::Ui) {
+        if self.jobs_cache.as_ref().is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(1)) {
+            match call("jobs.list", json!({"limit": 20})) {
+                Ok(r) => self.jobs_cache = Some((Instant::now(), r)),
+                Err(e) => {
+                    ui.label(e);
+                    return;
+                }
+            }
+        }
+        let listed = self.jobs_cache.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+        let jobs = listed["jobs"].as_array().cloned().unwrap_or_default();
+        if jobs.is_empty() {
+            ui.label(egui::RichText::new(format!("no jobs in {}", shown(&listed["jobs_dir"]))).weak());
+        }
+        let live = jobs.iter().any(|j| matches!(j["state"].as_str(), Some("running") | Some("queued")));
+        egui::Grid::new("wz_jobs_grid").num_columns(4).striped(true).show(ui, |ui| {
+            for j in &jobs {
+                ui.label(shown(&j["command"]));
+                ui.label(shown(&j["state"]));
+                let p = &j["progress"];
+                match (p["done"].as_f64(), p["total"].as_f64()) {
+                    (Some(d), Some(t)) if t > 0.0 && j["state"] == "running" => {
+                        ui.add(egui::ProgressBar::new((d / t) as f32).desired_width(120.0).text(shown(&p["stage"])));
+                    }
+                    _ => {
+                        ui.label(egui::RichText::new(shown(&j["error"])).weak());
+                    }
+                }
+                if matches!(j["state"].as_str(), Some("running") | Some("queued")) && ui.small_button("cancel").clicked()
+                    && let Err(e) = call("jobs.cancel", json!({"id": j["id"]}))
+                {
+                    self.error = Some(e);
+                }
+                ui.end_row();
+            }
+        });
+        if live {
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
+    }
+
+    fn store_ui(&mut self, ui: &mut egui::Ui, world: &crate::world::World) {
+        let Some(s) = &world.session else {
+            ui.label("open a store first");
+            return;
+        };
+        let refresh = ui.small_button("refresh").clicked();
+        if refresh || self.store_cache.as_ref().is_none_or(|(path, _)| *path != s.store) {
+            match call("store.list", json!({"store": s.store})) {
+                Ok(r) => self.store_cache = Some((s.store.clone(), r)),
+                Err(e) => {
+                    ui.label(e);
+                    return;
+                }
+            }
+        }
+        let listed = self.store_cache.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+        let short = |v: &Value| shown(v).trim_start_matches("sha256:").chars().take(12).collect::<String>();
+        let day = |v: &Value| shown(v).chars().take(16).collect::<String>().replace('T', " ");
+        for (title, key, id, used, cols) in [
+            ("Dense packs", "packs", "pack", s.pack.clone(), vec!["vertices", "macro_base"]),
+            ("Target catalogs", "catalogs", "catalog", s.catalog.clone(), vec!["targets"]),
+            ("Game bases", "game_bases", "game", s.game.clone(), vec!["vertices", "triangles", "lods"]),
+            ("Eye rigs", "eyerigs", "eyerig", String::new(), vec!["format"]),
+        ] {
+            ui.strong(title);
+            egui::Grid::new(("wz_store", key)).num_columns(cols.len() + 2).striped(true).show(ui, |ui| {
+                for item in listed[key].as_array().cloned().unwrap_or_default() {
+                    ui.label(day(&item["imported"]));
+                    for c in &cols {
+                        ui.label(shown(&item[*c]));
+                    }
+                    let mark = if item[id] == used.as_str() { " ●" } else { "" };
+                    ui.label(format!("{}{mark}", short(&item[id]))).on_hover_text(shown(&item[id]));
+                    ui.end_row();
+                }
+            });
+        }
+        ui.label(egui::RichText::new("● in use; the store is content-addressed and shared, so nothing is deleted here").weak());
     }
 
     fn run_ui(&mut self, ui: &mut egui::Ui) {
