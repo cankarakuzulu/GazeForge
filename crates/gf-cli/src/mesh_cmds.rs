@@ -623,6 +623,53 @@ fn delta(a: Point, b: Point) -> [f32; 3] {
     gm::to_gltf([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
 }
 
+fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Material>, String> {
+    let l = m.shape.layout()?;
+    let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
+    let [iw, ih] = gf_api::eyes::IRIS_SIZE;
+    let [sw, sh] = gf_api::eyes::SCLERA_SIZE;
+    let iris = gf_io::png::rgba(iw, ih, &gf_core::eye_texture::iris_rgba(&m.iris, iw, ih))?;
+    let sclera = gf_io::png::rgba(sw, sh, &gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, sw, sh, m.iris.seed))?;
+    let plain = |name: &str, colour: [f32; 4], texture: Option<Vec<u8>>, roughness: f32| gltf::Material {
+        name: format!("{}_{name}", m.id),
+        base_color: colour,
+        base_texture: texture,
+        metallic: 0.0,
+        roughness,
+        transmission: None,
+        ior: None,
+        blend: false,
+        double_sided: false,
+    };
+    Ok(vec![
+        plain("sclera", [1.0; 4], Some(sclera), 0.35),
+        gltf::Material { transmission: Some(1.0), ior: Some(m.cornea.ior), blend: true, ..plain("cornea", [1.0, 1.0, 1.0, 0.08], None, m.cornea.roughness) },
+        plain("iris", [1.0; 4], Some(iris), 0.55),
+        plain("pupil", [0.01, 0.01, 0.01, 1.0], None, 0.9),
+    ])
+}
+
+fn eye_part_mesh(eye: &lids::Eye, name: &str, joint: Option<usize>, origin: Point, vertices: &[Point]) -> gltf::PartMesh {
+    let parts = eye
+        .parts
+        .iter()
+        .filter_map(|p| {
+            let material = gf_geom::eyeball::PARTS.iter().position(|n| *n == p.name)?;
+            let indices: Vec<u32> = eye.triangles.iter().skip(p.first_triangle).take(p.triangles).flatten().copied().collect();
+            Some((indices, material))
+        })
+        .collect();
+    gltf::PartMesh {
+        name: name.into(),
+        positions: vertices.iter().map(|p| gm::to_gltf([p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]])).collect(),
+        normals: eye.vertex_normals().iter().map(|n| gm::to_gltf(*n)).collect(),
+        uvs: if eye.uvs.len() == vertices.len() { eye.uvs.iter().map(|u| [u[0] as f32, u[1] as f32]).collect() } else { vec![[0.0, 0.0]; vertices.len()] },
+        parts,
+        joint,
+        translation: [0.0; 3],
+    }
+}
+
 pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let store = Store::open(Path::new(need(opts, "store")?))?;
     let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
@@ -656,6 +703,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     };
     let moved_eyes = placed_eyes.as_ref().map(|(e, _)| e.clone());
     let eyes_report = placed_eyes.and_then(|(_, r)| r);
+    let eye_model = spec.eyeballs.as_ref().and_then(|e| e.model.as_ref()).and_then(|m| gf_core::eye_inventory::model(&m.id));
+    let mut eye_parts: Vec<gltf::PartMesh> = Vec::new();
     let placement = placer_with(opts, version, moved_eyes.clone())?;
     let (_, dense) = store.load_pack(&spec.base.pack)?;
     let catalog = store.load_catalog(&spec.base.catalog)?;
@@ -947,8 +996,14 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let hinge_now = hinge_now[0];
         let (left, right) = if eyes[0].centre[0] >= eyes[1].centre[0] { (&eyes[0], &eyes[1]) } else { (&eyes[1], &eyes[0]) };
         let joints = rig::joints(neck, hinge_now, left.centre, right.centre);
+        if eye_model.is_some() {
+            for (name, joint, eye) in [("Eye_L", 3usize, left), ("Eye_R", 4usize, right)] {
+                eye_parts.push(eye_part_mesh(eye, name, Some(joint), eye.centre, &eye.vertices));
+            }
+        }
         let attachments = [("Eye_L", 3usize, left), ("Eye_R", 4usize, right)]
             .iter()
+            .filter(|_| eye_model.is_none())
             .map(|&(name, joint, eye)| {
                 if spec.eyeballs.is_some() {
                     let c = eye.centre;
@@ -1254,6 +1309,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             if let Some((pivot, s)) = head_scale {
                 gf_core::body::scale_about(&mut vertices, pivot, s);
             }
+            if eye_model.is_some() {
+                eye_parts.push(eye_part_mesh(eye, if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }, None, [0.0; 3], &vertices));
+                continue;
+            }
             body_lods.push(Lod {
                 name: if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }.into(),
                 positions: vertices.iter().map(|p| gm::to_gltf(*p)).collect(),
@@ -1265,7 +1324,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             });
         }
     }
-    let (bytes, report) = gltf::glb_full(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r))?;
+    let eye_mats = match &eye_model {
+        Some(m) if !eye_parts.is_empty() => eye_materials(m)?,
+        _ => Vec::new(),
+    };
+    let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &eye_mats)?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

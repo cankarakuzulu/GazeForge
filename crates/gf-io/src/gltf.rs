@@ -209,6 +209,28 @@ pub fn glb_rigged(lods: &[Lod], morph_names: &[String], mode: Sparse, extras: Va
     glb_full(lods, &[], morph_names, mode, extras, generator, rig)
 }
 
+pub struct Material {
+    pub name: String,
+    pub base_color: [f32; 4],
+    pub base_texture: Option<Vec<u8>>,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub transmission: Option<f32>,
+    pub ior: Option<f32>,
+    pub blend: bool,
+    pub double_sided: bool,
+}
+
+pub struct PartMesh {
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub parts: Vec<(Vec<u32>, usize)>,
+    pub joint: Option<usize>,
+    pub translation: [f32; 3],
+}
+
 pub fn glb_full(
     lods: &[Lod],
     extra: &[Lod],
@@ -218,6 +240,63 @@ pub fn glb_full(
     generator: &str,
     rig: Option<&Rig>,
 ) -> Result<(Vec<u8>, Value), String> {
+    glb_with_parts(lods, extra, morph_names, mode, extras, generator, rig, &[], &[])
+}
+
+fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, images: &mut Vec<Value>, used: &mut Vec<&'static str>) -> Value {
+    let mut pbr = json!({"baseColorFactor": m.base_color, "metallicFactor": m.metallic, "roughnessFactor": m.roughness});
+    if let Some(png) = &m.base_texture {
+        let view = b.view(png, None);
+        images.push(json!({"bufferView": view, "mimeType": "image/png", "name": m.name}));
+        textures.push(json!({"source": images.len() - 1, "sampler": 0}));
+        pbr["baseColorTexture"] = json!({"index": textures.len() - 1});
+    }
+    let mut out = json!({"name": m.name, "pbrMetallicRoughness": pbr});
+    if m.double_sided {
+        out["doubleSided"] = json!(true);
+    }
+    if m.blend {
+        out["alphaMode"] = json!("BLEND");
+    }
+    let mut ext = serde_json::Map::new();
+    if let Some(t) = m.transmission {
+        ext.insert("KHR_materials_transmission".into(), json!({"transmissionFactor": t}));
+        used.push("KHR_materials_transmission");
+    }
+    if let Some(i) = m.ior {
+        ext.insert("KHR_materials_ior".into(), json!({"ior": i}));
+        used.push("KHR_materials_ior");
+    }
+    if !ext.is_empty() {
+        out["extensions"] = Value::Object(ext);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn glb_with_parts(
+    lods: &[Lod],
+    extra: &[Lod],
+    morph_names: &[String],
+    mode: Sparse,
+    extras: Value,
+    generator: &str,
+    rig: Option<&Rig>,
+    part_meshes: &[PartMesh],
+    materials: &[Material],
+) -> Result<(Vec<u8>, Value), String> {
+    for p in part_meshes {
+        let n = p.positions.len();
+        if p.normals.len() != n || p.uvs.len() != n {
+            return Err(format!("{}: attribute counts disagree", p.name));
+        }
+        if p.parts.iter().any(|(idx, mat)| *mat >= materials.len() || idx.len() % 3 != 0 || idx.iter().any(|&i| i as usize >= n)) {
+            return Err(format!("{}: a part names a missing material or indexes past its vertices", p.name));
+        }
+        if p.joint.is_some_and(|j| rig.is_none_or(|r| j >= r.names.len())) {
+            return Err(format!("{}: attached to a joint the rig does not have", p.name));
+        }
+    }
     let mut b = Builder::default();
     let mut meshes = Vec::new();
     let mut nodes = Vec::new();
@@ -289,6 +368,7 @@ pub fn glb_full(
     let mut roots: Vec<usize> = (0..nodes.len()).collect();
     let mut skins = Vec::new();
     let mut animations: Vec<Value> = Vec::new();
+    let part_first = nodes.len() + rig.map_or(0, |r| r.names.len() + r.attachments.len());
     if let Some(rig) = rig {
         let first = nodes.len();
         let local = rig.local();
@@ -303,6 +383,11 @@ pub fn glb_full(
         let attachment_first = first + rig.names.len();
         for (a, attachment) in rig.attachments.iter().enumerate() {
             children.get_mut(attachment.joint).ok_or("an attachment names a joint the rig does not have")?.push(attachment_first + a);
+        }
+        for (k, p) in part_meshes.iter().enumerate() {
+            if let Some(j) = p.joint {
+                children[j].push(part_first + k);
+            }
         }
         for j in 0..rig.names.len() {
             let mut node = json!({"name": rig.names[j], "translation": local[j]});
@@ -382,6 +467,30 @@ pub fn glb_full(
             }
         }
     }
+    for (k, p) in part_meshes.iter().enumerate() {
+        let short = p.positions.len() <= u16::MAX as usize;
+        let position = b.floats(&p.positions, Some(ARRAY_BUFFER), true);
+        let normal = b.floats(&p.normals, Some(ARRAY_BUFFER), false);
+        let uv = b.floats(&p.uvs, Some(ARRAY_BUFFER), false);
+        let primitives: Vec<Value> = p
+            .parts
+            .iter()
+            .map(|(idx, mat)| json!({"attributes": {"POSITION": position, "NORMAL": normal, "TEXCOORD_0": uv}, "indices": b.indices(idx, short), "material": mat, "mode": 4}))
+            .collect();
+        meshes.push(json!({"name": p.name, "primitives": primitives}));
+        nodes.push(json!({"name": p.name, "mesh": meshes.len() - 1, "translation": p.translation}));
+        if p.joint.is_none() {
+            roots.push(part_first + k);
+        }
+        report.push(json!({"node": p.name, "vertices": p.positions.len(), "primitives": p.parts.len(), "joint": p.joint}));
+    }
+    let (mut material_values, mut textures, mut images, mut used) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for m in materials {
+        let v = material_json(&mut b, m, &mut textures, &mut images, &mut used);
+        material_values.push(v);
+    }
+    used.sort();
+    used.dedup();
     while b.bin.len() % 4 != 0 {
         b.bin.push(0);
     }
@@ -401,6 +510,17 @@ pub fn glb_full(
     }
     if !animations.is_empty() {
         document["animations"] = json!(animations);
+    }
+    if !material_values.is_empty() {
+        document["materials"] = json!(material_values);
+    }
+    if !images.is_empty() {
+        document["images"] = json!(images);
+        document["textures"] = json!(textures);
+        document["samplers"] = json!([{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 33071}]);
+    }
+    if !used.is_empty() {
+        document["extensionsUsed"] = json!(used);
     }
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
     while text.len() % 4 != 0 {

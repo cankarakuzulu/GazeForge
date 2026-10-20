@@ -18,6 +18,8 @@ struct EyeEntry {
     triangles: Vec<[u32; 3]>,
     #[serde(default)]
     parts: Vec<crate::eyeball::Part>,
+    #[serde(default)]
+    uvs: Vec<[f64; 2]>,
 }
 
 const SURFACE_PARTS: [&str; 2] = ["sclera", "cornea"];
@@ -48,6 +50,8 @@ pub struct Eye {
     table: Vec<f64>,
     pub vertices: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,
+    pub uvs: Vec<[f64; 2]>,
+    pub parts: Vec<crate::eyeball::Part>,
 }
 
 fn unit(v: [f64; 3]) -> [f64; 3] {
@@ -103,7 +107,7 @@ impl Eye {
         let helper = if gaze[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
         let side = unit(cross(gaze, helper));
         let up = cross(gaze, side);
-        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone() };
+        let mut eye = Eye { centre: entry.centre, radius: entry.radius, gaze, side, up, table: Vec::new(), vertices: entry.vertices.clone(), triangles: entry.triangles.clone(), uvs: entry.uvs.clone(), parts: entry.parts.clone() };
         let front: Vec<[u32; 3]> = entry.surface().into_iter().filter(|t| t.iter().any(|&i| dot(sub(entry.vertices[i as usize], entry.centre), gaze) >= 0.0)).collect();
         let mut table = vec![0.0; (POLAR_STEPS + 1) * AZIMUTH_STEPS];
         for i in 0..=POLAR_STEPS {
@@ -159,6 +163,8 @@ impl Eye {
             table: self.table.iter().map(|t| t * scale).collect(),
             vertices: self.vertices.iter().map(|&p| place(p)).collect(),
             triangles: self.triangles.clone(),
+            uvs: self.uvs.clone(),
+            parts: self.parts.clone(),
         }
     }
 
@@ -190,7 +196,7 @@ impl Eye {
 }
 
 pub fn eye_from_mesh(centre: [f64; 3], radius: f64, gaze: [f64; 3], mesh: &crate::eyeball::EyeballMesh) -> Result<Eye, String> {
-    Eye::new(&EyeEntry { centre, radius, gaze, vertices: mesh.positions.clone(), triangles: mesh.triangles.clone(), parts: mesh.parts.clone() })
+    Eye::new(&EyeEntry { centre, radius, gaze, vertices: mesh.positions.clone(), triangles: mesh.triangles.clone(), parts: mesh.parts.clone(), uvs: mesh.uvs.clone() })
 }
 
 pub fn eyes_from_json(text: &str) -> Result<Vec<Eye>, String> {
@@ -662,7 +668,7 @@ mod tests {
                 triangles.push([ring(r, s), ring(r + 1, s + 1), ring(r, s + 1)]);
             }
         }
-        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles, parts: Vec::new() }
+        EyeEntry { centre: [0.0; 3], radius, gaze: [0.0, 0.0, 1.0], vertices, triangles, parts: Vec::new(), uvs: Vec::new() }
     }
 
     #[test]
@@ -712,6 +718,7 @@ mod tests {
             vertices: entry.vertices.iter().map(|&p| place(p)).collect(),
             triangles: entry.triangles.clone(),
             parts: Vec::new(),
+            uvs: Vec::new(),
         })
         .unwrap();
         assert_eq!(moved.centre, place(entry.centre));

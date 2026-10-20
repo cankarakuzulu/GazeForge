@@ -175,7 +175,11 @@ eye rig's places instead of reading an eyes file (a model wins over `--eyes`), s
 the iris (1024 x 256: inner and outer colour fields meeting at a wavy collarette, radial fibres, crypts, a pupillary
 ruff, a limbal ring, and the sector of a sectoral heterochromia) and the sclera (512 x 256: tint and veins, strongest at
 the limbus), laid out on the UVs of the eyeball's iris and sclera parts. They are seeded per model, so they are the same
-on every run.
+on every run. `export-glb` of a character with an eye model writes each eye as one mesh with four primitives and four
+materials: the sclera and the iris textured (the PNGs embedded in the glb), a near-black pupil, and the cornea with
+`KHR_materials_transmission` and `KHR_materials_ior` (the model's index of refraction, 1.376) and alpha blending at a low
+base alpha, so a viewer without transmission still shows the iris through it. Without a rig the eyes are nodes
+`Eye_L` / `Eye_R`; with `--rig head` they are children of the eye joints. Eyes from an eyes file export as before.
 `designer.sliders` returns the catalog's eye rig as `eyerig` and gives a new character `follow: makehuman-helper/1`;
 `designer.settle` (and `export-glb` with `--eyes`) then report each eye's placement under `eyes`.
 

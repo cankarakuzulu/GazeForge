@@ -128,14 +128,28 @@ impl EyeballShape {
                 let phi = t * tau;
                 let d = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
                 ([d[0] * l.cornea_radius, d[1] * l.cornea_radius, l.cornea_centre_z + d[2] * l.cornea_radius], d, [0.5 + 0.5 * d[0] / cornea_phi.sin(), 0.5 + 0.5 * d[1] / cornea_phi.sin()])
-            }, true)
+            }, true);
+            let base = m.positions.len() as u32;
+            m.positions.push([0.0, 0.0, l.limbus_z]);
+            m.normals.push([0.0, 0.0, -1.0]);
+            m.uvs.push([0.5, 0.5]);
+            for j in 0..n {
+                let phi = j as f64 / n as f64 * tau;
+                m.positions.push([l.limbus_radius * phi.cos(), l.limbus_radius * phi.sin(), l.limbus_z]);
+                m.normals.push([0.0, 0.0, -1.0]);
+                m.uvs.push([0.5 + 0.5 * phi.cos(), 0.5 + 0.5 * phi.sin()]);
+            }
+            for j in 0..n {
+                let (a, b) = (base + 1 + j as u32, base + 1 + ((j + 1) % n) as u32);
+                m.triangles.push([base, b, a]);
+            }
         });
         part(&mut m, PARTS[2], &mut |m| {
             grid(m, (rings / 4).max(2), &|s, t| {
                 let r = l.pupil_radius + s * (l.limbus_radius - l.pupil_radius);
                 let phi = t * tau;
                 ([r * phi.cos(), r * phi.sin(), l.iris_z], [0.0, 0.0, 1.0], [t, s])
-            }, false)
+            }, true)
         });
         part(&mut m, PARTS[3], &mut |m| {
             let base = m.positions.len() as u32;
@@ -216,18 +230,31 @@ mod tests {
         for p in &sclera_first {
             assert!((p[2] - l.limbus_z).abs() < 1e-12 && ((p[0] * p[0] + p[1] * p[1]).sqrt() - l.limbus_radius).abs() < 1e-12);
         }
-        for (k, part) in m.parts.iter().enumerate().take(2) {
+        let mut chamber = 0;
+        for (k, part) in m.parts.iter().enumerate() {
             for t in &m.triangles[part.first_triangle..part.first_triangle + part.triangles] {
                 let [a, b, c] = t.map(|i| m.positions[i as usize]);
                 let n = [(b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])];
                 if len(n) < 1e-20 {
                     continue;
                 }
-                let centre = if k == 0 { [0.0; 3] } else { [0.0, 0.0, l.cornea_centre_z] };
-                let mid = [0, 1, 2].map(|i| (a[i] + b[i] + c[i]) / 3.0 - centre[i]);
-                assert!(n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] > 0.0, "{} triangle faces inward", PARTS[k]);
+                let mid = [0, 1, 2].map(|i| (a[i] + b[i] + c[i]) / 3.0);
+                let flat_at_limbus = (mid[2] - l.limbus_z).abs() < 1e-12;
+                let want = match (k, flat_at_limbus) {
+                    (0, _) => mid,
+                    (1, true) => {
+                        chamber += 1;
+                        [0.0, 0.0, -1.0]
+                    }
+                    (1, false) => [mid[0], mid[1], mid[2] - l.cornea_centre_z],
+                    _ => [0.0, 0.0, 1.0],
+                };
+                assert!(n[0] * want[0] + n[1] * want[1] + n[2] * want[2] > 0.0, "a {} triangle faces the wrong way", PARTS[k]);
             }
         }
+        assert!(chamber > 0, "the cornea closes the anterior chamber with a disc at the limbus plane");
+        let rim = |z: f64| m.positions.iter().filter(|p| (p[2] - z).abs() < 1e-12 && ((p[0] * p[0] + p[1] * p[1]).sqrt() - l.limbus_radius).abs() < 1e-12).count();
+        assert!(rim(l.limbus_z) >= 3 * s.segments, "sclera rim, cornea rim and chamber rim meet at the limbus");
         let apex = m.positions.iter().map(|p| p[2]).fold(f64::MIN, f64::max);
         assert!((apex - l.apex_z).abs() < 1e-12);
     }
