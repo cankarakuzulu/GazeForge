@@ -1117,6 +1117,7 @@ pub fn from_photos(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let out = f();
         let seconds = t0.elapsed().as_secs_f64();
         stages.push(json!({"stage": name, "seconds": seconds, "ok": out.is_ok()}));
+        crate::jobs::progress("stages", stages.len() as u64, 8, &format!("finished {name}"));
         let _ = log(stages);
         out.map_err(|e| {
             let mut details = if e.details.is_object() { e.details.clone() } else { json!({"detail": e.details.clone()}) };

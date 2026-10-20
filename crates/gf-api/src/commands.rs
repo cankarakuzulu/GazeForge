@@ -11,6 +11,7 @@ use gf_io::store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
+use crate::tasks::api;
 use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry};
 
 pub static REGISTRY: &[CommandDef] = &[
@@ -437,6 +438,150 @@ pub static REGISTRY: &[CommandDef] = &[
         output: anim::output,
         run: anim::from_csv,
     },
+    CommandDef {
+        name: "store.import_pack",
+        kind: Kind::Job,
+        summary: "Import a dense base directory into a store as a pack (argv `store import-pack`); optional macro base sliders and pin height.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. The pack is content-addressed: the same directory gives the same reference.",
+        input: api::import_pack_input,
+        output: api::argv_output,
+        run: api::import_pack,
+    },
+    CommandDef {
+        name: "store.import_catalog",
+        kind: Kind::Job,
+        summary: "Import a directory of sparse targets on a pack's dense topology into a store as a catalog (argv `store import-catalog`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::import_catalog_input,
+        output: api::argv_output,
+        run: api::import_catalog,
+    },
+    CommandDef {
+        name: "store.import_game",
+        kind: Kind::Job,
+        summary: "Import a game base directory (made by base.build) for a pack into a store (argv `store import-game`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::import_game_input,
+        output: api::argv_output,
+        run: api::import_game,
+    },
+    CommandDef {
+        name: "store.import_eyerig",
+        kind: Kind::Job,
+        summary: "Import MakeHuman's helper eyeballs and their per-target deltas for a catalog into a store as an eye rig (argv `store import-eyerig`), so eyeballs can follow the character.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. A registration worse than 2 mm (median) is refused.",
+        input: api::import_eyerig_input,
+        output: api::argv_output,
+        run: api::import_eyerig,
+    },
+    CommandDef {
+        name: "base.build",
+        kind: Kind::Job,
+        summary: "Build a game base from a dense base: decimate to a target vertex count with angle limits, carry shapes, and optional nested levels of detail (argv `build-base`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. Takes minutes at the full dense size.",
+        input: api::build_input,
+        output: api::argv_output,
+        run: api::build,
+    },
+    CommandDef {
+        name: "export.obj",
+        kind: Kind::Job,
+        summary: "Place dense positions on a game base with a placement and write the game mesh as an .obj (argv `export-obj`).",
+        limits: "Fields are the argv options with _ for -; a field the chosen placement does not read is refused. The result is the argv command's JSON.",
+        input: api::obj_input,
+        output: api::argv_output,
+        run: api::export_obj,
+    },
+    CommandDef {
+        name: "export.glb",
+        kind: Kind::Job,
+        summary: "Export a character spec as a glb: the game mesh with its levels of detail, morph targets, eyes, and optionally the face rig, eyelid fitting and a body (argv `export-glb`).",
+        limits: "Fields are the argv options with _ for -; a field the spec's placement does not read is refused, and the lids_* fields need lids auto. The result is the argv command's JSON.",
+        input: api::glb_input,
+        output: api::argv_output,
+        run: api::export_glb,
+    },
+    CommandDef {
+        name: "lids.collide",
+        kind: Kind::Job,
+        summary: "Push dense eyelid vertices out of the eyeballs (argv `collide-lids`); the area inside the eyes before and after.",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::collide_input,
+        output: api::argv_output,
+        run: api::collide,
+    },
+    CommandDef {
+        name: "macro.weights",
+        kind: Kind::Query,
+        summary: "The target weights a set of macro sliders produces under a macro definition (argv `macro weights`).",
+        limits: "Fields are the argv options with _ for -; sliders may be a JSON object. The result is the argv command's JSON.",
+        input: api::weights_input,
+        output: api::argv_output,
+        run: api::weights,
+    },
+    CommandDef {
+        name: "macro.labels",
+        kind: Kind::Query,
+        summary: "Label slider values with the macro definition's key values for one slider and write the table as .npy (argv `macro labels`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON.",
+        input: api::labels_input,
+        output: api::argv_output,
+        run: api::labels,
+    },
+    CommandDef {
+        name: "gates.shell",
+        kind: Kind::Job,
+        summary: "Shell gates between two dense surfaces: folds, inner surfaces and roughness (argv `gates shell`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::shell_input,
+        output: api::argv_output,
+        run: api::shell,
+    },
+    CommandDef {
+        name: "gates.game",
+        kind: Kind::Job,
+        summary: "Game mesh gates on an exported .obj: triangle quality, UV health, census and seams (argv `gates game`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::game_input,
+        output: api::argv_output,
+        run: api::game,
+    },
+    CommandDef {
+        name: "gates.path",
+        kind: Kind::Job,
+        summary: "Continuity gate: walk a dense change in steps through a placement and refuse forward jumps of game vertices (argv `gates path`).",
+        limits: "Fields are the argv options with _ for -; plant adds a deliberate jump to prove the gate. A failing gate is the error gate_failed with the full report in details.",
+        input: api::path_input,
+        output: api::argv_output,
+        run: api::path,
+    },
+    CommandDef {
+        name: "gates.facing",
+        kind: Kind::Job,
+        summary: "Facing gate on a glb: no triangle faces against its vertex normals in the neutral and, with states all, in each morph state (argv `gates facing`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::facing_input,
+        output: api::argv_output,
+        run: api::facing,
+    },
+    CommandDef {
+        name: "gates.lids",
+        kind: Kind::Job,
+        summary: "Eyelid gate on a glb: no vertex inside an eyeball beyond the tolerance in the neutral and, with states all (the default), in each morph state (argv `gates lids`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::lids_input,
+        output: api::argv_output,
+        run: api::lids,
+    },
+    CommandDef {
+        name: "gates.rig",
+        kind: Kind::Job,
+        summary: "Face rig gate on a glb: the skin binds exactly at rest with sound weights, and each joint pose folds no more triangles (and, with eyes, puts no more lid vertices inside an eye) than the blend shape of the same name (argv `gates rig`).",
+        limits: "Fields are the argv options with _ for -. A failing gate is the error gate_failed with the full report in details.",
+        input: api::rig_input,
+        output: api::argv_output,
+        run: api::rig,
+    },
 ];
 
 pub fn obj(properties: Value, required: &[&str]) -> Value {
@@ -569,7 +714,8 @@ fn status_input() -> Value {
 
 fn job_output() -> Value {
     shape(json!({"id": {"type": "string"}, "command": {"type": "string"}, "state": {"type": "string"},
-                 "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]}}))
+                 "result": {"type": "object"}, "worker_processes_left": {"type": ["integer", "null"]},
+                 "progress": {"type": "object", "description": "the latest stage, done, total and message the command reported; absent until it reports"}}))
 }
 
 fn slow_input() -> Value {

@@ -171,7 +171,7 @@ fn route(ctx: &Ctx, request: &Request) -> Value {
             let input = if request.body.iter().all(u8::is_ascii_whitespace) {
                 Ok(json!({}))
             } else {
-                serde_json::from_slice::<Value>(&request.body).map_err(|e| ApiError::invalid(format!("the body is not JSON: {e}")))
+                std::str::from_utf8(&request.body).map_err(|e| e.to_string()).and_then(gf_api::exactjson::text).map_err(|e| ApiError::invalid(format!("the body is not JSON: {e}")))
             };
             match input {
                 Ok(input) => gf_api::call(ctx, name, &input),

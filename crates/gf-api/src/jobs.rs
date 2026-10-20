@@ -2,6 +2,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -12,7 +13,48 @@ use crate::process::{self, JobGuard};
 use crate::{Ctx, call, check_input, find};
 
 const TERMINAL: [&str; 3] = ["done", "failed", "cancelled"];
+const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+static PROGRESS: OnceLock<Progress> = OnceLock::new();
+
+pub struct Progress {
+    file: PathBuf,
+    last: Mutex<Option<(String, Instant)>>,
+}
+
+impl Progress {
+    pub fn new(dir: &Path) -> Progress {
+        Progress { file: dir.join("progress.json"), last: Mutex::new(None) }
+    }
+
+    pub fn report(&self, stage: &str, done: u64, total: u64, message: &str) {
+        let Ok(mut last) = self.last.lock() else { return };
+        let now = Instant::now();
+        if let Some((previous, at)) = last.as_ref()
+            && previous == stage
+            && done < total
+            && now.duration_since(*at) < PROGRESS_EVERY
+        {
+            return;
+        }
+        *last = Some((stage.to_string(), now));
+        let value = json!({"stage": stage, "done": done, "total": total, "message": message, "at_ms": now_ms()});
+        let _ = write_atomic(&self.file, crate::text(&value).as_bytes());
+    }
+}
+
+pub fn progress(stage: &str, done: u64, total: u64, message: &str) {
+    if let Some(p) = PROGRESS.get() {
+        p.report(stage, done, total, message);
+    }
+}
+
+fn with_progress(dir: &Path, mut record: Value) -> Value {
+    if let Some(p) = std::fs::read_to_string(dir.join("progress.json")).ok().and_then(|t| crate::exactjson::text(&t).ok()) {
+        record["progress"] = p;
+    }
+    record
+}
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -49,7 +91,7 @@ pub fn read_record(dir: &Path) -> Result<Value, ApiError> {
     let path = dir.join("job.json");
     let mut last = String::new();
     for _ in 0..50 {
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string())) {
+        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| crate::exactjson::text(&t)) {
             Ok(v) => return Ok(v),
             Err(e) => last = e,
         }
@@ -67,7 +109,7 @@ fn wait_for(dir: &Path, wait_s: f64) -> Result<Value, ApiError> {
     loop {
         let record = read_record(dir)?;
         if terminal(&record) || Instant::now() >= deadline {
-            return Ok(record);
+            return Ok(with_progress(dir, record));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -134,9 +176,12 @@ pub fn slow(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         children.push(cmd.spawn().map_err(|e| ApiError::new(Code::WorkerFailed, format!("could not start a child: {e}")))?);
     }
     let started = Instant::now();
+    let total_ms = (seconds * 1000.0) as u64;
     while started.elapsed().as_secs_f64() < seconds {
+        progress("sleeping", (started.elapsed().as_millis() as u64).min(total_ms), total_ms, "ms slept");
         std::thread::sleep(Duration::from_millis(50));
     }
+    progress("sleeping", total_ms, total_ms, "ms slept");
     for child in &mut children {
         let _ = child.wait();
     }
@@ -171,7 +216,7 @@ pub fn supervise(jobs_dir: &Path, id: &str) -> Result<(), String> {
             guard.terminate();
             record["worker_processes_left"] = json!(guard.wait_empty(Duration::from_secs(5)));
             record["worker_exit"] = json!(status.code());
-            match std::fs::read_to_string(dir.join("result.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+            match std::fs::read_to_string(dir.join("result.json")).ok().and_then(|t| crate::exactjson::text(&t).ok()) {
                 Some(result) => {
                     let ok = result.get("ok") == Some(&Value::Bool(true));
                     record["state"] = json!(if ok { "done" } else { "failed" });
@@ -213,6 +258,32 @@ pub fn work(jobs_dir: &Path, id: &str) -> Result<(), String> {
         job_id: Some(id.to_string()),
         projects: crate::project::default_root(),
     };
+    let _ = PROGRESS.set(Progress::new(&dir));
     let envelope = call(&ctx, text(&record, "command"), record.get("input").unwrap_or(&json!({})));
     write_atomic(&dir.join("result.json"), crate::text(&envelope).as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_is_written_on_a_new_stage_and_at_the_end_and_throttled_between() {
+        let dir = std::env::temp_dir().join(format!("gf-progress-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Progress::new(&dir);
+        let read = || crate::exactjson::text(&std::fs::read_to_string(dir.join("progress.json")).unwrap()).unwrap();
+        p.report("place", 1, 10, "");
+        assert_eq!(read()["done"], 1);
+        p.report("place", 2, 10, "");
+        assert_eq!(read()["done"], 1);
+        p.report("place", 10, 10, "");
+        assert_eq!(read()["done"], 10);
+        p.report("write", 0, 1, "glb");
+        assert_eq!(read()["stage"], "write");
+        let record = with_progress(&dir, json!({"state": "running"}));
+        assert_eq!(record["progress"]["message"], "glb");
+        assert!(with_progress(&dir.join("none"), json!({})).get("progress").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

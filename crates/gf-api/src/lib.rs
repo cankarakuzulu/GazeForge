@@ -17,6 +17,7 @@ pub mod photo;
 pub mod photo_fit;
 pub mod photo_gate;
 mod process;
+pub mod tasks;
 pub mod project;
 pub mod resources;
 pub mod schema;
@@ -149,7 +150,7 @@ pub fn parse_input(text: &str) -> Result<Value, ApiError> {
         Some(path) => (path.to_string(), std::fs::read_to_string(path).map_err(|e| ApiError::not_found(format!("--input {path}: {e}")))?),
         None => ("inline".to_string(), text.to_string()),
     };
-    serde_json::from_str(&body).map_err(|e| ApiError::invalid(format!("--input ({source}) is not JSON: {e}")))
+    exactjson::text(&body).map_err(|e| ApiError::invalid(format!("--input ({source}) is not JSON: {e}")))
 }
 
 #[cfg(test)]
@@ -182,6 +183,8 @@ mod tests {
         assert_eq!(error_code(&call(&ctx, "no.such", &json!({}))), Some(Code::NotFound));
         assert_eq!(error_code(&call(&ctx, "commands.list", &json!({"x": 1}))), Some(Code::InvalidInput));
         assert_eq!(error_code(&call(&ctx, "debug.slow", &json!({"seconds": 1}))), Some(Code::InvalidInput));
+        let exact = parse_input("{\"w\": 0.10937899999999999}").unwrap();
+        assert_eq!(exact["w"].as_f64().unwrap().to_bits(), "0.10937899999999999".parse::<f64>().unwrap().to_bits());
         let ok = call(&ctx, "commands.list", &json!({}));
         assert_eq!(exit_code(&ok), 0);
         assert_eq!(http_status(&ok), 200);

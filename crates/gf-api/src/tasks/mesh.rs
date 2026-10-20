@@ -15,11 +15,11 @@ use gf_io::store::Store;
 use gf_io::{game_base, obj};
 use serde_json::{Value, json};
 
-use crate::{Options, count, need, number, only, placement_keys, placer, placer_with};
+use super::{Options, count, need, number, only, placement_keys, placer, placer_with};
 
-const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
-const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles", "cells"];
-const LIDS_GATE_KEYS: &[&str] = &["glb", "eyes", "states", "front-deg", "tolerance-mm", "cells", "dense", "base"];
+pub const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
+pub const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles", "cells"];
+pub const LIDS_GATE_KEYS: &[&str] = &["glb", "eyes", "states", "front-deg", "tolerance-mm", "cells", "dense", "base"];
 
 fn cells_flag(opts: &Options) -> Result<bool, String> {
     match opts.get("cells").map(String::as_str) {
@@ -28,8 +28,8 @@ fn cells_flag(opts: &Options) -> Result<bool, String> {
         Some(other) => Err(format!("--cells takes on or off, got {other}")),
     }
 }
-const PATH_KEYS: &[&str] = &["dense", "base", "start", "delta", "steps", "placement", "pop-limit", "plant"];
-const GLB_KEYS: &[&str] = &[
+pub const PATH_KEYS: &[&str] = &["dense", "base", "start", "delta", "steps", "placement", "pop-limit", "plant"];
+pub const GLB_KEYS: &[&str] = &[
     "store",
     "spec",
     "macro",
@@ -49,9 +49,9 @@ const GLB_KEYS: &[&str] = &[
     "lids",
     "lod0-out",
 ];
-const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
-const EYES_KEY: &[&str] = &["eyes"];
-const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
+pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
+pub const EYES_KEY: &[&str] = &["eyes"];
+pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
 
 fn body_options(opts: &Options) -> Result<Option<(gf_core::body::BodyPack, Value, gf_core::body::Controls)>, String> {
     let Some(dir) = opts.get("body") else {
@@ -85,9 +85,9 @@ const WEIGHT_STEPS: f64 = 65536.0;
 const EYE_RINGS: u32 = 16;
 const EYE_SEGMENTS: u32 = 24;
 const NORMAL_FLOOR: f32 = 1e-3;
-const GAME_GATES: &[&str] = &["triq", "uv", "census", "seams"];
+pub const GAME_GATES: &[&str] = &["triq", "uv", "census", "seams"];
 
-pub(crate) fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
+pub fn verdict(command: &str, gates: Value, failed: Vec<String>, extra: Value) -> Value {
     let pass = failed.is_empty();
     let mut out = json!({"ok": pass, "command": command, "pass": pass, "gates": gates, "failed": failed});
     if !pass {
@@ -193,7 +193,7 @@ pub fn gates_game(opts: &Options) -> Result<Value, String> {
     }
     let mut report = verdict("gates game", Value::Object(out), failed, extra);
     if cells_flag(opts)? {
-        let cells = gf_api::grid::Cells::new(&dense.positions, &base.kept, &triangles)?;
+        let cells = crate::grid::Cells::new(&dense.positions, &base.kept, &triangles)?;
         let n = cells.annotate(&mut report["gates"]);
         report["cells"] = json!({"chart": cells.chart.definition(), "annotated": n, "triangles": if own_triangles { "obj" } else { "base" }});
     }
@@ -255,6 +255,7 @@ pub fn gates_path(opts: &Options) -> Result<Value, String> {
     let mut placed = Vec::new();
     let mut subset = Vec::new();
     for k in 0..=steps {
+        crate::jobs::progress("place", k as u64, steps as u64 + 1, "path step");
         let t = k as f64 / steps as f64;
         let shape: Vec<Point> = start.iter().zip(&delta).map(|(s, d)| [0, 1, 2].map(|i| (s[i] + t * d[i]) as f32 as f64)).collect();
         let mut game = placement.place(&shape, &mesh, &base).game;
@@ -264,6 +265,7 @@ pub fn gates_path(opts: &Options) -> Result<Value, String> {
         placed.push(game);
         subset.push(base.kept.iter().map(|&i| shape[i as usize]).collect::<Vec<_>>());
     }
+    crate::jobs::progress("place", steps as u64 + 1, steps as u64 + 1, "path step");
     let report = gates::path_pops(&placed, &subset, limit)?;
     let failed = if report.pass { Vec::new() } else { vec!["path".to_string()] };
     let planted = plant.map(|(s, v, mm)| json!({"step": s, "game_vertex": v, "mm_forward": mm}));
@@ -364,11 +366,11 @@ pub fn gates_facing(opts: &Options) -> Result<Value, String> {
     Ok(verdict("gates facing", json!({"facing": rows}), failed, json!({"glb": path, "states": states})))
 }
 
-pub(crate) fn from_gltf(p: [f32; 3]) -> Point {
+pub fn from_gltf(p: [f32; 3]) -> Point {
     [f64::from(p[0]), -f64::from(p[2]), f64::from(p[1])]
 }
 
-pub(crate) fn lid_settings(opts: &Options) -> Result<(f64, f64), String> {
+pub fn lid_settings(opts: &Options) -> Result<(f64, f64), String> {
     let front = number(opts, "front-deg", LID_FRONT_DEG)?;
     if front > 90.0 {
         return Err(format!("--front-deg must be at most 90, got {front}"));
@@ -388,7 +390,7 @@ pub fn gates_lids(opts: &Options) -> Result<Value, String> {
     let cells = if cells_flag(opts)? {
         let dense = Dense::load(Path::new(need(opts, "dense").map_err(|e| format!("--cells on {e}"))?))?;
         let base = game_base::load(Path::new(need(opts, "base").map_err(|e| format!("--cells on {e}"))?))?;
-        Some(gf_api::grid::Cells::new(&dense.positions, &base.kept, &base.triangles)?)
+        Some(crate::grid::Cells::new(&dense.positions, &base.kept, &base.triangles)?)
     } else {
         if let Some(k) = ["dense", "base"].iter().find(|k| opts.contains_key(**k)) {
             return Err(format!("--{k} is read only with --cells on"));
@@ -626,8 +628,8 @@ fn delta(a: Point, b: Point) -> [f32; 3] {
 fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Material>, String> {
     let l = m.shape.layout()?;
     let limbus_v = ((l.limbus_radius / l.radius).asin() / std::f64::consts::PI) as f32;
-    let [iw, ih] = gf_api::eyes::IRIS_SIZE;
-    let [sw, sh] = gf_api::eyes::SCLERA_SIZE;
+    let [iw, ih] = crate::eyes::IRIS_SIZE;
+    let [sw, sh] = crate::eyes::SCLERA_SIZE;
     let iris = gf_io::png::rgba(iw, ih, &gf_core::eye_texture::iris_rgba(&m.iris, iw, ih))?;
     let sclera = gf_io::png::rgba(sw, sh, &gf_core::eye_texture::sclera_rgba(&m.sclera, limbus_v, sw, sh, m.iris.seed))?;
     let plain = |name: &str, colour: [f32; 4], texture: Option<Vec<u8>>, roughness: f32| gltf::Material {
@@ -691,6 +693,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(p) => Some(ch::read_macro_definition(Path::new(p))?),
         None => None,
     };
+    crate::jobs::progress("evaluate", 0, 1, "spec to dense");
     let (positions, _, evaluation, pin) = ch::evaluate_traced(&store, &spec, source.as_ref())?;
     let base_eyes = match ch::model_eyes(&store, &spec)? {
         Some(eyes) => Some(eyes),
@@ -814,13 +817,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         lid_lods.push((gm::lod_map(&base, mesh)?, mesh.triangles.clone()));
     }
     let lid_refs: Vec<(&[u32], &[[u32; 3]])> = lid_lods.iter().map(|(m, t)| (m.as_slice(), t.as_slice())).collect();
+    crate::jobs::progress("place", 0, ids.len() as u64 + 1, "neutral");
     let (collided, mut neutral, neutral_lids) = place_clear(placement.as_ref(), lid_run.as_ref(), &positions, &dmesh, &base, &lid_refs);
     let neutral_dense = collided.unwrap_or_else(|| positions.clone());
     let uvs0 = neutral.triangle_uvs.clone().unwrap_or_else(|| base.triangle_uvs.clone());
     let mut morph_games = Vec::new();
     let mut slips = Vec::new();
     let mut morph_lids = Vec::new();
-    for id in &ids {
+    for (k, id) in ids.iter().enumerate() {
+        crate::jobs::progress("place", k as u64 + 1, ids.len() as u64 + 1, id);
         let target = load(id)?;
         let mut moved = neutral_dense.clone();
         target.add_scaled(1.0, &mut moved);
@@ -856,6 +861,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     let mut facing_report = Vec::new();
     if facing != "keep" {
+        crate::jobs::progress("facing", 0, 1, facing);
         for level in levels.iter_mut() {
             let pick = |g: &[Point]| -> Vec<Point> { level.map.iter().map(|&j| g[j as usize]).collect() };
             let states: Vec<Vec<Point>> = std::iter::once(&neutral.game).chain(&morph_games).map(|g| pick(g)).collect();
@@ -904,6 +910,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     let mut lid_touch = Value::Null;
     if let Some(run) = &lid_run {
+        crate::jobs::progress("lids", 0, 1, "");
         let lods: Vec<(&[u32], &[[u32; 3]])> = levels.iter().map(|l| (l.map.as_slice(), l.triangles.as_slice())).collect();
         let neutral_untangle = (facing != "keep").then_some((UNTANGLE_ITERATIONS, UNTANGLE_MAX_MM / 1000.0));
         let state_untangle = (facing == "repair-states").then_some((STATE_UNTANGLE_ITERATIONS, STATE_UNTANGLE_MAX_MM / 1000.0));
@@ -964,6 +971,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut face_skin: Option<gf_core::face_rig::Influences> = None;
     let mut face2_correctives: Option<(Vec<Vec<gf_core::face_rig::JointPose>>, Vec<Point>)> = None;
     if rigged {
+        crate::jobs::progress("rig", 0, 1, "");
         use gf_core::rig;
         let mut eyes = match &moved_eyes {
             Some(e) => e.clone(),
@@ -1051,7 +1059,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             rig_value.names = fr2::names();
             rig_value.parents = fr2::parents();
             rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
-            rig_value.animations = crate::rig_cmds::face2_animations(&names, &fits, &pivots);
+            rig_value.animations = super::rig::face2_animations(&names, &fits, &pivots);
             let parents = fr2::parents();
             let all_names = fr2::names();
             let spec = fr2::joints();
@@ -1072,7 +1080,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 .collect();
             face_meta = json!({
                 "version": fr2::VERSION, "joints": joint_rows, "weights": base_rig.report, "lid_frames": base_rig.lids, "lid_vertices": base_rig.lid_vertices,
-                "fit": crate::rig_cmds::fit_report(&names, &fits), 
+                "fit": super::rig::fit_report(&names, &fits), 
                 "correctives": if correctives { json!(format!("one corrective morph target per shape, named <shape>.corrective, on every LOD: per vertex the rest-space delta c with sum_j w_j (R_j (x + c - p_j) + p_j + t_j) = the blend shape position at weight 1 (and the normal likewise); each animation also drives its corrective weight 0 -> 1 through a glTF weights channel on every head LOD node, so joints plus corrective reproduce the blend shape; vertices whose blended rotation has |det| < {} take the plain difference", fr2::SINGULAR_DET)) } else { Value::Null },
                 "seconds": fit_started.elapsed().as_secs_f64(),
                 "pivots": format!("each seeded facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; the 12 lid joints (3 along each lid margin) sit at the eye centres; every joint position is rounded to 1/{} m", fr::REGION_MM, fr::PIVOT_GRID),
@@ -1102,7 +1110,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             rig_value.names = fr::names();
             rig_value.parents = fr::parents();
             rig_value.global = pivots.iter().map(|p| gm::to_gltf(*p)).collect();
-            rig_value.animations = crate::rig_cmds::face_animations(&names, &fits, &pivots);
+            rig_value.animations = super::rig::face_animations(&names, &fits, &pivots);
             let parents = fr::parents();
             let all_names = fr::names();
             let joint_rows: Vec<Value> = (0..fr::count())
@@ -1119,7 +1127,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 })
                 .collect();
             face_meta = json!({
-                "joints": joint_rows, "weights": base_rig.report, "fit": crate::rig_cmds::fit_report(&names, &fits),
+                "joints": joint_rows, "weights": base_rig.report, "fit": super::rig::fit_report(&names, &fits),
                 "seconds": fit_started.elapsed().as_secs_f64(),
                 "pivots": format!("each facial joint sits at the mean of the character's dense positions over the base vertices within {} mm of its seed vertex; every joint position is rounded to 1/{} m so that the f32 joint chain and the inverse bind matrices cancel exactly", fr::REGION_MM, fr::PIVOT_GRID),
                 "poses": "per shape, every posed joint (jaw and the facial joints) gets a rotation about its rest position and a translation, solved by Gauss-Newton on the game LOD0 against F(c + e) - F(c) with the exported weights, bounded to 35 deg / 15 mm (jaw), 60 deg / 6 mm (lids, which turn about the eye centre) and 30 deg / 12 mm (other facial joints); vertices within 1.4 eye radii of an eye centre count 30 times in the fit",
@@ -1144,6 +1152,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
     let mut body_meta = Value::Null;
     if let Some((pack, pack_manifest, controls)) = &body {
+        crate::jobs::progress("body", 0, 1, "");
         use gf_core::body as gb;
         let limits = if pack.mode == "makehuman" { gb::Limits::exact() } else { gb::Limits::any_body() };
         let mut rows = Vec::new();
@@ -1328,6 +1337,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(m) if !eye_parts.is_empty() => eye_materials(m)?,
         _ => Vec::new(),
     };
+    crate::jobs::progress("write", 0, 1, "glb");
     let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &eye_mats)?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);

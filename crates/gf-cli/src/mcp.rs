@@ -56,7 +56,7 @@ pub fn serve() -> ExitCode {
         if line.trim().is_empty() {
             continue;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
+        let reply = match gf_api::exactjson::text(&line) {
             Ok(message) => answer(&ctx, &message),
             Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})),
         };

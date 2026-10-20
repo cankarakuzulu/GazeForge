@@ -32,6 +32,10 @@ pub fn parse(bytes: &[u8], limits: &Limits) -> Result<Value, String> {
     Ok(v)
 }
 
+pub fn text(text: &str) -> Result<Value, String> {
+    parse(text.as_bytes(), &Limits::for_bytes(text.len()))
+}
+
 impl Parser<'_> {
     fn err(&self, what: &str) -> String {
         format!("{what} at byte {}", self.i)

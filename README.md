@@ -31,7 +31,8 @@ The binary is `target/release/gazeforge`.
 The workspace is layered, and every edge points down: `gf-geom` (pure maths: no IO, no threads, no clocks; builds for
 `wasm32-unknown-unknown`; parallel loops only behind its native-only `parallel` feature) <- `gf-core` (domain: placements,
 catalog, character spec, evaluation, residual codec, macros, measurements; no IO) <- `gf-io` (formats and the store) <-
-`gf-api` (the command registry, error model and jobs) <- `gf-cli` (the argv commands and the CLI, HTTP and MCP front doors).
+`gf-api` (the command registry, error model, jobs, and the argv commands' implementations) <- `gf-cli` (the argv parser and
+the CLI, HTTP and MCP front doors).
 `gf-wasm` (the designer's preview kernel) depends on `gf-geom` only. `gf-studio` (the native studio,
 binary `gazeforge-studio`) is another front door: it links `gf-api` in-process and nothing depends on it.
 `python tools/dep_gate/dep_gate.py [edges|clippy|wasm|front-doors|all] --cargo PATH` checks it: the dependency edges
@@ -411,6 +412,23 @@ handler and return the same envelope, byte for byte (`crates/gf-cli/tests/confor
 Commands: `commands.list`, `store.list`, `catalog.list`, `character.create`, `character.validate`, `character.evaluate`,
 `character.measure`, `jobs.submit`, `jobs.status`, `jobs.cancel`, and `debug.slow` (a deliberately slow job that exists
 to prove cancel). `commands.list` returns every schema; the argv commands above are unchanged.
+
+**The argv commands in the registry.** Every argv command has a registry twin: `store.import_pack`, `store.import_catalog`,
+`store.import_game`, `store.import_eyerig`, `base.build`, `export.obj`, `export.glb`, `lids.collide`, `gates.shell`,
+`gates.game`, `gates.path`, `gates.facing`, `gates.lids` and `gates.rig` are jobs; `macro.weights` and `macro.labels` are
+queries. The fields are the argv options with `_` for `-` (`min_angle` for `--min-angle`); numbers are JSON numbers, lists
+and pairs are the same text the argv option takes (`"8000,3000"`), and a JSON option (`sliders`, `macro_base`) may be a
+JSON object. The result is the argv command's own JSON, and a failing gate is the error `gate_failed` with that report in
+`details`. One implementation serves both, so the argv command and its twin give the same output files and JSON on the
+same input.
+
+```
+gazeforge call jobs.submit --input '{"command": "export.obj", "input": {"dense": "DENSE", "base": "BASE",
+  "positions": "FACE.npy", "placement": "f3", "eyes": "EYES.json", "out": "FACE.obj"}}'
+```
+
+Every front door and the job records parse JSON with a correctly rounded float parser, so a number reaches the command
+with the bits it was written with, and a job's result reads back unchanged.
 
 `character.measure` evaluates a spec and reports straight-line distances in millimetres between landmark vertices of
 the dense base, with the base's value and the difference: nose width at the alae, nose length (nasion to tip), nose
