@@ -75,13 +75,13 @@ pub fn f6_defaults() -> F6Settings {
     gp::f6_defaults(f5_defaults())
 }
 
-struct Loaded {
-    key: String,
-    store: Store,
+pub(crate) struct Loaded {
+    pub(crate) key: String,
+    pub(crate) store: Store,
     pack: PackManifest,
-    dense: Dense,
-    catalog: CatalogManifest,
-    game: Decimated,
+    pub(crate) dense: Dense,
+    pub(crate) catalog: CatalogManifest,
+    pub(crate) game: Decimated,
     targets: Mutex<HashMap<String, Arc<SparseTarget>>>,
     residuals: Mutex<HashMap<String, Arc<Vec<[f64; 3]>>>>,
     frame: OnceLock<Result<HeadOnly, String>>,
@@ -90,7 +90,7 @@ struct Loaded {
 
 static CACHE: OnceLock<Mutex<Option<Arc<Loaded>>>> = OnceLock::new();
 
-fn load(input: &Value) -> Result<(Arc<Loaded>, bool), ApiError> {
+pub(crate) fn load(input: &Value) -> Result<(Arc<Loaded>, bool), ApiError> {
     let root = text(input, "store");
     let (pack, catalog, game) = (text(input, "pack"), text(input, "catalog"), text(input, "game"));
     let key = format!("{root}|{pack}|{catalog}|{game}");
@@ -207,7 +207,7 @@ impl Loaded {
     }
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -223,7 +223,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-fn f32_base64(values: impl Iterator<Item = f64>) -> String {
+pub(crate) fn f32_base64(values: impl Iterator<Item = f64>) -> String {
     let bytes: Vec<u8> = values.flat_map(|v| (v as f32).to_le_bytes()).collect();
     base64(&bytes)
 }
@@ -503,13 +503,50 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
               "start": start}))
 }
 
+pub(crate) fn pack_ids(loaded: &Loaded, input: &Value) -> Vec<String> {
+    match input.get("targets").and_then(Value::as_array) {
+        Some(list) => list.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => loaded.catalog.targets.iter().filter(|(_, e)| HEAD_CATEGORIES.contains(&e.category.as_str())).map(|(id, _)| id.clone()).collect(),
+    }
+}
+
+pub(crate) struct PackRows {
+    pub(crate) offsets: Vec<u32>,
+    pub(crate) index: Vec<u32>,
+    pub(crate) delta: Vec<i16>,
+    pub(crate) scale: Vec<f32>,
+    pub(crate) worst: f64,
+}
+
 pub fn pack(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let started = Instant::now();
     let (loaded, cached) = load(input)?;
-    let ids: Vec<String> = match input.get("targets").and_then(Value::as_array) {
-        Some(list) => list.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-        None => loaded.catalog.targets.iter().filter(|(_, e)| HEAD_CATEGORIES.contains(&e.category.as_str())).map(|(id, _)| id.clone()).collect(),
+    let ids = pack_ids(&loaded, input);
+    let mesh = &loaded.game;
+    let PackRows { offsets, index, delta, scale, worst } = pack_rows(&loaded, &ids)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut layout = serde_json::Map::new();
+    let mut section = |name: &str, data: Vec<u8>, kind: &str, count: usize, bytes: &mut Vec<u8>| {
+        while !bytes.len().is_multiple_of(4) {
+            bytes.push(0);
+        }
+        layout.insert(name.into(), json!({"offset": bytes.len(), "type": kind, "count": count}));
+        bytes.extend(data);
     };
+    let tris: Vec<u8> = mesh.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+    section("triangles", tris, "u32", mesh.triangles.len() * 3, &mut bytes);
+    section("offsets", offsets.iter().flat_map(|v| v.to_le_bytes()).collect(), "u32", offsets.len(), &mut bytes);
+    section("index", index.iter().flat_map(|v| v.to_le_bytes()).collect(), "u32", index.len(), &mut bytes);
+    section("delta", delta.iter().flat_map(|v| v.to_le_bytes()).collect(), "i16", delta.len(), &mut bytes);
+    section("scale", scale.iter().flat_map(|v| v.to_le_bytes()).collect(), "f32", scale.len(), &mut bytes);
+    let blob = gf_core::hash::reference(&loaded.store.put(&bytes).map_err(ApiError::internal)?);
+    Ok(json!({"format": PACK_FORMAT, "blob": blob, "bytes": bytes.len(), "vertices": mesh.kept.len(), "triangles": mesh.triangles.len(),
+              "targets": ids, "entries": index.len(), "layout": layout, "quantization_max_mm": worst * 1000.0,
+              "definition": "delta[t] = the target's dense delta at each game vertex's dense index (the game vertices are a subset of the dense ones), i16 times scale[t] metres",
+              "cached": cached, "seconds": started.elapsed().as_secs_f64()}))
+}
+
+pub(crate) fn pack_rows(loaded: &Loaded, ids: &[String]) -> Result<PackRows, ApiError> {
     let mesh = &loaded.game;
     let mut game_of = vec![u32::MAX; loaded.dense.positions.len()];
     for (g, &d) in mesh.kept.iter().enumerate() {
@@ -517,7 +554,7 @@ pub fn pack(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let (mut offsets, mut index, mut delta, mut scale) = (vec![0u32], Vec::new(), Vec::new(), Vec::new());
     let mut worst = 0.0f64;
-    for id in &ids {
+    for id in ids {
         let target = loaded.target(id)?;
         let mut rows: Vec<(u32, [f32; 3])> = target
             .indices
@@ -540,26 +577,7 @@ pub fn pack(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         scale.push(s);
         offsets.push(index.len() as u32);
     }
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut layout = serde_json::Map::new();
-    let mut section = |name: &str, data: Vec<u8>, kind: &str, count: usize, bytes: &mut Vec<u8>| {
-        while !bytes.len().is_multiple_of(4) {
-            bytes.push(0);
-        }
-        layout.insert(name.into(), json!({"offset": bytes.len(), "type": kind, "count": count}));
-        bytes.extend(data);
-    };
-    let tris: Vec<u8> = mesh.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
-    section("triangles", tris, "u32", mesh.triangles.len() * 3, &mut bytes);
-    section("offsets", offsets.iter().flat_map(|v| v.to_le_bytes()).collect(), "u32", offsets.len(), &mut bytes);
-    section("index", index.iter().flat_map(|v| v.to_le_bytes()).collect(), "u32", index.len(), &mut bytes);
-    section("delta", delta.iter().flat_map(|v| v.to_le_bytes()).collect(), "i16", delta.len(), &mut bytes);
-    section("scale", scale.iter().flat_map(|v| v.to_le_bytes()).collect(), "f32", scale.len(), &mut bytes);
-    let blob = gf_core::hash::reference(&loaded.store.put(&bytes).map_err(ApiError::internal)?);
-    Ok(json!({"format": PACK_FORMAT, "blob": blob, "bytes": bytes.len(), "vertices": mesh.kept.len(), "triangles": mesh.triangles.len(),
-              "targets": ids, "entries": index.len(), "layout": layout, "quantization_max_mm": worst * 1000.0,
-              "definition": "delta[t] = the target's dense delta at each game vertex's dense index (the game vertices are a subset of the dense ones), i16 times scale[t] metres",
-              "cached": cached, "seconds": started.elapsed().as_secs_f64()}))
+    Ok(PackRows { offsets, index, delta, scale, worst })
 }
 
 pub fn settle(_: &Ctx, input: &Value) -> Result<Value, ApiError> {

@@ -2,6 +2,7 @@
 #![allow(clippy::too_many_arguments, clippy::needless_range_loop, clippy::type_complexity, clippy::neg_cmp_op_on_partial_ord, clippy::needless_borrow)]
 
 pub mod decimate;
+pub mod face_chart;
 pub mod lids;
 pub mod placement;
 pub mod placement_f2;

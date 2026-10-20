@@ -10,6 +10,7 @@ mod commands;
 pub mod designer;
 pub mod exactjson;
 pub mod error;
+pub mod grid;
 pub mod jobs;
 pub mod photo;
 pub mod photo_fit;

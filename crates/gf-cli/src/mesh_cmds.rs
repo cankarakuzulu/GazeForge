@@ -18,8 +18,16 @@ use serde_json::{Value, json};
 use crate::{Options, count, need, number, only, placement_keys, placer};
 
 const SHELL_KEYS: &[&str] = &["dense", "before", "after", "fold-tolerance", "inner-tolerance", "rough-mm", "rough-rel", "rough-tolerance"];
-const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles"];
-const LIDS_GATE_KEYS: &[&str] = &["glb", "eyes", "states", "front-deg", "tolerance-mm"];
+const GAME_KEYS: &[&str] = &["dense", "base", "face", "obj", "tip-vertex", "gates", "seam-limit-mm", "triangles", "cells"];
+const LIDS_GATE_KEYS: &[&str] = &["glb", "eyes", "states", "front-deg", "tolerance-mm", "cells", "dense", "base"];
+
+fn cells_flag(opts: &Options) -> Result<bool, String> {
+    match opts.get("cells").map(String::as_str) {
+        None | Some("off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(other) => Err(format!("--cells takes on or off, got {other}")),
+    }
+}
 const PATH_KEYS: &[&str] = &["dense", "base", "start", "delta", "steps", "placement", "pop-limit", "plant"];
 const GLB_KEYS: &[&str] = &[
     "store",
@@ -183,7 +191,29 @@ pub fn gates_game(opts: &Options) -> Result<Value, String> {
     if own_triangles {
         extra["triangles"] = json!({"source": "obj", "count": triangles.len(), "differ_from_base": triangles != base.triangles});
     }
-    Ok(verdict("gates game", Value::Object(out), failed, extra))
+    let mut report = verdict("gates game", Value::Object(out), failed, extra);
+    if cells_flag(opts)? {
+        let cells = gf_api::grid::Cells::new(&dense.positions, &base.kept, &triangles)?;
+        let n = cells.annotate(&mut report["gates"]);
+        report["cells"] = json!({"chart": cells.chart.definition(), "annotated": n, "triangles": if own_triangles { "obj" } else { "base" }});
+    }
+    Ok(report)
+}
+
+fn glb_game_vertices(indices: &[u32], vertices: usize, triangles: &[[u32; 3]]) -> Result<Vec<u32>, String> {
+    if indices.len() != triangles.len() * 3 {
+        return Err(format!("{} triangles, the game base has {}", indices.len() / 3, triangles.len()));
+    }
+    let mut out = vec![u32::MAX; vertices];
+    for (k, &i) in indices.iter().enumerate() {
+        let g = triangles[k / 3][k % 3];
+        let slot = out.get_mut(i as usize).ok_or("an index runs past the vertices")?;
+        if *slot != u32::MAX && *slot != g {
+            return Err(format!("vertex {i} sits on game vertices {} and {g}: the triangles do not follow the game base's order", *slot));
+        }
+        *slot = g;
+    }
+    Ok(out)
 }
 
 pub fn gates_path(opts: &Options) -> Result<Value, String> {
@@ -355,10 +385,21 @@ pub fn gates_lids(opts: &Options) -> Result<Value, String> {
         return Err(format!("--states must be neutral or all, got {states}"));
     }
     let (front, tolerance) = lid_settings(opts)?;
+    let cells = if cells_flag(opts)? {
+        let dense = Dense::load(Path::new(need(opts, "dense").map_err(|e| format!("--cells on {e}"))?))?;
+        let base = game_base::load(Path::new(need(opts, "base").map_err(|e| format!("--cells on {e}"))?))?;
+        Some(gf_api::grid::Cells::new(&dense.positions, &base.kept, &base.triangles)?)
+    } else {
+        if let Some(k) = ["dense", "base"].iter().find(|k| opts.contains_key(**k)) {
+            return Err(format!("--{k} is read only with --cells on"));
+        }
+        None
+    };
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let (_, meshes) = gltf::read_glb(&bytes)?;
     let mut failed = Vec::new();
     let mut rows = Vec::new();
+    let mut annotated = 0usize;
     for mesh in meshes.iter().filter(|m| !m.normals.is_empty() && !m.name.starts_with("Eye_")) {
         let mut seen: HashMap<[u32; 3], ()> = HashMap::new();
         let unique: Vec<usize> = (0..mesh.positions.len()).filter(|&i| seen.insert(mesh.positions[i].map(f32::to_bits), ()).is_none()).collect();
@@ -376,6 +417,7 @@ pub fn gates_lids(opts: &Options) -> Result<Value, String> {
         let neutral = check(None);
         let mut morph_counts = serde_json::Map::new();
         let (mut worst, mut failing, mut deepest) = (0usize, 0usize, 0.0f64);
+        let mut morph_inside: Vec<usize> = Vec::new();
         if states == "all" {
             for (k, m) in mesh.morphs.iter().enumerate() {
                 let c = check(Some(m));
@@ -383,20 +425,51 @@ pub fn gates_lids(opts: &Options) -> Result<Value, String> {
                 failing += (c.inside > 0) as usize;
                 deepest = deepest.max(c.deepest_mm);
                 morph_counts.insert(mesh.morph_names.get(k).cloned().unwrap_or_else(|| k.to_string()), json!(c.inside));
+                if cells.is_some() {
+                    morph_inside.extend(&c.inside_vertices);
+                }
             }
         }
         if neutral.inside > 0 || worst > 0 {
             failed.push(mesh.name.clone());
         }
-        rows.push(json!({"mesh": mesh.name, "vertices": unique.len(), "neutral_inside": neutral.inside, "neutral_deepest_mm": neutral.deepest_mm,
+        let mut row = json!({"mesh": mesh.name, "vertices": unique.len(), "neutral_inside": neutral.inside, "neutral_deepest_mm": neutral.deepest_mm,
                          "candidates": neutral.candidates, "morph_states_worst": worst, "morph_states_failing": failing,
-                         "morph_states_deepest_mm": deepest, "morph_states": morph_counts}));
+                         "morph_states_deepest_mm": deepest, "morph_states": morph_counts});
+        if let Some(cells) = &cells {
+            match glb_game_vertices(&mesh.indices, mesh.positions.len(), &cells.triangles) {
+                Ok(game_of) => {
+                    let tally = |list: &[usize]| -> Value {
+                        let mut m: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+                        for &i in list {
+                            let g = game_of[unique[i]];
+                            let name = cells.game_cell(g as usize).map_or("none".to_string(), gf_geom::face_chart::cell_name);
+                            *m.entry(name).or_default() += 1;
+                        }
+                        json!(m)
+                    };
+                    let mut games: Vec<u32> = neutral.inside_vertices.iter().map(|&i| game_of[unique[i]]).collect();
+                    games.sort_unstable();
+                    games.dedup();
+                    annotated += neutral.inside_vertices.len() + morph_inside.len();
+                    row["cells"] = json!({"neutral_inside_game_vertices": games, "neutral_inside_cells": tally(&neutral.inside_vertices),
+                                          "morph_inside_cells": tally(&morph_inside)});
+                }
+                Err(why) => row["cells"] = json!({"error": format!("{}: {why}; cells are read for the finest level only", mesh.name)}),
+            }
+        }
+        rows.push(row);
     }
     if rows.is_empty() {
         return Err(format!("{path}: no mesh with normals to check"));
     }
     let rule = "a vertex fails when it lies within 0.5..1.3 eye radii of an eye centre, within front-deg of its gaze, its normal points away from the centre, and it is closer to the centre than the larger of the eye radius and the eye mesh's outermost surface along that direction, by more than tolerance-mm";
-    Ok(verdict("gates lids", json!({"lids": rows}), failed, json!({"glb": path, "states": states, "front_deg": front, "tolerance_mm": tolerance * 1000.0, "rule": rule})))
+    let mut report = verdict("gates lids", json!({"lids": rows}), failed, json!({"glb": path, "states": states, "front_deg": front, "tolerance_mm": tolerance * 1000.0, "rule": rule}));
+    if let Some(cells) = &cells {
+        report["cells"] = json!({"chart": cells.chart.definition(), "annotated": annotated,
+                                 "rule": "a glTF vertex is the game vertex at the same triangle corner (the finest level's triangles follow the game base's order); a level that does not is reported with an error"});
+    }
+    Ok(report)
 }
 
 struct LidRun {

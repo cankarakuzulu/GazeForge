@@ -216,10 +216,10 @@ vec3 shade(int model, vec3 n, vec3 v, vec3 albedo) {
 const MESH_VS = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2D; precision highp usampler2D;
 uniform highp usampler2D idxT; uniform sampler2D posT; uniform sampler2D nrmT; uniform sampler2D refT; uniform sampler2D uvT;
-uniform highp usampler2D flagT; uniform highp usampler2D regT;
+uniform highp usampler2D flagT; uniform highp usampler2D regT; uniform sampler2D chartT; uniform int gridOn; uniform int hasChart;
 uniform mat4 mvp; uniform float windSign; uniform uint hidMask; uniform int hasRegion; uniform int hasRef; uniform int hasUV; uniform int hasFlags;
 ${COMMON}
-out vec3 vp; out vec3 vn; out vec3 bary; out vec3 gcol; out float disp; out vec2 uv;
+out vec3 vp; out vec3 vn; out vec3 bary; out vec3 gcol; out float disp; out vec2 uv; out vec2 ch;
 flat out vec3 fn; flat out float tq; flat out float tc; flat out uint eflags;
 ivec2 at(int i) { return ivec2(i & 2047, i >> 11); }
 void main() {
@@ -265,6 +265,13 @@ void main() {
     gcol = shade(2, normalize(vn), v, baseCol);
   }
   if (hasFlags == 1) eflags = texelFetch(flagT, at(t), 0).r;
+  ch = vec2(0.0);
+  if (gridOn == 1 && hasChart == 1) {
+    vec2 c0 = texelFetch(chartT, at(i0), 0).xy;
+    vec2 cm = k == 0 ? c0 : texelFetch(chartT, at(me), 0).xy;
+    cm.x -= 360.0 * floor((cm.x - c0.x + 180.0) / 360.0);
+    ch = cm;
+  }
   gl_Position = mvp * vec4(p, 1.0);
 }`;
 
@@ -280,10 +287,11 @@ bool clipped(vec3 p) {
 
 const MESH_FS = `#version 300 es
 precision highp float; precision highp int;
-in vec3 vp; in vec3 vn; in vec3 bary; in vec3 gcol; in float disp; in vec2 uv;
+in vec3 vp; in vec3 vn; in vec3 bary; in vec3 gcol; in float disp; in vec2 uv; in vec2 ch;
 flat in vec3 fn; flat in float tq; flat in float tc; flat in uint eflags;
 ${COMMON}
 ${CLIP}
+uniform int gridOn; uniform int hasChart; uniform vec2 gridStep; uniform vec3 gridInk;
 uniform int wireOn; uniform float wireW; uniform vec3 wireCol; uniform int xrayPass; uniform int wireFade; uniform int backHi; uniform int seamOn;
 uniform vec3 bgCol; uniform vec3 interiorCol; uniform float heatMax; uniform int hasRef; uniform int hasUV; uniform int hasFlags; uniform float exposure;
 out vec4 o;
@@ -349,6 +357,17 @@ void main() {
     c = mix(c, vec3(0.10, 0.80, 1.00), 1.0 - smoothstep(w2 - 0.5, w2 + 0.5, s));
     c = mix(c, vec3(1.00, 0.55, 0.05), 1.0 - smoothstep(w2 - 0.5, w2 + 0.5, b));
   }
+  if (gridOn == 1 && hasChart == 1) {
+    vec2 g = vec2(ch.x / gridStep.x + 0.5, ch.y / gridStep.y);
+    vec2 fw2 = max(fwidth(g), vec2(1e-6));
+    vec2 dl = abs(fract(g + 0.5) - 0.5) / fw2;
+    float major = 1.0 - smoothstep(0.6, 1.6, min(dl.x, dl.y));
+    vec2 fw3 = fw2 * 3.0, d3 = abs(fract(g * 3.0 + 0.5) - 0.5) / fw3;
+    float minor = (1.0 - smoothstep(0.3, 1.1, min(d3.x, d3.y))) * (1.0 - smoothstep(0.1, 0.25, max(fw3.x, fw3.y)));
+    float mid = 1.0 - smoothstep(0.6, 1.8, abs(ch.x - 360.0 * floor(ch.x / 360.0 + 0.5)) / max(fwidth(ch.x), 1e-6));
+    c = mix(c, gridInk, max(major * 0.85, minor * 0.45));
+    c = mix(c, vec3(0.92, 0.22, 0.18), mid * 0.85);
+  }
   if (wireOn == 1 || mode == 7) c = mix(c, wireCol, wire);
   o = vec4(c, 1.0);
 }`;
@@ -412,11 +431,22 @@ export class Viewer {
       heat: { quality: 30, displacement: 3, curvature: 50 }, aniso: 0, exposure: 0, ambient: 0.16, ground: 0.4, follow: true,
       lights: LIGHT_PRESETS.studio.lights.map((l) => ({ on: true, ...l })), caps: true, planeGizmo: true, lightGizmo: false,
       clip: [0, 1, 2].map((i) => ({ on: false, axis: ["x", "y", "z"][i], az: 0, el: 0, offset: 0, flip: false, slab: false, thick: 0.01 })),
-      box: { on: false, lo: [0.4, 0, 0.4], hi: [1, 0.5, 1] }, hiddenRegions: 0,
+      box: { on: false, lo: [0.4, 0, 0.4], hi: [1, 0.5, 1] }, hiddenRegions: 0, faceGrid: false, normalGrid: false, gridLabels: true, eyesGrid: "grid",
     };
     while (this.opts.lights.length < MAX_LIGHTS) this.opts.lights.push({ on: false, az: 0, el: 0, i: 0.5, k: 6500 });
     this.bounds = { lo: [-0.1, -0.1, -0.1], hi: [0.1, 0.1, 0.1], centre: [0, 0, 0], radius: 0.15 };
     this.pivotFlash = 0;
+    this.chartDef = null;
+    this.chartAnchors = [];
+    this.markerSets = new Map();
+    this.flash = null;
+    this.overlayKey = "";
+    this.overlayStats = { labels: 0, markers: 0 };
+    if (labels && labels.parentElement) {
+      this.gridLayer = document.createElement("div");
+      this.gridLayer.className = "gridlayer";
+      labels.parentElement.insertBefore(this.gridLayer, labels.nextSibling);
+    }
     this.setup();
   }
 
@@ -441,7 +471,7 @@ export class Viewer {
       for (const [name, unit] of Object.entries(units)) gl.uniform1i(p.u(name), unit);
       return p;
     };
-    const units = { idxT: 0, posT: 1, nrmT: 2, refT: 3, uvT: 4, flagT: 5, regT: 6 };
+    const units = { idxT: 0, posT: 1, nrmT: 2, refT: 3, uvT: 4, flagT: 5, regT: 6, chartT: 7 };
     this.meshProg = compile(MESH_VS, MESH_FS, units);
     this.pointProg = compile(POINT_VS, POINT_FS, { idxT: 0, posT: 1, regT: 6 });
     this.lineProg = compile(LINE_VS, LINE_FS);
@@ -475,6 +505,7 @@ export class Viewer {
       m.nrm = this.tex("f3", m.n, m.kind === "head" ? undefined : m.nrmCPU);
       m.ref = m.refCPU ? this.tex("f3", m.n, m.refCPU) : null;
       m.region = m.regionCPU ? this.tex("b1", m.n, m.regionCPU) : null;
+      m.chart = m.chartCPU ? this.tex("f2", m.n, m.chartCPU) : null;
       for (const l of m.lods) {
         l.idx = this.tex("u1", l.idxCPU.length, l.idxCPU);
         l.verts = this.tex("u1", l.vertsCPU.length, l.vertsCPU);
@@ -546,11 +577,28 @@ export class Viewer {
     return lod;
   }
 
+  setChart(uv, def, anchors) {
+    const m = this.meshes.get("head");
+    this.drop(m.chart);
+    m.chartCPU = uv;
+    m.chart = this.tex("f2", m.n, uv);
+    this.chartDef = def;
+    this.chartAnchors = anchors || [];
+    this.overlayKey = "";
+  }
+
+  setMarkers(id, list) {
+    if (list == null) this.markerSets.delete(id); else this.markerSets.set(id, list);
+    this.overlayKey = "";
+  }
+
   updateHead(positions, normals) {
     const m = this.meshes.get("head");
     if (!m) return false;
     this.upload(m.pos, positions);
     this.upload(m.nrm, normals);
+    m.nrmCPU = normals;
+    m.poseVersion = (m.poseVersion || 0) + 1;
     m.cpuPos = positions;
     if (!m.wind) m.wind = windingSign(positions, m.lods[0].idxCPU);
   }
@@ -573,7 +621,7 @@ export class Viewer {
 
   setExtra(id, spec, kind = "extra") {
     const old = this.meshes.get(id);
-    if (old && old.kind !== "head") { this.drop(old.pos); this.drop(old.nrm); for (const l of old.lods) { this.drop(l.idx); this.drop(l.verts); this.drop(l.uv); this.drop(l.flags); } this.meshes.delete(id); }
+    if (old && old.kind !== "head") { this.drop(old.chart); this.drop(old.pos); this.drop(old.nrm); for (const l of old.lods) { this.drop(l.idx); this.drop(l.verts); this.drop(l.uv); this.drop(l.flags); } this.meshes.delete(id); }
     if (!spec) return;
     const pos = spec.positions instanceof Float32Array ? spec.positions : Float32Array.from(spec.positions);
     const idx = spec.indices instanceof Uint32Array ? spec.indices : Uint32Array.from(spec.indices);
@@ -680,7 +728,10 @@ export class Viewer {
     return { dirs, cols };
   }
 
-  visibleMeshes() { return [...this.meshes.values()].filter((m) => m.visible && m.cpuPos); }
+  visibleMeshes() {
+    const hideEyes = this.opts.faceGrid && this.chartDef && this.opts.eyesGrid === "hide";
+    return [...this.meshes.values()].filter((m) => m.visible && m.cpuPos && !(hideEyes && m.kind === "eyes"));
+  }
 
   render(dt) {
     const gl = this.gl, c = this.canvas, dpr = window.devicePixelRatio || 1;
@@ -690,12 +741,343 @@ export class Viewer {
     let moving = false;
     for (const r of rects) moving = this.cams[r.cam].step(dt) || moving;
     this.dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    this.syncEyeChart();
     gl.enable(gl.SCISSOR_TEST);
     for (const r of rects) this.renderViewport(r, dpr, h);
     gl.disable(gl.SCISSOR_TEST);
     this.placeLabels(rects);
+    if (this.placeOverlay(rects)) moving = true;
     if (this.pivotFlash > 0) { this.pivotFlash -= dt; moving = true; }
+    if (this.flash) { if (performance.now() < this.flash.until) moving = true; else { this.flash = null; moving = true; } }
     return moving;
+  }
+
+  markerList() {
+    const out = [];
+    for (const v of this.markerSets.values()) {
+      const list = typeof v === "function" ? v() : v;
+      if (Array.isArray(list)) for (const mk of list) if (mk && mk.pos) out.push(mk);
+    }
+    return out;
+  }
+
+  rulerAxes(M) {
+    const pick = (v) => { let k = 0; for (let i = 1; i < 3; i++) if (Math.abs(v[i]) > Math.abs(v[k])) k = i; return Math.abs(v[k]) > 0.999 ? { k, sign: Math.sign(v[k]) } : null; };
+    const s = pick(M.s), u = pick(M.u);
+    return s && u ? { s, u } : null;
+  }
+
+  rulerSteps(pxPerMm) {
+    const major = pxPerMm * 10 >= 9 ? 10 : pxPerMm * 50 >= 9 ? 50 : 100;
+    const minor = pxPerMm >= 6 ? 1 : pxPerMm * 2 >= 6 ? 2 : pxPerMm * 5 >= 6 && major === 10 ? 5 : 0;
+    return { major, minor };
+  }
+
+  drawRuler(M, r, cam) {
+    const gl = this.gl, bg = this.bg, ink = this.dark ? [0.75, 0.80, 0.90] : [0.20, 0.26, 0.36];
+    const tone = (a) => bg.map((x, i) => x + (ink[i] - x) * a);
+    const labels = [];
+    this.rulerLabels = this.rulerLabels || [];
+    this.rulerLabels[r.slot] = labels;
+    if (M.ortho) {
+      const ax = this.rulerAxes(M);
+      const c = cam.cur.target, hh = M.halfH, hw = M.halfH * M.aspect, pxPerMm = r.h / (2 * hh * 1000), st = this.rulerSteps(pxPerMm);
+      const every = (gap) => [10, 20, 50, 100, 200, 500].find((s) => s % st.major === 0 && s * pxPerMm >= gap) || 1000;
+      const labelStep = { true: every(44), false: every(18) };
+      const along = (dir, t) => mul(dir, t);
+      const groups = { major: [], minor: [], zero: [] };
+      const lines = (axis, dir, other, half, otherHalf, vertical) => {
+        if (!axis) return;
+        const k = axis.k, sign = axis.sign, lo = c[k] - half, hi = c[k] + half;
+        const step = st.minor || st.major;
+        for (let mm = Math.ceil((lo * 1000) / step) * step; mm <= hi * 1000; mm += step) {
+          const t = (mm / 1000 - c[k]) * sign, base = add(c, along(dir, t));
+          const seg = [...add(base, along(other, -otherHalf * 1.05)), ...add(base, along(other, otherHalf * 1.05))];
+          const g = mm === 0 ? "zero" : mm % st.major === 0 ? "major" : "minor";
+          groups[g].push(...seg);
+          if (g !== "minor" && this.opts.gridLabels && mm % labelStep[vertical] === 0) {
+            const f = (t / (vertical ? hw : hh) + 1) / 2;
+            labels.push(vertical ? { x: r.x + f * r.w, y: r.y + r.h - 14, text: `${mm}` } : { x: r.x + 4, y: r.y + (1 - f) * r.h, text: `${mm}` });
+          }
+        }
+      };
+      if (ax) {
+        lines(ax.s, M.s, M.u, hw, hh, true);
+        lines(ax.u, M.u, M.s, hh, hw, false);
+        const name = (a) => "xyz"[a.k];
+        labels.push({ x: r.x + r.w - 92, y: r.y + r.h - 30, text: `${name(ax.s)} → · ${name(ax.u)} ↑ · mm`, cls: "axis" });
+      } else {
+        labels.push({ x: r.x + r.w - 160, y: r.y + r.h - 30, text: "mm grid: an axis-aligned ortho view", cls: "axis" });
+      }
+      if (groups.minor.length) this.drawLines(M, groups.minor, tone(0.16), gl.LINES);
+      if (groups.major.length) this.drawLines(M, groups.major, tone(0.42), gl.LINES);
+      if (groups.zero.length) this.drawLines(M, groups.zero, tone(0.75), gl.LINES);
+      return;
+    }
+    const f = M.f, b = this.bounds;
+    let k = 0;
+    for (let i = 1; i < 3; i++) if (Math.abs(f[i]) > Math.abs(f[k])) k = i;
+    const plane = f[k] > 0 ? b.hi[k] + 0.02 : b.lo[k] - 0.02, others = [0, 1, 2].filter((i) => i !== k), out = [], ext = b.radius * 1.3;
+    for (const a of others) {
+      const o2 = others.find((i) => i !== a);
+      for (let mm = Math.ceil(((b.centre[a] - ext) * 1000) / 10) * 10; mm <= (b.centre[a] + ext) * 1000; mm += 10) {
+        const p = [0, 0, 0], q = [0, 0, 0];
+        p[k] = q[k] = plane; p[a] = q[a] = mm / 1000;
+        p[o2] = b.centre[o2] - ext; q[o2] = b.centre[o2] + ext;
+        out.push(...p, ...q);
+      }
+    }
+    this.drawLines(M, out, tone(0.3), gl.LINES);
+    labels.push({ x: r.x + r.w - 150, y: r.y + r.h - 30, text: `back plane ⟂ ${"xyz"[k]} · 10 mm`, cls: "axis" });
+  }
+
+  project(M, r, p) {
+    const m = M.mvp, x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (w <= 1e-9) return null;
+    const nx = x / w, ny = y / w;
+    if (Math.abs(nx) > 1 || Math.abs(ny) > 1) return null;
+    return { x: r.x + ((nx + 1) / 2) * r.w, y: r.y + ((1 - ny) / 2) * r.h };
+  }
+
+  facing(M, p, n) {
+    const v = M.ortho ? mul(M.f, -1) : norm(sub(M.eye, p));
+    return dot(n, v);
+  }
+
+  syncEyeChart() {
+    const def = this.chartDef, want = this.opts.faceGrid && def && this.opts.eyesGrid === "grid";
+    if (!want) return;
+    for (const m of this.meshes.values()) {
+      if (m.kind !== "eyes" || !m.cpuPos || m.chartSrc === m.cpuPos) continue;
+      const c = def.centre_mm.map((x) => x / 1000), f = def.front, top = def.top_mm / 1000, uv = new Float32Array(m.n * 2), P = m.cpuPos;
+      for (let i = 0; i < m.n; i++) {
+        const rx = P[3 * i] - c[0], ry = P[3 * i + 1] - c[1];
+        let u = (Math.atan2(f[0] * ry - f[1] * rx, f[0] * rx + f[1] * ry) * 180) / Math.PI;
+        if (u <= -180) u += 360;
+        uv[2 * i] = u;
+        uv[2 * i + 1] = (top - P[3 * i + 2]) * 1000;
+      }
+      this.drop(m.chart);
+      m.chart = this.tex("f2", m.n, uv);
+      m.chartSrc = m.cpuPos;
+    }
+  }
+
+  overlayObstacles() {
+    const b = this.canvas.getBoundingClientRect(), out = [], view = this.canvas.parentElement;
+    const add = (el, kind) => {
+      if (!el) return;
+      const q = el.getBoundingClientRect();
+      if (q.width > 0 && q.height > 0) out.push({ x0: q.left - b.left, y0: q.top - b.top, x1: q.right - b.left, y1: q.bottom - b.top, kind });
+    };
+    if (this.labels) for (const s of this.labels.querySelectorAll(".vp span")) add(s, "caption");
+    if (view) {
+      for (const s of view.querySelectorAll(".overlay .row, .overlay .label")) add(s, "toolbar");
+      add(view.querySelector(".addr:not(.hidden)"), "card");
+    }
+    return out;
+  }
+
+  axisInfo() {
+    const head = this.meshes.get("head"), def = this.chartDef, ch = head?.chartCPU;
+    if (!ch || !def) return null;
+    if (this.axisCache && this.axisCache.ch === ch) return this.axisCache;
+    const span = def.axis_span_deg || 45, front = def.letters.indexOf(def.front_column || "M"), cols = def.letters.length;
+    const cellKey = (g) => {
+      const k = Math.floor(ch[2 * g] / def.column_deg + 0.5), col = (((k + front) % cols) + cols) % cols, row = Math.floor(Math.max(0, ch[2 * g + 1]) / def.row_mm) + 1;
+      return col * 4096 + row;
+    };
+    const idx = head.lods[0].idxCPU, cells = new Set();
+    for (let t = 0; t < idx.length; t += 3) {
+      const u0 = ch[2 * idx[t]], us = [u0, ch[2 * idx[t + 1]], ch[2 * idx[t + 2]]].map((u) => u - 360 * Math.round((u - u0) / 360));
+      const raw = [u0, ch[2 * idx[t + 1]], ch[2 * idx[t + 2]]];
+      if (Math.max(...us) - Math.min(...us) >= span || Math.max(...raw) - Math.min(...raw) >= 180) for (let k = 0; k < 3; k++) cells.add(cellKey(idx[t + k]));
+    }
+    const vertex = new Uint8Array(head.n);
+    for (let g = 0; g < head.n; g++) vertex[g] = cells.has(cellKey(g)) ? 1 : 0;
+    this.axisCache = { ch, cells, vertex, cellKey, front };
+    return this.axisCache;
+  }
+
+  zbufFor(r, M) {
+    if (!this.zbufs) this.zbufs = new Map();
+    const have = this.zbufs.get(r.slot);
+    if (have) return have;
+    const S = 2, W = Math.max(1, Math.ceil(r.w / S)), H = Math.max(1, Math.ceil(r.h / S)), buf = new Float32Array(W * H).fill(Infinity);
+    const m = M.mvp, f = M.f, st = this.vp[r.slot], P = this.planes(), box = this.boxWorld(), o = this.opts;
+    const cut = (x, y, z) => P.some((q) => q.n[0] * x + q.n[1] * y + q.n[2] * z > q.d) || (o.box.on && x > box.lo[0] && x < box.hi[0] && y > box.lo[1] && y < box.hi[1] && z > box.lo[2] && z < box.hi[2]);
+    for (const mesh of this.visibleMeshes()) {
+      const pos = mesh.cpuPos, idx = this.lodOf(mesh, st).idxCPU, n = pos.length / 3;
+      const X = new Float32Array(n), Y = new Float32Array(n), Z = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2], w = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if (w <= 1e-9) { Z[i] = NaN; continue; }
+        X[i] = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * 0.5 * W;
+        Y[i] = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * 0.5 * H;
+        Z[i] = f[0] * x + f[1] * y + f[2] * z;
+      }
+      const clipping = P.length > 0 || o.box.on;
+      for (let t = 0; t < idx.length; t += 3) {
+        const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+        if (Number.isNaN(Z[a]) || Number.isNaN(Z[b]) || Number.isNaN(Z[c])) continue;
+        if (clipping && cut((pos[3 * a] + pos[3 * b] + pos[3 * c]) / 3, (pos[3 * a + 1] + pos[3 * b + 1] + pos[3 * c + 1]) / 3, (pos[3 * a + 2] + pos[3 * b + 2] + pos[3 * c + 2]) / 3)) continue;
+        const x0 = Math.max(0, Math.floor(Math.min(X[a], X[b], X[c]))), x1 = Math.min(W - 1, Math.ceil(Math.max(X[a], X[b], X[c])));
+        const y0 = Math.max(0, Math.floor(Math.min(Y[a], Y[b], Y[c]))), y1 = Math.min(H - 1, Math.ceil(Math.max(Y[a], Y[b], Y[c])));
+        if (x0 > x1 || y0 > y1) continue;
+        const area = (X[b] - X[a]) * (Y[c] - Y[a]) - (X[c] - X[a]) * (Y[b] - Y[a]);
+        if (Math.abs(area) < 1e-12) continue;
+        const ia = 1 / area;
+        for (let py = y0; py <= y1; py++) {
+          const sy = py + 0.5;
+          for (let px = x0; px <= x1; px++) {
+            const sx = px + 0.5;
+            const w0 = ((X[b] - sx) * (Y[c] - sy) - (X[c] - sx) * (Y[b] - sy)) * ia, w1 = ((X[c] - sx) * (Y[a] - sy) - (X[a] - sx) * (Y[c] - sy)) * ia, w2 = 1 - w0 - w1;
+            if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+            const d = w0 * Z[a] + w1 * Z[b] + w2 * Z[c], k = py * W + px;
+            if (d < buf[k]) buf[k] = d;
+          }
+        }
+      }
+    }
+    const cam = this.cams[r.cam], perPx = M.ortho ? (2 * M.halfH) / r.h : (2 * M.tanh * cam.cur.dist) / r.h;
+    const zb = { W, H, S, buf, tol: Math.max(0.002, 3 * S * perPx) };
+    this.zbufs.set(r.slot, zb);
+    return zb;
+  }
+
+  zVisible(zb, M, r, p) {
+    if (!zb) return true;
+    const s = this.project(M, r, p);
+    if (!s) return false;
+    const px = Math.floor((s.x - r.x) / zb.S), py = Math.floor((s.y - r.y) / zb.S);
+    if (px < 0 || py < 0 || px >= zb.W || py >= zb.H) return false;
+    return M.f[0] * p[0] + M.f[1] * p[1] + M.f[2] * p[2] <= zb.buf[py * zb.W + px] + zb.tol;
+  }
+
+  placeOverlay(rects) {
+    if (!this.gridLayer) return false;
+    const o = this.opts, head = this.meshes.get("head"), marks = this.markerList(), now = performance.now();
+    const viewKey = JSON.stringify([rects.map((r) => [r.x, r.y, r.w, r.h, this.cams[r.cam].cur, this.vp[r.slot].lod]), o.hiddenRegions, this.planes().map((q) => [q.n, q.d]), o.box,
+      head?.poseVersion, o.faceGrid, o.eyesGrid, [...this.meshes.values()].map((m) => [m.id, m.visible, m.cpuPos?.length])]);
+    if (viewKey !== this.viewKey) { this.viewKey = viewKey; this.viewAt = now; this.zbufs = null; }
+    const resting = now - (this.viewAt || 0) >= 120;
+    const obstacles = this.overlayObstacles();
+    const key = JSON.stringify([viewKey, resting, o.normalGrid, o.gridLabels, marks.map((m) => [m.pos, m.text]), this.hover, this.dark, obstacles]);
+    if (key === this.overlayKey) return !resting;
+    this.overlayKey = key;
+    const parts = [], cellsOut = [], edgesOut = [];
+    let ruler = 0, rulerDropped = 0;
+    const P = this.planes(), box = this.boxWorld();
+    const cut = (p) => P.some((q) => dot(q.n, p) > q.d) || (o.box.on && p.every((x, k) => x > box.lo[k] && x < box.hi[k]));
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const blocked = (bx) => obstacles.some((q) => bx.x0 < q.x1 && bx.x1 > q.x0 && bx.y0 < q.y1 && bx.y1 > q.y0);
+    const wantFace = !!(o.faceGrid && o.gridLabels && this.chartDef && head && head.visible && head.cpuPos && head.nrmCPU && head.chartCPU);
+    const ax = wantFace ? this.axisInfo() : null;
+    for (const r of rects) {
+      const M = this.lastM?.[r.slot];
+      if (!M) continue;
+      if (o.normalGrid) for (const l of this.rulerLabels?.[r.slot] || []) {
+        const w = l.text.length * 6.2 + 8, bx = l.cls ? { x0: l.x, x1: l.x + w, y0: l.y, y1: l.y + 14 } : { x0: l.x, x1: l.x + w, y0: l.y - 7, y1: l.y + 7 };
+        if (blocked(bx)) { rulerDropped++; continue; }
+        parts.push(`<div class="rl${l.cls ? ` ${l.cls}` : ""}" style="left:${l.x.toFixed(1)}px;top:${l.y.toFixed(1)}px">${esc(l.text)}</div>`);
+        ruler++;
+      }
+      const zb = resting && (wantFace || marks.length) ? this.zbufFor(r, M) : null;
+      if (wantFace && resting && ax) {
+        const def = this.chartDef, letters = def.letters, cols = letters.length, pos = head.cpuPos, nrm = head.nrmCPU, ch = head.chartCPU, reg = head.regionCPU, hid = o.hiddenRegions >>> 0;
+        const seen = [];
+        let yTop = Infinity, yBot = -Infinity;
+        for (let g = 0; g < head.n; g++) {
+          if (ax.vertex[g] || (reg && hid && ((hid >>> reg[g]) & 1))) continue;
+          const p = [pos[g * 3], pos[g * 3 + 1], pos[g * 3 + 2]];
+          if (this.facing(M, p, [nrm[g * 3], nrm[g * 3 + 1], nrm[g * 3 + 2]]) < 0.1 || cut(p)) continue;
+          const s = this.project(M, r, p);
+          if (!s || !this.zVisible(zb, M, r, p)) continue;
+          seen.push(g, s.x, s.y);
+          yTop = Math.min(yTop, s.y);
+          yBot = Math.max(yBot, s.y);
+        }
+        const mid = (yTop + yBot) / 2, colUp = new Map(), colDown = new Map(), rowAcc = new Map(), acc = (m, k, v) => { const a = m.get(k) || []; a.push(v); m.set(k, a); };
+        for (let i = 0; i < seen.length; i += 3) {
+          const g = seen[i], sx = seen[i + 1], sy = seen[i + 2];
+          const x = ch[2 * g] / def.column_deg + 0.5, k = Math.floor(x);
+          if (Math.abs(x - k - 0.5) < 0.3) { const c = (((k + ax.front) % cols) + cols) % cols; if (sy < mid) acc(colUp, c, sx); acc(colDown, c, [sx, sy]); }
+          const y = Math.max(0, ch[2 * g + 1]) / def.row_mm, row = Math.floor(y);
+          if (Math.abs(y - row - 0.5) < 0.3) acc(rowAcc, row + 1, sy);
+        }
+        const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+        const pick = (m, gap, lo, hi, name) => {
+          const items = [...m].filter(([, a]) => a.length >= 3).map(([k, a]) => ({ k, text: name(k), at: median(a), n: a.length })).filter((it) => it.at > lo && it.at < hi).sort((a, b) => b.n - a.n), kept = [];
+          for (const it of items) { const w = gap(it.text); if (!kept.some((q) => Math.abs(q.at - it.at) < (q.w + w) / 2 + 2)) kept.push({ ...it, w }); }
+          return kept;
+        };
+        const colsUp = pick(colUp, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
+        const colAll = new Map([...colDown].map(([k, a]) => [k, a.map((q) => q[0])]));
+        const floor = new Map(), bin = (x) => Math.floor(x / 6);
+        for (let i = 0; i < seen.length; i += 3) { const b = bin(seen[i + 1]); floor.set(b, Math.max(floor.get(b) ?? -Infinity, seen[i + 2])); }
+        for (const [k, a] of colDown) {
+          const low = Math.max(...a.map((q) => q[1]));
+          colDown.set(k, a.filter((q) => q[1] >= low - 40 && q[1] >= floor.get(bin(q[0])) - 25).map((q) => q[0]));
+        }
+        const colsDown = pick(colDown, (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k]);
+        const named = new Set([...colsUp, ...colsDown].map((it) => it.k));
+        for (const it of pick(new Map([...colAll].filter(([k]) => !named.has(k))), (t) => t.length * 7 + 8, r.x + 8, r.x + r.w - 8, (k) => letters[k])) {
+          if (!colsUp.some((q) => Math.abs(q.at - it.at) < (q.w + it.w) / 2 + 2)) colsUp.push(it);
+        }
+        const rowsKept = pick(rowAcc, () => 13, r.y + 8, r.y + r.h - 8, (k) => `${k}`);
+        const put = (it, x, y, kind, edge) => {
+          const w = it.text.length * 7 + 8, bx = { x0: x - w / 2, x1: x + w / 2, y0: y - 7, y1: y + 7 };
+          if (blocked(bx)) return;
+          parts.push(`<div class="gl edge" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px">${it.text}</div>`);
+          edgesOut.push({ slot: r.slot, kind, edge, text: it.text, x: +x.toFixed(1), y: +y.toFixed(1), n: it.n });
+        };
+        const bottom = r.y + r.h - (o.normalGrid ? 32 : 14);
+        const bars = obstacles.filter((q) => q.kind === "toolbar" && q.x0 < r.x + r.w && q.x1 > r.x && q.y1 > r.y && q.y0 < r.y + r.h * 0.25);
+        const top = Math.max(r.y + 12, ...bars.map((q) => q.y1 + 10));
+        for (const it of colsUp) put(it, it.at, top, "col", "top");
+        for (const it of colsDown) put(it, it.at, bottom, "col", "bottom");
+        this.edgeSplit = this.edgeSplit || [];
+        this.edgeSplit[r.slot] = mid;
+        const rowsAll = [...rowAcc].filter(([, a]) => a.length >= 3).map(([k, a]) => ({ k, text: `${k}`, at: median(a), n: a.length, w: 13 })).filter((it) => it.at > r.y + 8 && it.at < r.y + r.h - 8).sort((a, b) => a.at - b.at);
+        const gaps = rowsAll.slice(1).map((it, i) => it.at - rowsAll[i].at), roomy = !gaps.length || median(gaps) >= 30, leftFree = !o.normalGrid || !M.ortho;
+        const side = (list) => { const kept = []; for (const it of list) if (!kept.some((q) => Math.abs(q.at - it.at) < 15)) kept.push(it); return kept; };
+        const rightRows = side(roomy || !leftFree ? rowsKept : rowsAll.filter((it) => it.k % 2 === 0)), leftRows = leftFree ? side(roomy ? rowsKept : rowsAll.filter((it) => it.k % 2 === 1)) : [];
+        for (const it of rightRows) put(it, r.x + r.w - 14, it.at, "row", "right");
+        for (const it of leftRows) put(it, r.x + 16, it.at, "row", "left");
+        const cand = [], placed = [];
+        for (const a of this.chartAnchors) {
+          const g = a.g;
+          if (ax.vertex[g] || (reg && hid && ((hid >>> reg[g]) & 1))) continue;
+          const p = [pos[g * 3], pos[g * 3 + 1], pos[g * 3 + 2]], f = this.facing(M, p, [nrm[g * 3], nrm[g * 3 + 1], nrm[g * 3 + 2]]);
+          if (f < 0.45 || cut(p)) continue;
+          const pxPerMm = M.ortho ? r.h / (2 * M.halfH * 1000) : r.h / (2 * M.tanh * Math.max(1e-4, dot(sub(p, M.eye), M.f)) * 1000);
+          if (def.row_mm * pxPerMm * f < 56) continue;
+          const s = this.project(M, r, p);
+          if (s && this.zVisible(zb, M, r, p)) cand.push({ s, f, g, text: `${letters[a.col]}${a.row}` });
+        }
+        cand.sort((x, y) => y.f - x.f);
+        for (const c of cand) {
+          const w = c.text.length * 6.5 + 8, bx = { x0: c.s.x - w / 2, x1: c.s.x + w / 2, y0: c.s.y - 7, y1: c.s.y + 7 };
+          if (blocked(bx) || placed.some((q) => Math.abs(q.x - c.s.x) < (q.w + w) / 2 + 2 && Math.abs(q.y - c.s.y) < 15)) continue;
+          placed.push({ x: c.s.x, y: c.s.y, w });
+          parts.push(`<div class="gl" style="left:${c.s.x.toFixed(1)}px;top:${c.s.y.toFixed(1)}px">${c.text}</div>`);
+          cellsOut.push({ slot: r.slot, text: c.text, g: c.g, x: +c.s.x.toFixed(1), y: +c.s.y.toFixed(1) });
+        }
+      }
+      if (wantFace && this.hover && this.hover.slot === r.slot) {
+        const s = this.project(M, r, this.hover.pos);
+        if (s) parts.push(`<div class="gl hover" style="left:${(s.x + 12).toFixed(1)}px;top:${(s.y - 26).toFixed(1)}px">${esc(this.hover.text)}</div>`);
+      }
+      for (const mk of marks) {
+        if (!mk.text) continue;
+        const s = this.project(M, r, mk.pos);
+        if (!s || (mk.nrm && this.facing(M, mk.pos, mk.nrm) < 0) || cut(mk.pos) || !this.zVisible(zb, M, r, mk.pos)) continue;
+        parts.push(`<div class="pin" style="left:${(s.x + 6).toFixed(1)}px;top:${(s.y - 18).toFixed(1)}px">${esc(mk.text)}</div>`);
+      }
+    }
+    this.gridLayer.innerHTML = parts.join("");
+    this.overlayStats = { labels: cellsOut.length, edge: edgesOut.length, cells: cellsOut, edges: edgesOut, markers: marks.length, ruler, rulerDropped, resting, obstacles };
+    return !resting;
   }
 
   meshUniforms(p, M, st) {
@@ -729,6 +1111,9 @@ export class Viewer {
     const heat = [o.heat.quality, o.heat.displacement, o.heat.curvature][st.mode - 8];
     gl.uniform1f(p.u("heatMax"), Math.max(1e-6, heat || 1));
     gl.uniform1ui(p.u("hidMask"), o.hiddenRegions >>> 0);
+    gl.uniform1i(p.u("gridOn"), o.faceGrid && this.chartDef ? 1 : 0);
+    gl.uniform2fv(p.u("gridStep"), this.chartDef ? [this.chartDef.column_deg, this.chartDef.row_mm] : [15, 10]);
+    gl.uniform3fv(p.u("gridInk"), this.dark ? [0.30, 0.95, 0.85] : [0.02, 0.36, 0.55]);
     this.clipUniforms(p, -1);
   }
 
@@ -750,6 +1135,8 @@ export class Viewer {
     const bind = (unit, r, dummy) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, (r || dummy).t); };
     bind(0, lod.idx, D.u1); bind(1, m.pos, D.f3); bind(2, m.nrm, D.f3); bind(3, m.ref, D.f3); bind(4, lod.uv, D.f2); bind(5, lod.flags, D.b1); bind(6, m.region, D.b1);
     if (p === this.meshProg) {
+      bind(7, m.chart, D.f2);
+      gl.uniform1i(p.u("hasChart"), m.chart && (m.kind === "head" || this.opts.eyesGrid === "grid") ? 1 : 0);
       gl.uniform1f(p.u("windSign"), m.wind || 1);
       gl.uniform1i(p.u("hasRef"), m.ref ? 1 : 0);
       gl.uniform1i(p.u("hasUV"), lod.uv ? 1 : 0);
@@ -775,6 +1162,9 @@ export class Viewer {
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     const M = cam.matrices(w / h);
+    this.lastM = this.lastM || [];
+    this.lastM[r.slot] = M;
+    if (o.normalGrid) { gl.disable(gl.DEPTH_TEST); gl.depthMask(false); this.drawRuler(M, r, cam); gl.depthMask(true); }
     const meshes = this.visibleMeshes();
     gl.bindVertexArray(this.emptyVao);
     gl.enable(gl.DEPTH_TEST);
@@ -845,7 +1235,17 @@ export class Viewer {
         gl.drawArrays(gl.POINTS, 0, lod.vertsCPU.length);
       }
     }
+    const marks = this.markerList();
+    if (marks.length) {
+      const toward = (p) => { const d = M.ortho ? mul(M.f, -1) : norm(sub(M.eye, p)); return add(p, mul(d, 0.0012)); };
+      for (const mk of marks) this.drawLines(M, toward(mk.pos), mk.color || [1, 0.2, 0.55], gl.POINTS, -1, (mk.size || 9) * dpr);
+    }
     gl.disable(gl.DEPTH_TEST);
+    if (this.flash && performance.now() < this.flash.until) {
+      const t = this.flash.pos, s = this.bounds.radius * 0.05, k = 0.5 + 0.5 * Math.sin(performance.now() / 90);
+      this.drawLines(M, [t[0] - s, t[1], t[2], t[0] + s, t[1], t[2], t[0], t[1] - s, t[2], t[0], t[1] + s, t[2], t[0], t[1], t[2] - s, t[0], t[1], t[2] + s], [1, 0.25 + 0.6 * k, 0.1], gl.LINES);
+      this.drawLines(M, t, [1, 0.25 + 0.6 * k, 0.1], gl.POINTS, -1, 11 * dpr);
+    }
     for (const ov of this.overlays.values()) {
       if (!ov.visible) continue;
       if (ov.lines && ov.lines.length >= 6) this.drawLines(M, ov.lines, ov.color, gl.LINES);
@@ -935,10 +1335,18 @@ export class Viewer {
         if (dist <= 0 || (best && dist >= best.t)) continue;
         const hit = add(o, mul(d, dist));
         if (cut(hit)) continue;
-        best = { t: dist, point: hit, mesh: m.id, slot: r.slot };
+        best = { t: dist, point: hit, mesh: m.id, slot: r.slot, triangle: t / 3, bary: [1 - u - v, u, v], corners: [idx[t], idx[t + 1], idx[t + 2]],
+                 lod: m.kind === "head" ? Math.min(st.lod, m.lods.length - 1) : 0 };
       }
     }
     return best;
+  }
+
+  screenOf(p, slot = this.active) {
+    const r = this.rects().find((x) => x.slot === slot) || this.rects()[0], M = this.lastM?.[r.slot];
+    if (!M) return null;
+    const b = this.canvas.getBoundingClientRect(), s = this.project(M, r, p);
+    return s ? { x: s.x + b.left, y: s.y + b.top, rx: s.x, ry: s.y, rect: r } : null;
   }
 
   screenshot(which = "viewport") {

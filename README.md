@@ -506,6 +506,87 @@ other than 1 shows the scaled head through `setPose`; while the character change
 re-stitched after the settle when "Re-stitch after every change" is on). The Face rig panel drops its pose while a slider
 moves and refits after the settle.
 
+`api.grid` (the face chart, below) gives a panel `ensure()`, `lastProbe()`, `onProbe(cb)`, `onPin(cb)`,
+`describe(triangle, bary)`, `pointOf(triangle, bary)`, `normalOf(triangle)`, `goTo(address)`, `setMarkers(id, list | fn)`,
+`character()` and `definition()`. The Pins panel (`web/panels/pins.js`) is built on it.
+
+### Grid and addresses
+
+A way to say *where* on the face something is, the same way for a person looking at the designer and for a tool reading a
+gate report.
+
+**The face chart.** Every vertex of the dense base gets a chart coordinate once, computed from the **base** positions
+(never from a character) and carried by vertex identity: because the dense vertex order is the identity and game vertices
+are dense vertices, a cell names the same vertices on every character, at every level of detail. The chart is a cylinder
+about a vertical (z) axis through a fixed centre: the midpoint of the x and y extent of the base vertices at or above the
+nose tip (dense vertex 185894). `u` is the angle about that axis, 0 through the nose tip and positive towards +x (the
+viewer's right in the front view), in (-180, 180]; `v` is millimetres below the highest base vertex.
+
+**Cell names.** Columns are 15 degrees of `u`, lettered A to X, with **M** centred on the nose tip (`u` in [-7.5, 7.5))
+and A at the back of the head; rows are 10 mm of `v`, numbered from 1 at the top of the head down. At the nose tip's
+distance from the axis a cell is about 26 x 10 mm. A subcell `.1` to `.9` splits a cell 3 x 3 in numeric-keypad
+layout as seen from outside the head: 7 8 9 the top third, 4 5 6 the middle, 1 2 3 the bottom. `M14.5` is the middle of
+the cell holding the nose tip. Where the surface turns away from the axis (behind the ears, under the chin and jaw,
+inside the lips, nostrils and eye openings) a cell covers two layers of surface; the vertex index of an address tells
+them apart. `grid.chart` reports these folded triangles per cell.
+
+**The seam and the axis.** The seam (`u` = +-180) runs through the middle of column A, so no cell boundary lies on it;
+a triangle that crosses it is interpolated after unwrapping its corners' `u`. Close to the axis itself (the crown,
+and inside the mouth and throat) the angle stops meaning anything: a triangle whose corners' unwrapped `u` spread over
+45 degrees or more (`axis_span_deg` in the chart definition) is treated as lying on the axis. A point on such a
+triangle takes the cell of its largest-barycentric corner. The cells touched by such triangles, or by a triangle that
+crosses the seam, never get an in-cell label (the address of a point there is still exact).
+
+**Addresses.** A probe (Q toggles probe mode, Alt+click probes in any mode, also through the address card and other
+overlays) shows an address card with one line to copy:
+
+```
+GF@ M14.5 | region nose | game v1060 = dense 446284 | LOD0 t13322 b(1.000,0.000) | -1.7,-151.1,1473.9 mm | train_aged fe2b89a9e097
+GF@ L8.2 (v in L8.3) | region eyebrows | game v4833 = dense 302901 | LOD0 t7537 b(0.040,0.559) | -18.2,-148.9,1516.9 mm | reference_face f738077f5812
+```
+
+The fields, in order: the cell and subcell of the surface point; when the named vertex lies in another subcell,
+`(v in ...)` gives that vertex's cell, so the line never disagrees with itself; the region of the vertex; the vertex,
+which is the corner of the hit triangle nearest to the point in space, as game vertex and dense vertex; the level of
+detail, triangle and barycentrics of corners 1 and 2 in that level; the point in millimetres; and the character. The
+card's go-to box (J) takes a whole line, a cell (`M14`), a subcell (`M14.5`), `dense N` or `game vN`, frames the spot in
+the active view and flashes a marker; a pasted line whose parts disagree still goes to its surface point, with a warning
+naming the disagreement. **T** draws the face grid on the surface (cell lines, subcell lines when close, the front
+midline in red) in every shading mode, layout and level of detail, and labels it like an atlas: column letters along the
+top and bottom of each viewport and row numbers along its sides. A top letter sits over its column where the column
+crosses the upper half of the head; a bottom letter sits under the point where its column leaves the head at the bottom
+(it is only placed when the column reaches the bottom outline), so following a strip down to the bottom edge reads its
+letter; a row number sits level with its row. Hovering shows the cell under the cursor, and once a cell is large enough
+on screen (zoomed in) it carries its own label. Labels are tested against the surface depth, so none shows through the
+head. The **eyes** option sets what the eye spheres do while the grid is on: the grid drawn over them (from their own
+positions in the chart frame), hidden, or plain. **R** draws a millimetre grid: in an axis-aligned orthographic view
+(front, side, top) lines every 10 mm labelled at the edges, with 5, 2 or 1 mm lines as the view zooms in; in perspective
+a 10 mm back plane behind the head. No label is drawn over a viewport caption, the toolbar or the address card.
+
+**Pins.** The Pins panel keeps numbered markers placed from the address card. A pin is stored by the finest level's
+triangle and barycentrics (plus its dense vertex), so it follows sliders, characters and levels of detail; each has a
+note; pins join undo and redo and are saved with the project. A pin placed on a coarser level of detail goes to the
+finest-level surface point closest to the clicked point (an exact closest-point search over the finest triangles); the
+card and the pin record give that distance (`lod0_error_mm`), which is how far the coarser level's surface lies from the
+finest one there. *Export pins* writes `gazeforge.pins/1` JSON: the character, the chart definition, and per pin its
+address, cell, region, game and dense vertex, triangle, barycentrics, position and note.
+
+**Commands.** `grid.chart` (per game vertex: chart coordinate, packed cell, region, dense index; one label anchor per
+cell; the chart definition and its sanity figures), `grid.locate` (dense vertices, game vertices, triangles,
+triangle + barycentrics points, or a whole gate report -> cell, region, chart coordinate) and `grid.resolve` (a cell,
+subcell, `dense N`, `game vN` or an address line -> the game vertices, the dense count, the base centroid and the game
+vertex nearest it). `grid.resolve` checks an address line against itself before answering: the game index must be the
+game base's index of the dense vertex, the cell (or the `(v in ...)` cell) must be the vertex's cell, and for a LOD0
+line the cell must be the cell of the stated triangle point and the vertex one of its corners. A line that fails any of
+these is refused with the disagreements named; `accept_inconsistent: true` resolves it by its dense index anyway and
+lists them under `warnings` (`consistent` is false, `checked` lists what was checked). A dense vertex the game base does
+not keep comes back with `kept: false`. In `grid.locate`, a point's vertex is the corner nearest to it on the base,
+reported with its own `vertex_cell`. The gates speak the grid when asked: `gates game ... --cells on` adds a `cell` beside every
+reported triangle and vertex and a `*_cells` list beside `worst_visible`, `lost_vertices` and `added_vertices`;
+`gates lids ... --cells on --dense DIR --base DIR` adds the cells of the vertices inside an eye (read for the finest
+level, whose triangles follow the game base's order). Without `--cells` both commands print exactly what they did
+before.
+
 ### Projects
 
 A project file `<name>.gfproj.json` keeps an ongoing piece of work: its characters (each a spec with a revision history;

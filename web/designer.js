@@ -33,6 +33,7 @@ const D = {
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio",
   panelHooks: new Map(), pendingVis: new Map(),
+  grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [],
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
 };
 window.gfDesigner = D;
@@ -46,6 +47,8 @@ const SHORTCUTS = [
   ["[ / ]", "narrower / wider field of view (framing kept)"], ["L", "layout: single, side by side, quad"], ["N", "next viewport"], ["M / Shift+M", "next / previous render mode"], [", / .", "coarser / finer level of detail"],
   ["W", "wireframe overlay"], ["X", "hidden edges through the surface (x-ray wire)"], ["P", "vertex points"], ["B", "back-face highlight"], ["E", "seams and boundary edges"],
   ["C", "clip plane 1 on / off"], ["G", "light gizmo"], ["H / Alt+H", "hide the head / show everything"], ["I", "isolate the head"], ["K / Shift+K", "PNG of the active view / the whole layout"],
+  ["T", "face grid: cells fixed to the topology (same cell = same vertices on every character)"], ["R", "millimetre grid (axis-aligned ortho views; a back plane in perspective)"],
+  ["Q / Alt+click", "probe mode (a click shows the address) / probe once in any mode"], ["J", "go to an address (a cell, dense N, game vN or a GF@ line)"],
   ["Ctrl+N / Ctrl+O", "new / open project"], ["Ctrl+S / Ctrl+Shift+S", "save / save the project as"],
   ["?", "this help"], ["Esc", "close the help"],
 ];
@@ -221,6 +224,7 @@ function frame(ts) {
   D.raf = 0;
   const t0 = performance.now();
   if (D.hooks.beforeFrame) D.hooks.beforeFrame();
+  if (V.opts.faceGrid && !D.gridPromise && D.ready) ensureGrid().catch(() => {});
   if (D.dirty && V.meshes.has("head")) {
     const pose = activePose();
     if (pose) V.updateHead(pose.positions, pose.normals);
@@ -926,6 +930,10 @@ function interaction() {
       case "h": if (e.altKey) showAll(); else setVisible("mesh", "head", !V.meshes.get("head").visible); break;
       case "i": isolate("mesh", "head"); break;
       case "k": screenshot(e.shiftKey ? "layout" : "viewport"); break;
+      case "t": toggleOpt("faceGrid", "face grid"); break;
+      case "r": toggleOpt("normalGrid", "millimetre grid"); break;
+      case "q": setProbeMode(!D.probeMode); break;
+      case "j": $("addr").classList.remove("hidden"); $("goto").focus(); $("goto").select(); break;
       case "[": setFov(V.activeCam().goal.fov - 5); break;
       case "]": setFov(V.activeCam().goal.fov + 5); break;
       case ",": setLod(V.activeVp().lod + 1); break;
@@ -967,6 +975,190 @@ async function loadScene() {
   }
 }
 
+function gridTargets() { return D.targets.map((t) => t.id); }
+
+function ensureGrid() {
+  if (!D.gridPromise) D.gridPromise = (async () => {
+    const r = await api("grid.chart", { store, ...D.base, targets: gridTargets() });
+    const uv = decodeF32(r.chart_f32_b64), cells = decodeU32(r.cells_u32_b64), regions = new Uint8Array(bytesOf(r.regions_u8_b64)), dense = decodeU32(r.dense_u32_b64);
+    const head = V.meshes.get("head");
+    let regionDiff = 0;
+    for (let g = 0; g < D.n; g++) if (head.regionCPU[g] !== regions[g]) regionDiff++;
+    const anchors = r.anchors.map(([label, g]) => ({ label, g, col: cells[g] >>> 24, row: (cells[g] >>> 4) & 0xfffff }));
+    const gameOf = new Map();
+    dense.forEach((d, g) => gameOf.set(d, g));
+    D.grid = { def: r.definition, letters: r.definition.letters, uv, cells, regions, dense, gameOf, anchors, sanity: r.sanity, regionDiff,
+               namesMatch: JSON.stringify(r.region_names) === JSON.stringify(D.regions.names), cached: r.cached };
+    V.setChart(uv, r.definition, anchors);
+    request(false);
+    return D.grid;
+  })().catch((e) => { D.gridPromise = null; toast(`face grid: ${e.message}`); throw e; });
+  return D.gridPromise;
+}
+
+const cellName = (p) => `${D.grid.letters[p >>> 24]}${(p >>> 4) & 0xfffff}.${p & 15}`;
+const nearestCorner = (b) => (b[0] >= b[1] && b[0] >= b[2] ? 0 : b[1] >= b[2] ? 1 : 2);
+
+function pointCell(corners, bary) {
+  const uv = D.grid.uv, c = corners;
+  return D.wasm.gf_chart_point_cell(uv[c[0] * 2], uv[c[0] * 2 + 1], uv[c[1] * 2], uv[c[1] * 2 + 1], uv[c[2] * 2], uv[c[2] * 2 + 1], bary[0], bary[1], bary[2]);
+}
+
+function headPos(g) { const p = V.meshes.get("head").cpuPos; return [p[g * 3], p[g * 3 + 1], p[g * 3 + 2]]; }
+
+function pointOf(tri, bary, lod = 0) {
+  const idx = V.meshes.get("head").lods[lod].idxCPU, out = [0, 0, 0];
+  for (let k = 0; k < 3; k++) { const q = headPos(idx[tri * 3 + k]); for (let i = 0; i < 3; i++) out[i] += bary[k] * q[i]; }
+  return out;
+}
+
+function normalOf(tri, lod = 0) {
+  const head = V.meshes.get("head"), idx = head.lods[lod].idxCPU, [a, b, c] = [0, 1, 2].map((k) => headPos(idx[tri * 3 + k]));
+  const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(...n) || 1, s = head.wind || 1;
+  return n.map((x) => (x / l) * s);
+}
+
+function baryOn(tri, p) {
+  const idx = D.indices, [a, b, c] = [0, 1, 2].map((k) => headPos(idx[tri * 3 + k]));
+  const v0 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v1 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]], v2 = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+  const d = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+  const d00 = d(v0, v0), d01 = d(v0, v1), d11 = d(v1, v1), d20 = d(v2, v0), d21 = d(v2, v1), den = d00 * d11 - d01 * d01;
+  if (Math.abs(den) < 1e-30) return [1, 0, 0];
+  const v = (d11 * d20 - d01 * d21) / den, w = (d00 * d21 - d01 * d20) / den;
+  return [1 - v - w, v, w];
+}
+
+function closestOnTriangle(p, a, b, c) {
+  const sub3 = (x, y) => [x[0] - y[0], x[1] - y[1], x[2] - y[2]], dot3 = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+  const ab = sub3(b, a), ac = sub3(c, a), ap = sub3(p, a), d1 = dot3(ab, ap), d2 = dot3(ac, ap);
+  if (d1 <= 0 && d2 <= 0) return [1, 0, 0];
+  const bp = sub3(p, b), d3 = dot3(ab, bp), d4 = dot3(ac, bp);
+  if (d3 >= 0 && d4 <= d3) return [0, 1, 0];
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); return [1 - v, v, 0]; }
+  const cp = sub3(p, c), d5 = dot3(ab, cp), d6 = dot3(ac, cp);
+  if (d6 >= 0 && d5 <= d6) return [0, 0, 1];
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) { const w = d2 / (d2 - d6); return [1 - w, 0, w]; }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const w = (d4 - d3) / (d4 - d3 + (d5 - d6)); return [0, 1 - w, w]; }
+  const den = 1 / (va + vb + vc), v = vb * den, w = vc * den;
+  return [1 - v - w, v, w];
+}
+
+function toLod0(hit) {
+  if (hit.lod === 0) return { tri: hit.triangle, bary: hit.bary.slice(), err_mm: 0 };
+  const idx = D.indices, pos = V.meshes.get("head").cpuPos, p = hit.point;
+  let best = null, bd2 = Infinity;
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
+    let out2 = 0;
+    for (let k = 0; k < 3; k++) {
+      const lo = Math.min(pos[a + k], pos[b + k], pos[c + k]), hi = Math.max(pos[a + k], pos[b + k], pos[c + k]);
+      const d = p[k] < lo ? lo - p[k] : p[k] > hi ? p[k] - hi : 0;
+      out2 += d * d;
+    }
+    if (out2 >= bd2) continue;
+    const A = [pos[a], pos[a + 1], pos[a + 2]], B = [pos[b], pos[b + 1], pos[b + 2]], C = [pos[c], pos[c + 1], pos[c + 2]];
+    const w = closestOnTriangle(p, A, B, C), q = [0, 1, 2].map((k) => w[0] * A[k] + w[1] * B[k] + w[2] * C[k]);
+    const d2 = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+    if (d2 < bd2) { bd2 = d2; best = { tri: t / 3, bary: w }; }
+  }
+  return { tri: best.tri, bary: best.bary, err_mm: Math.sqrt(bd2) * 1000 };
+}
+
+function charTag() {
+  const rev = D.settled?.revision || "";
+  return `${D.start.name || "character"}${rev ? ` ${rev.replace("sha256:", "").slice(0, 12)}` : ""}`;
+}
+
+function describeAt(lod, tri, bary, point) {
+  const head = V.meshes.get("head"), corners = Array.from(head.lods[lod].idxCPU.subarray(tri * 3, tri * 3 + 3));
+  const at = point || pointOf(tri, bary, lod);
+  const gap = corners.map((g) => { const q = headPos(g); return Math.hypot(q[0] - at[0], q[1] - at[1], q[2] - at[2]); });
+  const game = corners[gap.indexOf(Math.min(...gap))], dense = D.grid.dense[game], cell = cellName(pointCell(corners, bary)), vcell = cellName(D.grid.cells[game]);
+  const region = D.regions.names[head.regionCPU[game]] ?? "?";
+  const where = vcell === cell ? cell : `${cell} (v in ${vcell})`;
+  const p = { cell, vcell, region, game, dense, lod, triangle: tri, bary: bary.slice(), corners, point: at, character: charTag() };
+  p.address = `GF@ ${where} | region ${region} | game v${game} = dense ${dense} | LOD${lod} t${tri} b(${bary[1].toFixed(3)},${bary[2].toFixed(3)}) | ${at.map((x) => (x * 1000).toFixed(1)).join(",")} mm | ${p.character}`;
+  return p;
+}
+
+function showCard(p) {
+  $("addr").classList.remove("hidden");
+  $("addr-line").textContent = p ? p.address : "";
+  $("addr-note").textContent = p && p.lod0 && p.lod > 0 ? `a pin goes to the closest LOD0 surface point, ${p.lod0.err_mm.toFixed(3)} mm from this LOD${p.lod} point` : "";
+  $("addr-copy").disabled = $("addr-pin").disabled = !p;
+}
+
+async function probeAt(clientX, clientY) {
+  await ensureGrid();
+  const hit = V.pick(clientX, clientY);
+  if (!hit || hit.mesh !== "head") { toast(hit ? `probe: ${hit.mesh} is not the head` : "no surface under the cursor"); return null; }
+  const p = describeAt(hit.lod, hit.triangle, hit.bary, hit.point);
+  p.lod0 = toLod0(hit);
+  D.probe = p;
+  D.lastPick = hit.point;
+  showCard(p);
+  V.flash = { pos: hit.point, until: performance.now() + 900 };
+  for (const cb of D.probeListeners) { try { cb(p); } catch (e) { console.error(e); } }
+  request(false);
+  return p;
+}
+
+async function goTo(text) {
+  await ensureGrid();
+  const t = String(text || "").trim(), head = V.meshes.get("head");
+  if (!t) return null;
+  let target = null, what = "", radius = 0.03;
+  const lm = t.match(/LOD(\d+) t(\d+) b\(([-\d.]+),([-\d.]+)\)/);
+  let warn = "";
+  if (/^GF@/.test(t)) {
+    const r = await api("grid.resolve", { store, ...D.base, targets: gridTargets(), address: t, accept_inconsistent: true });
+    if (r.warnings && r.warnings.length) warn = ` - WARNING, the line disagrees with itself: ${r.warnings.join("; ")}`;
+  }
+  if (lm && Number(lm[1]) < head.lods.length && Number(lm[2]) < head.lods[Number(lm[1])].tri) {
+    const b1 = Number(lm[3]), b2 = Number(lm[4]);
+    target = pointOf(Number(lm[2]), [1 - b1 - b2, b1, b2], Number(lm[1]));
+    what = `LOD${lm[1]} t${lm[2]}`;
+  } else {
+    const r = await api("grid.resolve", { store, ...D.base, targets: gridTargets(), address: t });
+    const g = r.nearest_game ?? r.game;
+    if (g == null) throw new Error(`${t}: ${r.note || "no game vertex there"} (cell ${r.cell})`);
+    target = headPos(g);
+    what = r.kind === "vertex" ? `game v${g} = dense ${r.dense} (${r.cell})` : `${r.cell}: ${r.game_count} game vertices, centre near game v${g}`;
+    if (r.kind !== "vertex") {
+      let ext = 0;
+      for (const v of r.game_vertices) { const q = headPos(v); ext = Math.max(ext, Math.hypot(q[0] - target[0], q[1] - target[1], q[2] - target[2])); }
+      radius = Math.max(0.02, ext * 1.4);
+    }
+  }
+  V.frameBox({ centre: target, radius }, [V.activeCam()]);
+  V.flash = { pos: target, until: performance.now() + 2500 };
+  D.lastPick = target;
+  D.lastGoTo = { text: t, target, what, warning: warn };
+  toast(`go to ${what}${warn}`);
+  request(false);
+  return D.lastGoTo;
+}
+
+function gridApi() {
+  return {
+    ensure: ensureGrid,
+    lastProbe: () => D.probe,
+    onProbe: (cb) => { if (typeof cb === "function") D.probeListeners.push(cb); },
+    onPin: (cb) => { if (typeof cb === "function") D.pinListeners.push(cb); },
+    describe: (tri, bary) => describeAt(0, tri, bary),
+    pointOf: (tri, bary) => pointOf(tri, bary, 0),
+    normalOf: (tri) => normalOf(tri, 0),
+    goTo,
+    setMarkers: (id, list) => { V.setMarkers(String(id), list); request(false); },
+    character: charTag,
+    definition: () => D.grid?.def || null,
+  };
+}
+
 function setPose(id, positions) {
   if (positions == null) {
     D.poses.delete(id);
@@ -990,8 +1182,65 @@ function makeApi(panelId) {
     setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
     pushUndo,
     requestRender: () => request(false),
+    grid: gridApi(),
     panel: panelId,
   };
+}
+
+function setProbeMode(on) {
+  D.probeMode = !!on;
+  $("probe-mode").checked = D.probeMode;
+  toast(`probe mode ${D.probeMode ? "on: click a surface point" : "off"}`);
+}
+
+function gridControls() {
+  $("probe-mode").addEventListener("change", (e) => setProbeMode(e.target.checked));
+  $("addr-close").addEventListener("click", () => $("addr").classList.add("hidden"));
+  $("addr-copy").addEventListener("click", async () => {
+    if (!D.probe) return;
+    try { await navigator.clipboard.writeText(D.probe.address); toast("address copied"); }
+    catch { const r = document.createRange(); r.selectNodeContents($("addr-line")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("clipboard refused: the line is selected, press Ctrl+C"); }
+  });
+  $("addr-pin").addEventListener("click", () => {
+    if (!D.probe) return;
+    if (!D.pinListeners.length) { toast("the Pins panel is not loaded"); return; }
+    for (const cb of D.pinListeners) { try { cb(D.probe); } catch (e) { console.error(e); } }
+  });
+  const go = () => goTo($("goto").value).catch((e) => toast(e.message));
+  $("goto-btn").addEventListener("click", go);
+  $("goto").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } if (e.key === "Escape") e.target.blur(); });
+  const c = gl.canvas, view = $("view");
+  const control = (el) => el !== c && !!el.closest("button, input, select, textarea, label, a, summary, [contenteditable]");
+  let down = null;
+  view.addEventListener("pointerdown", (e) => { down = e.button === 0 && !control(e.target) ? { x: e.clientX, y: e.clientY, alt: e.altKey } : null; }, true);
+  view.addEventListener("pointerup", (e) => {
+    const d = down;
+    down = null;
+    if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4 || !(d.alt || D.probeMode)) return;
+    const b = c.getBoundingClientRect();
+    if (e.clientX < b.left || e.clientX >= b.right || e.clientY < b.top || e.clientY >= b.bottom) return;
+    probeAt(e.clientX, e.clientY).catch((err) => toast(`probe: ${err.message}`));
+  }, true);
+  let hoverAt = 0, hoverT = 0;
+  const hover = (x, y) => {
+    hoverAt = performance.now();
+    let next = null;
+    if (V.opts.faceGrid && D.grid) {
+      const hit = V.pick(x, y);
+      if (hit && hit.mesh === "head") {
+        const q = describeAt(hit.lod, hit.triangle, hit.bary, hit.point);
+        next = { pos: hit.point, slot: hit.slot, text: q.vcell === q.cell ? q.cell : `${q.cell} (v in ${q.vcell})` };
+      }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(V.hover)) { V.hover = next; request(false); }
+  };
+  view.addEventListener("pointermove", (e) => {
+    clearTimeout(hoverT);
+    if (e.buttons) return;
+    if (performance.now() - hoverAt > 80) hover(e.clientX, e.clientY);
+    else hoverT = setTimeout(() => hover(e.clientX, e.clientY), 90);
+  });
+  view.addEventListener("pointerleave", () => { clearTimeout(hoverT); if (V.hover) { V.hover = null; request(false); } });
 }
 
 window.GF = {
@@ -1472,6 +1721,7 @@ async function main() {
   buildSliders();
   buildControls();
   interaction();
+  gridControls();
   $("out").value = opt("out") || "";
   $("save").addEventListener("click", save);
   D.pack = pack;
@@ -1491,6 +1741,7 @@ async function main() {
   else if (P.relinked) $("p-status").textContent = "resources relinked: save to keep the new locations";
   D.ui = { setMode, setLod, setLayout, namedView, toggleOrtho, setFov, frameHead, frameSelection, applyPreset, toggleOpt, refreshOpts, undo, redo, historyTo, setVisible, isolate, showAll,
            setRegionMask, screenshot, showTab, ensureReference, settle, pushUndo, setPose, api: makeApi("harness"),
+           grid: { ensureGrid, probeAt, goTo, describeAt, pointOf, toLod0, setProbeMode, headPos },
            project: { save: saveProject, saveAs: saveProjectAs, open: openProject, newProject, autosave, viewerState, applyViewerState, panelStates, projectSig, updateDirty, dialog } };
   D.ready = true;
   P.savedSig = projectSig();
