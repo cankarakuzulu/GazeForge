@@ -213,6 +213,8 @@ pub struct Material {
     pub name: String,
     pub base_color: [f32; 4],
     pub base_texture: Option<Vec<u8>>,
+    pub normal_texture: Option<Vec<u8>>,
+    pub orm_texture: Option<Vec<u8>>,
     pub metallic: f32,
     pub roughness: f32,
     pub transmission: Option<f32>,
@@ -245,13 +247,27 @@ pub fn glb_full(
 
 fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, images: &mut Vec<Value>, used: &mut Vec<&'static str>) -> Value {
     let mut pbr = json!({"baseColorFactor": m.base_color, "metallicFactor": m.metallic, "roughnessFactor": m.roughness});
-    if let Some(png) = &m.base_texture {
+    let mut texture = |png: &Vec<u8>, suffix: &str| -> usize {
         let view = b.view(png, None);
-        images.push(json!({"bufferView": view, "mimeType": "image/png", "name": m.name}));
+        images.push(json!({"bufferView": view, "mimeType": "image/png", "name": format!("{}{suffix}", m.name)}));
         textures.push(json!({"source": images.len() - 1, "sampler": 0}));
-        pbr["baseColorTexture"] = json!({"index": textures.len() - 1});
+        textures.len() - 1
+    };
+    if let Some(png) = &m.base_texture {
+        pbr["baseColorTexture"] = json!({"index": texture(png, "")});
+    }
+    let normal = m.normal_texture.as_ref().map(|png| texture(png, "_normal"));
+    let orm = m.orm_texture.as_ref().map(|png| texture(png, "_orm"));
+    if let Some(i) = orm {
+        pbr["metallicRoughnessTexture"] = json!({"index": i});
     }
     let mut out = json!({"name": m.name, "pbrMetallicRoughness": pbr});
+    if let Some(i) = normal {
+        out["normalTexture"] = json!({"index": i});
+    }
+    if let Some(i) = orm {
+        out["occlusionTexture"] = json!({"index": i});
+    }
     if m.double_sided {
         out["doubleSided"] = json!(true);
     }

@@ -633,6 +633,8 @@ fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Mater
                 name: format!("{}_{}", m.id, p.part),
                 base_color: p.colour,
                 base_texture: p.texture.map(|t| gf_io::png::rgba(t.width, t.height, &t.rgba)).transpose()?,
+                normal_texture: None,
+                orm_texture: None,
                 metallic: 0.0,
                 roughness: p.roughness,
                 transmission: p.transmission,
