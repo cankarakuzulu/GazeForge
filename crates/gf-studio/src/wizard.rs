@@ -24,6 +24,7 @@ pub struct Wizards {
     polled: Option<Instant>,
     images: BTreeMap<String, Option<egui::TextureHandle>>,
     pub open_spec: Option<(String, String)>,
+    developer: bool,
 }
 
 fn load_png(path: &str) -> Option<egui::ColorImage> {
@@ -277,8 +278,11 @@ impl Wizards {
     }
 
     fn list_ui(&mut self, ui: &mut egui::Ui, world: &crate::world::World, project: &str) {
+        if ui.checkbox(&mut self.developer, "developer tasks").on_hover_text("tasks that serve building GazeForge itself: macro tools, raw dense-base gates").changed() {
+            self.list = None;
+        }
         if self.list.is_none() {
-            match call("wizards.list", json!({})) {
+            match call("wizards.list", json!({"developer": self.developer})) {
                 Ok(r) => self.list = r["wizards"].as_array().cloned(),
                 Err(e) => self.error = Some(e),
             }

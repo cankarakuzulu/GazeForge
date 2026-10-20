@@ -9,7 +9,163 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![photos(), export()]
+    vec![setup(), build_base(), create(), photos(), export(), body(), check(), lids(), macros()]
+}
+
+fn hidden(name: &str, bind: &str) -> Value {
+    json!({"name": name, "bind": bind, "hidden": true})
+}
+
+fn setup() -> Value {
+    json!({
+        "id": "setup", "title": "Set up a store", "group": "Setup", "developer": false,
+        "summary": "A store from a dense base folder, its targets, a game base and MakeHuman's eye rig: everything the designer needs.",
+        "steps": [
+            {"id": "pack", "title": "Dense base", "command": "store.import_pack",
+             "help": "The dense base folder (positions, faces, UVs, manifest) becomes the store's pack; it is content-addressed, so the same folder gives the same reference.",
+             "fields": [
+                 {"name": "store", "label": "store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
+                 {"name": "macro_base", "label": "macro base sliders"},
+                 {"name": "pin_top", "label": "pin height (m)"},
+             ],
+             "shows": [{"kind": "report"}]},
+            {"id": "catalog", "title": "Targets", "command": "store.import_catalog",
+             "help": "The targets folder (sparse targets on the dense topology) becomes the pack's catalog.",
+             "fields": [hidden("store", "$pack.input.store"), hidden("pack", "$pack.result.pack"),
+                        {"name": "targets", "label": "targets folder", "widget": "folder", "common": true}],
+             "shows": [{"kind": "report"}]},
+            {"id": "game", "title": "Game base", "command": "store.import_game",
+             "help": "An existing game base folder for this pack (the Build a game base task makes one).",
+             "fields": [hidden("store", "$pack.input.store"), hidden("pack", "$pack.result.pack"),
+                        {"name": "base", "label": "game base folder", "widget": "folder", "common": true}],
+             "shows": [{"kind": "report"}]},
+            {"id": "eyerig", "title": "Eye rig", "command": "store.import_eyerig", "optional": true,
+             "help": "MakeHuman's helper eyeballs and their per-target moves, so eyeballs follow the character and eye models can be placed. It needs the pack imported with its macro base sliders: a pack registered at another state is refused (median skin distance over 2 mm).",
+             "fields": [hidden("store", "$pack.input.store"), hidden("catalog", "$catalog.result.catalog"),
+                        {"name": "makehuman", "label": "MakeHuman data folder", "widget": "folder", "common": true},
+                        {"name": "macro", "label": "macro definition", "widget": "file_open", "ext": ".json", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn build_base() -> Value {
+    json!({
+        "id": "build_base", "title": "Build a game base", "group": "Setup", "developer": false,
+        "summary": "A game mesh decimated from the dense base (every vertex an original dense vertex), with nested levels of detail, imported into the store.",
+        "steps": [
+            {"id": "build", "title": "Build", "command": "base.build",
+             "help": "Decimate to a vertex target with angle guards; the shapes the collapse must serve keep their detail. Minutes at the full dense size.",
+             "fields": [
+                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
+                 {"name": "out", "label": "output folder", "widget": "folder", "bind": "$dir/base", "common": true},
+                 {"name": "target", "label": "vertices", "common": true},
+                 {"name": "lods", "label": "levels of detail (e.g. 8000,3000)", "common": true},
+                 {"name": "shapes", "label": "shapes to serve (all, none, a,b)"},
+                 {"name": "weights", "label": "importance weights (.npy)", "widget": "file_open", "ext": ".npy"},
+             ],
+             "shows": [{"kind": "report"}]},
+            {"id": "import", "title": "Import", "command": "store.import_game",
+             "help": "The new base into the store, beside every base it already has.",
+             "fields": [hidden("base", "$build.input.out"),
+                        {"name": "store", "label": "store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                        {"name": "pack", "label": "pack", "bind": "$run.pack", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn create() -> Value {
+    json!({
+        "id": "create", "title": "Create a character from data", "group": "Characters", "developer": false,
+        "summary": "A character spec from target weights, checked against its store.",
+        "steps": [
+            {"id": "create", "title": "Weights", "command": "character.create",
+             "help": "Target weights in [0, 1] as a JSON object; macro sliders and a sculpt's residual are made with the command line form.",
+             "fields": [hidden("store", "$run.store"), hidden("pack", "$run.pack"), hidden("catalog", "$run.catalog"), hidden("game", "$run.game"),
+                        {"name": "weights", "label": "weights (JSON)", "common": true},
+                        {"name": "name", "label": "name", "common": true},
+                        {"name": "out", "label": "spec file", "widget": "file_save", "ext": ".gfchar.json", "bind": "$dir/character.gfchar.json", "common": true},
+                        {"name": "placement", "label": "placement"}],
+             "shows": [{"kind": "report"}]},
+            {"id": "validate", "title": "Validate", "command": "character.validate",
+             "help": "The spec against the store: format, references, target ids and weight ranges.",
+             "fields": [hidden("store", "$run.store"), hidden("spec", "$create.result.out")],
+             "shows": [{"kind": "report"}, {"kind": "spec", "from": "$create.result.out", "store": "$run.store"}]},
+        ],
+    })
+}
+
+fn body() -> Value {
+    json!({
+        "id": "body", "title": "Import a body", "group": "Body", "developer": false,
+        "summary": "A body mesh made into a body pack the head stitches onto (the Stitch panel and export --body use it).",
+        "steps": [
+            {"id": "import", "title": "Body", "command": "body.import",
+             "help": "A MakeHuman body (exact) or any body mesh; the neck is cut where the head meets it.",
+             "fields": [
+                 {"name": "mode", "label": "kind", "common": true},
+                 {"name": "obj", "label": "body .obj", "widget": "file_open", "ext": ".obj", "common": true},
+                 {"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
+                 {"name": "out", "label": "body pack folder", "widget": "folder", "bind": "$dir/body", "common": true},
+             ],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn check() -> Value {
+    json!({
+        "id": "check", "title": "Check a sculpt against the base", "group": "Check", "developer": true,
+        "summary": "Shell gates (folds, inner surfaces, roughness) between two dense surfaces.",
+        "steps": [
+            {"id": "shell", "title": "Shell gates", "command": "gates.shell",
+             "help": "before and after are base, shape:NAME or a dense .npy; a failing gate is reported with every value and its limit.",
+             "fields": [{"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
+                        {"name": "before", "label": "before", "bind": "=base", "common": true},
+                        {"name": "after", "label": "after (.npy)", "widget": "file_open", "ext": ".npy", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn lids() -> Value {
+    json!({
+        "id": "lids", "title": "Eyelids out of the eyeballs", "group": "Check", "developer": true,
+        "summary": "Dense eyelid vertices pushed out of the eyeballs, with the area inside the eyes before and after.",
+        "steps": [
+            {"id": "collide", "title": "Collide", "command": "lids.collide",
+             "help": "positions are base, shape:NAME or a dense .npy; the result is a dense .npy.",
+             "fields": [{"name": "dense", "label": "dense base folder", "widget": "folder", "common": true},
+                        {"name": "positions", "label": "positions", "common": true},
+                        {"name": "eyes", "label": "eyes file", "widget": "file_open", "ext": ".json", "common": true},
+                        {"name": "out", "label": "output .npy", "widget": "file_save", "ext": ".npy", "bind": "$dir/collided.npy", "common": true},
+                        {"name": "clearance", "label": "clearance (mm)", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn macros() -> Value {
+    json!({
+        "id": "macros", "title": "Macro tools", "group": "Developer", "developer": true,
+        "summary": "The target weights a set of macro sliders makes, and a slider's label table over a range of values.",
+        "steps": [
+            {"id": "weights", "title": "Weights", "command": "macro.weights",
+             "help": "Every macro slider and race value as a JSON object; the result lists the target weights they make.",
+             "fields": [{"name": "macro", "label": "macro definition", "widget": "file_open", "ext": ".json", "common": true},
+                        {"name": "sliders", "label": "sliders (JSON)", "common": true}],
+             "shows": [{"kind": "report"}]},
+            {"id": "labels", "title": "Labels", "command": "macro.labels", "optional": true,
+             "help": "One slider's label weights over a .npy of slider values, written as a table.",
+             "fields": [hidden("macro", "$weights.input.macro"),
+                        {"name": "slider", "label": "slider", "common": true},
+                        {"name": "values", "label": "values (.npy)", "widget": "file_open", "ext": ".npy", "common": true},
+                        {"name": "out", "label": "table (.npy)", "widget": "file_save", "ext": ".npy", "bind": "$dir/labels.npy", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
 }
 
 fn photos() -> Value {

@@ -1,7 +1,7 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export function createWizards({ api, root, toast, prepare, openSpec }) {
-  const W = { list: null, def: null, state: null, at: 0, polling: 0, busy: false, prepared: null };
+  const W = { list: null, def: null, state: null, at: 0, polling: 0, busy: false, prepared: null, dev: false };
   const box = root;
 
   function close() {
@@ -14,17 +14,18 @@ export function createWizards({ api, root, toast, prepare, openSpec }) {
   async function open() {
     box.classList.remove("hidden");
     W.def = null;
-    W.list = W.list || (await api("wizards.list", {})).wizards;
+    W.list = W.list || (await api("wizards.list", { developer: W.dev })).wizards;
     renderList();
   }
 
   function renderList() {
     const groups = [...new Set(W.list.map((w) => w.group))];
-    box.querySelector(".wz-body").innerHTML = groups.map((g) => `<div class="wz-group"><b>${esc(g)}</b>${W.list.filter((w) => w.group === g).map((w) =>
+    box.querySelector(".wz-body").innerHTML = `<label class="wz-dev" title="tasks that serve building GazeForge itself: macro tools, raw dense-base gates"><input type="checkbox" ${W.dev ? "checked" : ""}> developer tasks</label>` + groups.map((g) => `<div class="wz-group"><b>${esc(g)}</b>${W.list.filter((w) => w.group === g).map((w) =>
       `<button class="wz-pick" data-id="${esc(w.id)}"><span>${esc(w.title)}</span><small>${esc(w.summary)}</small></button>`).join("")}</div>`).join("") || `<div class="note">no wizards</div>`;
     box.querySelector(".wz-title").textContent = "Tasks";
     box.querySelector(".wz-steps").innerHTML = "";
     for (const b of box.querySelectorAll(".wz-pick")) b.addEventListener("click", () => begin(b.dataset.id).catch((e) => fail(e)));
+    box.querySelector(".wz-dev input").addEventListener("change", async (e) => { W.dev = e.target.checked; W.list = (await api("wizards.list", { developer: W.dev })).wizards; renderList(); });
   }
 
   function fail(e) {

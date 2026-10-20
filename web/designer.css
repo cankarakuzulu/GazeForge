@@ -191,3 +191,4 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .wz-images figure { margin: 0; flex: 1 1 260px; max-width: 420px; }
 .wz-images img { width: 100%; border: 1px solid var(--line); border-radius: 4px; display: block; }
 .wz-images figcaption { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.wz-dev { display: block; color: var(--muted); margin-bottom: 10px; }
