@@ -531,6 +531,10 @@ impl Offscreen {
                 if let Some(given) = step.get("macros").and_then(Value::as_object) {
                     edits.extend(given.iter().map(|(k, v)| Edit::Macro(k.clone(), v.as_f64().unwrap_or(0.0))));
                 }
+                if let Some(e) = step.get("eyeballs") {
+                    let spec = if e.is_null() { None } else { Some(serde_json::from_value(e.clone()).map_err(|x| format!("eyeballs: {x}"))?) };
+                    edits.push(Edit::Eyes(spec));
+                }
                 w.shape_event(ShapeEvent::Preview(edits));
                 let commit = op == "weights" || step.get("commit").and_then(Value::as_bool).unwrap_or(false);
                 if commit {
@@ -571,7 +575,16 @@ impl Offscreen {
                 let bytes: Vec<u8> = s.head.positions.iter().flat_map(|x| x.to_le_bytes()).collect();
                 std::fs::write(&pos, &bytes).map_err(|e| format!("{}: {e}", pos.display()))?;
                 std::fs::write(&inp, serde_json::to_string(&input).unwrap_or_default()).map_err(|e| format!("{}: {e}", inp.display()))?;
-                json!({"positions": pos.display().to_string(), "input": inp.display().to_string(), "settled_revision": s.settled.as_ref().map(|x| x.revision.clone()), "idle": w.idle()})
+                let eyes = match &s.head.eyes {
+                    Some(m) => {
+                        let file = out.join(format!("{stem}.eyes.f32"));
+                        let bytes: Vec<u8> = m.positions.iter().flat_map(|x| x.to_le_bytes()).collect();
+                        std::fs::write(&file, &bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+                        json!(file.display().to_string())
+                    }
+                    None => Value::Null,
+                };
+                json!({"positions": pos.display().to_string(), "input": inp.display().to_string(), "eyes": eyes, "settled_revision": s.settled.as_ref().map(|x| x.revision.clone()), "idle": w.idle()})
             }
             "hud" => json!({"hud": w.hud.json(), "settle": w.settle_stats(), "last_settle": w.last_settle, "last_preview": w.last_preview, "samples": w.samples_info, "trace": w.trace}),
             "source" => {

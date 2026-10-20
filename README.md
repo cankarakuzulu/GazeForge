@@ -638,9 +638,13 @@ the same orbit, pan, zoom, pivot, focus, perspective and orthographic cameras, n
 quad layouts and the LOD switch. Each viewport slot takes its pixels from a frame source: the built-in renderer, or an
 external source that hands back RGBA frames for the slot's camera and size.
 
-`--eyes` takes the same eyes file as the browser designer: its eyeballs are drawn as spheres in the built-in renderer
-(the `eyes` toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. The
-spheres stay where the file puts them; a target that moves the eye sockets does not move them.
+`--eyes` takes the same eyes file as the browser designer: its eye meshes are drawn in the built-in renderer (the `eyes`
+toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. With the
+character's `eyeballs` following (a new character starts that way when the catalog has an eye rig), each settle places
+the eyes and the drawn meshes move with them. The **Eyes** tab turns following on and off and sets each eye's offset,
+rotation and scale relative to its socket, linked between the sides by default; while a slider moves, the eye moves on
+the last settled socket, and the settle that follows clears the lids against it. Eye edits join undo and redo and are
+saved with the spec.
 
 Shape input sits behind an input layer (`--input`, default `sliders`): an input turns what the user does into target
 weights and macro values, as preview changes while a gesture runs and one commit when it ends. The slider panel is the

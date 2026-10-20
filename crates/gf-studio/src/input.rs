@@ -1,8 +1,39 @@
 use std::ops::RangeInclusive;
 
 use eframe::egui;
+use gf_core::eyerig::{self as er, EyeAdjust, EyeballSpec};
 
 use crate::shape::{Edit, ShapeEvent, ShapeModel, Slider, pair_edits};
+
+const EYE_FIELDS: [(&str, f64, f64); 7] = [
+    ("out mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("up mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("forward mm", -er::OFFSET_MM_RANGE, er::OFFSET_MM_RANGE),
+    ("pitch up deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("yaw out deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("roll deg", -er::ROTATION_DEG_RANGE, er::ROTATION_DEG_RANGE),
+    ("scale", er::SCALE_RANGE[0], er::SCALE_RANGE[1]),
+];
+
+fn eye_field(a: &EyeAdjust, f: usize) -> f64 {
+    match f {
+        0..=2 => a.offset_mm[f],
+        3..=5 => a.rotation_deg[f - 3],
+        _ => a.scale,
+    }
+}
+
+fn set_eye_field(a: &mut EyeAdjust, f: usize, x: f64) {
+    match f {
+        0..=2 => a.offset_mm[f] = x,
+        3..=5 => a.rotation_deg[f - 3] = x,
+        _ => a.scale = x,
+    }
+}
+
+fn no_eyeballs() -> EyeballSpec {
+    EyeballSpec { follow: er::FOLLOW_NONE.into(), rig: None, left: EyeAdjust::default(), right: EyeAdjust::default() }
+}
 
 pub trait ShapeInput {
     fn name(&self) -> &'static str;
@@ -22,6 +53,7 @@ pub fn by_name(name: &str) -> Option<Box<dyn ShapeInput>> {
 pub enum Tab {
     #[default]
     Macros,
+    Eyes,
     All,
     Category(String),
 }
@@ -30,6 +62,7 @@ pub enum Tab {
 pub struct SliderPanel {
     search: String,
     pub tab: Tab,
+    pub unlink_eyes: bool,
 }
 
 enum Row {
@@ -109,6 +142,7 @@ impl SliderPanel {
                 }
             };
             pick(ui, Tab::Macros, format!("Macros ({})", shape.macros.len()));
+            pick(ui, Tab::Eyes, "Eyes".into());
             pick(ui, Tab::All, format!("All ({})", shape.sliders.len()));
             for (c, _) in &shape.categories {
                 let n = shape.sliders.iter().filter(|s| shape.targets[s.first()].category == *c).count();
@@ -127,6 +161,48 @@ impl SliderPanel {
             let name = m.name.clone();
             let spec = RowSpec { label: &m.name, value, start: m.start, range: 0.0..=1.0, ends: None, hover: "right click: back to the start value".into() };
             slider_row(ui, spec, |x| vec![Edit::Macro(name.clone(), x)], vec![Edit::Macro(m.name.clone(), m.start)], out);
+        }
+    }
+
+    fn eyes(&mut self, ui: &mut egui::Ui, shape: &ShapeModel, out: &mut Vec<ShapeEvent>) {
+        let live = shape.live.eyeballs.clone().unwrap_or_else(no_eyeballs);
+        let start = shape.start.eyeballs.clone().unwrap_or_else(no_eyeballs);
+        let rig = live.rig.clone().or_else(|| shape.eyerig.clone());
+        let mut follow = live.follows();
+        let toggle = ui
+            .add_enabled(rig.is_some() || follow, egui::Checkbox::new(&mut follow, "follow the sockets"))
+            .on_hover_text("move and scale each eye with its socket, the way MakeHuman moves its helper eyeball; the eyelid clearance uses the moved eyes");
+        if toggle.changed() {
+            let s = EyeballSpec { follow: if follow { er::FOLLOW_HELPER } else { er::FOLLOW_NONE }.into(), rig: if follow { rig.clone() } else { live.rig.clone() }, ..live.clone() };
+            out.push(ShapeEvent::Preview(vec![Edit::Eyes(Some(s))]));
+            out.push(ShapeEvent::Commit(format!("eyes {}", if follow { "follow the sockets" } else { "stay where the eyes file puts them" })));
+        }
+        if rig.is_none() {
+            ui.label("this catalog has no eye rig (store import-eyerig makes one)");
+        }
+        let mut linked = !self.unlink_eyes;
+        ui.checkbox(&mut linked, "link left and right").on_hover_text("one set of sliders for both eyes; out and yaw mirror between the sides");
+        self.unlink_eyes = !linked;
+        ui.separator();
+        let sides: &[(&str, &[usize])] = if linked { &[("both eyes", &[0, 1])] } else { &[("left eye", &[0]), ("right eye", &[1])] };
+        for &(title, which) in sides {
+            ui.label(egui::RichText::new(title).strong());
+            let adjust = |s: &EyeballSpec| if which[0] == 0 { s.left } else { s.right };
+            for (f, &(name, lo, hi)) in EYE_FIELDS.iter().enumerate() {
+                let label = format!("{} {name}", if linked { "eyes" } else { title.trim_end_matches(" eye") });
+                let value = eye_field(&adjust(&live), f);
+                let first = eye_field(&adjust(&start), f);
+                let with = |x: f64| {
+                    let mut s = live.clone();
+                    for &side in which {
+                        set_eye_field(if side == 0 { &mut s.left } else { &mut s.right }, f, x);
+                    }
+                    vec![Edit::Eyes(Some(s))]
+                };
+                let reset = with(first);
+                let spec = RowSpec { label: &label, value, start: first, range: lo..=hi, ends: None, hover: format!("{name} relative to the socket\nright click: back to the start value") };
+                slider_row(ui, spec, with, reset, out);
+            }
         }
     }
 }
@@ -149,6 +225,10 @@ impl ShapeInput for SliderPanel {
         let q = self.search.trim().to_lowercase();
         if q.is_empty() && self.tab == Tab::Macros {
             self.macros(ui, shape, &mut out);
+            return out;
+        }
+        if q.is_empty() && self.tab == Tab::Eyes {
+            self.eyes(ui, shape, &mut out);
             return out;
         }
         let only = match (&self.tab, q.is_empty()) {
@@ -206,7 +286,7 @@ mod tests {
         }));
         let mut panel = SliderPanel::default();
         let mut events = Vec::new();
-        for tab in [Tab::Macros, Tab::All, Tab::Category("chin".into())] {
+        for tab in [Tab::Macros, Tab::Eyes, Tab::All, Tab::Category("chin".into())] {
             panel.tab = tab;
             for _ in 0..3 {
                 let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

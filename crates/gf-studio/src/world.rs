@@ -254,7 +254,7 @@ impl World {
                     return;
                 }
                 p.set_anchor(&out.positions, &sent.weights, &sent.macros);
-                self.anchor_values = Some(sent.clone());
+                self.anchor_values = Some((*sent).clone());
                 self.refresh_state_keys();
                 self.anchor_at = Some(now);
                 self.anchor_release = if current { self.settle_release } else { None };
@@ -505,6 +505,7 @@ impl World {
         let t_n = Instant::now();
         p.normals(nrm, &h.positions, &h.lods[0].indices, &mut h.normals);
         h.revision += 1;
+        s.preview_eyes(shape.live.eyeballs.as_ref());
         let total = ms(t.elapsed());
         self.hud.preview_compute.push(total);
         self.last_preview = json!({"targets": c.targets, "macros": c.macros, "missing_slopes": c.missing_slopes, "sampled": c.sampled, "slope_fallback": c.slope_fallback, "stale_slope": c.stale_slope,

@@ -113,6 +113,8 @@ struct GpuHead {
 struct GpuEyes {
     tri: u32,
     bind: wgpu::BindGroup,
+    pos: wgpu::Buffer,
+    nrm: wgpu::Buffer,
 }
 
 struct SlotTarget {
@@ -357,7 +359,8 @@ impl Renderer {
                     layout: &self.g1,
                     entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
                 });
-                GpuEyes { tri: tri as u32, bind }
+                let [_, pos, nrm, ..] = entries;
+                GpuEyes { tri: tri as u32, bind, pos, nrm }
             });
             self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes });
             return;
@@ -366,6 +369,10 @@ impl Renderer {
         if g.revision != head.revision {
             queue.write_buffer(&g.pos, 0, &f32_bytes(&head.positions));
             queue.write_buffer(&g.nrm, 0, &f32_bytes(&head.normals));
+            if let (Some(ge), Some(e)) = (&g.eyes, &head.eyes) {
+                queue.write_buffer(&ge.pos, 0, &f32_bytes(&e.positions));
+                queue.write_buffer(&ge.nrm, 0, &f32_bytes(&e.normals));
+            }
             g.revision = head.revision;
             g.wind = head.wind;
         }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use gf_core::eyerig::EyeballSpec;
 use serde_json::{Value, json};
 
 use crate::session::Character;
@@ -77,12 +78,14 @@ pub struct MacroInfo {
 pub struct Values {
     pub weights: BTreeMap<String, f64>,
     pub macros: BTreeMap<String, f64>,
+    pub eyeballs: Option<EyeballSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
     Weight(String, f64),
     Macro(String, f64),
+    Eyes(Option<EyeballSpec>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +128,7 @@ pub struct ShapeModel {
     pub macro_mode: String,
     pub head_scale: f64,
     pub start_had_macros: bool,
+    pub eyerig: Option<String>,
     pub start: Values,
     pub committed: Values,
     pub live: Values,
@@ -148,6 +152,11 @@ impl Values {
             Edit::Macro(name, x) => {
                 let x = x.clamp(0.0, 1.0);
                 self.macros.insert(name.clone(), x) != Some(x)
+            }
+            Edit::Eyes(e) => {
+                let changed = self.eyeballs != *e;
+                self.eyeballs = e.clone();
+                changed
             }
         }
     }
@@ -183,7 +192,8 @@ impl ShapeModel {
             })
             .unwrap_or_default();
         let weights: BTreeMap<String, f64> = start["weights"].as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_f64().filter(|x| *x != 0.0).map(|x| (k.clone(), x))).collect()).unwrap_or_default();
-        let start_values = Values { weights, macros: macros.iter().map(|m| (m.name.clone(), m.start)).collect() };
+        let eyeballs = serde_json::from_value::<EyeballSpec>(start["eyeballs"].clone()).ok();
+        let start_values = Values { weights, macros: macros.iter().map(|m| (m.name.clone(), m.start)).collect(), eyeballs };
         let sliders = pair_sliders(&targets);
         ShapeModel {
             targets,
@@ -195,6 +205,7 @@ impl ShapeModel {
             macro_mode: start["macros"]["mode"].as_str().unwrap_or("gf").to_string(),
             head_scale: start["macros"]["head_scale"].as_f64().unwrap_or(1.0),
             start_had_macros: !start["macros"].is_null(),
+            eyerig: sl["eyerig"].as_str().map(str::to_string),
             committed: start_values.clone(),
             live: start_values.clone(),
             start: start_values,
@@ -277,7 +288,8 @@ impl ShapeModel {
 
     pub fn character(&self, base: &Character, v: &Values) -> Character {
         let macros = if self.macros_on(v) { json!({"sliders": v.macros, "mode": self.macro_mode, "head_scale": self.head_scale}) } else { Value::Null };
-        Character { weights: v.weights.iter().filter(|(_, x)| **x > 0.0).map(|(k, x)| (k.clone(), *x)).collect(), macros, ..base.clone() }
+        let eyeballs = v.eyeballs.as_ref().and_then(|e| serde_json::to_value(e).ok()).unwrap_or(Value::Null);
+        Character { weights: v.weights.iter().filter(|(_, x)| **x > 0.0).map(|(k, x)| (k.clone(), *x)).collect(), macros, eyeballs, ..base.clone() }
     }
 }
 
@@ -346,7 +358,7 @@ mod tests {
         let o = m.apply(ShapeEvent::Reset);
         assert!(o.settle && m.history.undone.is_empty());
         assert_eq!(m.live, m.start);
-        let c = m.character(&Character { name: "x".into(), placement: "f5/1".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null }, &m.live);
+        let c = m.character(&Character { name: "x".into(), placement: "f5/1".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null }, &m.live);
         assert_eq!(c.weights.len(), 1);
         assert!(c.macros.is_null());
     }
