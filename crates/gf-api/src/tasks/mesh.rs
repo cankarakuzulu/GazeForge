@@ -1118,7 +1118,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
-    let body_rig = match (opts.get("body-rig"), opts.get("body-weights")) {
+    let mut body_rig = match (opts.get("body-rig"), opts.get("body-weights")) {
         (None, None) => None,
         (None, Some(_)) => return Err("--body-weights goes with --body-rig".into()),
         (Some(r), w) => {
@@ -1131,6 +1131,32 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source, Some(&fit))?)
         }
     };
+    let mut eye_bones: [Option<usize>; 2] = [None, None];
+    if let (Some(br), Some(eyes), true) = (body_rig.as_mut(), &moved_eyes, spec.eyeballs.is_some()) {
+        let map = br.meta["source"]["preset"].as_str().and_then(gf_core::humanoid::godot);
+        let find = |profile: &str, fallback: &str| -> Option<usize> {
+            let name = map.as_ref().and_then(|m| m.iter().find(|r| r.0 == profile).map(|r| r.1.clone())).unwrap_or_else(|| fallback.to_string());
+            br.rig.bones.iter().position(|b| b.name == name)
+        };
+        let sides = [find("LeftEye", "eye.L"), find("RightEye", "eye.R")];
+        let mut placed = Vec::new();
+        for eye in eyes {
+            let side = if eye.centre[0] >= 0.0 { 0 } else { 1 };
+            let Some(j) = sides[side] else { continue };
+            let mut centre = [eye.centre];
+            if let Some((pivot, s)) = head_scale {
+                gf_core::body::scale_about(&mut centre, pivot, s);
+            }
+            let before = br.heads[j];
+            br.heads[j] = centre[0];
+            eye_bones[side] = Some(j);
+            let moved = ((before[0] - centre[0][0]).powi(2) + (before[1] - centre[0][1]).powi(2) + (before[2] - centre[0][2]).powi(2)).sqrt();
+            placed.push(json!({"eye": if side == 0 { "Eye_L" } else { "Eye_R" }, "bone": br.rig.bones[j].name, "joint_moved_mm": moved * 1000.0}));
+        }
+        if !placed.is_empty() {
+            br.meta["eyes"] = json!({"bones": placed, "method": "each eyeball rides its eye bone, whose joint is placed at the eyeball's centre (head scale included)"});
+        }
+    }
     let head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
         (Some(br), Some((pack, _, _))) => {
             let quads = store.load_pack_quads(&spec.base.pack)?;
@@ -1975,7 +2001,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             if eye_model.is_some() {
                 let (joint, origin) = match &body_rig {
-                    Some(br) => (Some(br.head_joint), br.heads[br.head_joint]),
+                    Some(br) => {
+                        let j = eye_bones[if eye.centre[0] >= 0.0 { 0 } else { 1 }].unwrap_or(br.head_joint);
+                        (Some(j), br.heads[j])
+                    }
                     None => (None, [0.0; 3]),
                 };
                 eye_parts.push(eye_part_mesh(eye, if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }, joint, origin, &vertices));

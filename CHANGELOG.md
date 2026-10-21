@@ -28,7 +28,7 @@ open, with its last measurement, rather than left out.
   head sliders, head scale 1.1): eye joints 27.3 mm from the eyeball centres before, 5.3-5.6 mm after; on an unchanged
   head 3.1 mm before and 3.4 mm after (0.4 mm worse: the reference head and the body's helpers disagree by up to 6 mm at
   the neck ring, where the head keeps its own neck shape). B3 skin gate unchanged: rest identity 2e-8, seam gap 0 under
-  a pose. `body.joints` applies the same fit (its joints equal the export's to 0.001 mm).
+  a pose. `body.joints` applies the same fit (its joints equal the export's to 0.001 mm). With eye bones in the rig (`default`, `mixamo_unity`) and eyeballs on the character, each eye joint is placed at its eyeball's centre and the eyeball hangs from it: turning `eye.L` 30 degrees turns the left eyeball about its centre (vertices move 7.9 mm, their distance to the joint changes 0.0001 mm) where before it moved nothing (the eyes hung from the head bone).
 - **Humanoid maps.** Each rig preset but `openpose` maps to Godot's humanoid profile and Unity's humanoid, written into
   the glb as the root extension `GAZEFORGE_humanoid` (`extensions/GAZEFORGE_humanoid/README.md`). Tested in the core
   for every preset: all required bones mapped, each under the bone its profile parent maps to, every Left bone on the

@@ -432,7 +432,7 @@ bone (jaw, eyes, the `default` preset's face bones) move with the head's own sli
 each by the displacement of the head surface around it, from the head the body targets would give to the head as
 exported. Measured with `--body-rig default` on a character whose eyes were moved by head sliders and whose head was
 scaled 1.1: the eye joints sat 27 mm from the eyeball centres before and 5.3-5.6 mm after (3 mm is MakeHuman's own
-offset on an unchanged head); the neck seam stays shut under a pose; `body.joints` reports the same joints. Not yet: the
+offset on an unchanged head); the neck seam stays shut under a pose; `body.joints` reports the same joints. When the rig has eye bones (`default`, `mixamo_unity`) and the character has eyeballs, each eye joint sits at its eyeball's centre and carries it, so turning the eye bone turns the eye (0.5 mm from the eye mesh's box centre; on rigs without eye bones the eyes ride the head). Not yet: the
 face rig together with a body rig.
 
 **Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
