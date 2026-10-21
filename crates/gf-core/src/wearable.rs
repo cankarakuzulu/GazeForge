@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::game_mesh::Point;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scale {
     pub a: u32,
     pub b: u32,
@@ -133,6 +133,142 @@ impl Binding {
     }
 }
 
+impl Binding {
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        for (k, v) in &self.keys {
+            out.push_str(&format!("{k} {v}\n"));
+        }
+        for (axis, scale) in self.scales.iter().enumerate() {
+            if let Some(sc) = scale {
+                out.push_str(&format!("{}_scale {} {} {}\n", ["x", "y", "z"][axis], sc.a, sc.b, sc.reference));
+            }
+        }
+        out.push_str("verts 0\n");
+        for b in &self.bound {
+            out.push_str(&format!("{} {} {} {} {} {} {} {} {}\n", b.vertices[0], b.vertices[1], b.vertices[2], b.weights[0], b.weights[1], b.weights[2], b.offset[0], b.offset[1], b.offset[2]));
+        }
+        if !self.hidden.is_empty() {
+            out.push_str("delete_verts\n");
+            for chunk in self.hidden.chunks(16) {
+                out.push_str(&chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(" "));
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+fn sub(a: Point, b: Point) -> Point {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: Point, b: Point) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+pub fn closest_on_triangle(p: Point, a: Point, b: Point, c: Point) -> [f64; 3] {
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return [1.0, 0.0, 0.0];
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return [0.0, 1.0, 0.0];
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return [1.0 - v, v, 0.0];
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return [0.0, 0.0, 1.0];
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return [1.0 - w, 0.0, w];
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return [0.0, 1.0 - w, w];
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    [1.0 - v - w, v, w]
+}
+
+pub fn bind_to_surface(garment: &[Point], base: &BTreeMap<u32, Point>, faces: &[[u32; 3]], scales: [Scale; 3]) -> Result<Binding, String> {
+    let faces: Vec<[u32; 3]> = faces.iter().copied().filter(|f| f.iter().all(|v| base.contains_key(v))).collect();
+    if faces.is_empty() {
+        return Err("no base face has all its vertices on the character".into());
+    }
+    let s: Vec<f64> = scales.iter().enumerate().map(|(axis, sc)| (base[&sc.a][axis] - base[&sc.b][axis]).abs() / sc.reference).collect();
+    if s.iter().any(|x| !(x.is_finite() && *x > 0.0)) {
+        return Err(format!("a scale pair measures zero on the character: {s:?}"));
+    }
+    let cell = {
+        let mut sum = 0.0;
+        for f in &faces {
+            sum += dot(sub(base[&f[1]], base[&f[0]]), sub(base[&f[1]], base[&f[0]])).sqrt();
+        }
+        (2.0 * sum / faces.len() as f64).max(1e-6)
+    };
+    let key = |p: Point| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64);
+    let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<u32>> = std::collections::HashMap::new();
+    for (i, f) in faces.iter().enumerate() {
+        let c = [0, 1, 2].map(|k| (base[&f[0]][k] + base[&f[1]][k] + base[&f[2]][k]) / 3.0);
+        grid.entry(key(c)).or_default().push(i as u32);
+    }
+    let mut bound = Vec::with_capacity(garment.len());
+    for &p in garment {
+        let c = key(p);
+        let mut best: Option<(f64, usize, [f64; 3])> = None;
+        let mut r = 0i64;
+        loop {
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    for dz in -r..=r {
+                        if dx.abs().max(dy.abs()).max(dz.abs()) != r {
+                            continue;
+                        }
+                        for &i in grid.get(&(c.0 + dx, c.1 + dy, c.2 + dz)).into_iter().flatten() {
+                            let f = faces[i as usize];
+                            let (a, b, cc) = (base[&f[0]], base[&f[1]], base[&f[2]]);
+                            let w = closest_on_triangle(p, a, b, cc);
+                            let q = [0, 1, 2].map(|k| w[0] * a[k] + w[1] * b[k] + w[2] * cc[k]);
+                            let d = dot(sub(p, q), sub(p, q));
+                            if best.is_none_or(|bb| d < bb.0) {
+                                best = Some((d, i as usize, w));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((d, _, _)) = best
+                && d.sqrt() < (r as f64 - 1.0).max(0.0) * cell
+            {
+                break;
+            }
+            r += 1;
+            if r > 4096 {
+                break;
+            }
+        }
+        let (_, i, w) = best.ok_or("a garment vertex found no face")?;
+        let f = faces[i];
+        let q = [0, 1, 2].map(|k| w[0] * base[&f[0]][k] + w[1] * base[&f[1]][k] + w[2] * base[&f[2]][k]);
+        bound.push(Bound { vertices: f, weights: w, offset: [0, 1, 2].map(|k| (p[k] - q[k]) / s[k]) });
+    }
+    let [x, y, z] = scales;
+    Ok(Binding { keys: BTreeMap::new(), scales: [Some(x), Some(y), Some(z)], bound, hidden: Vec::new() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +309,33 @@ material tiny.mhmat\n0 1 2 0.5 0.25 0.25 0.1 0.2 0.3\n3\ndelete_verts\n1 2\n3\n"
         assert_eq!(b.hidden, vec![4, 5, 6, 7, 9, 12, 20]);
         assert!(Binding::parse("verts 0\n0\ndelete_verts\n7 - 4\n").unwrap_err().contains("backwards"));
         assert!(Binding::parse("verts 0\n0\ndelete_verts\n7 -\n").unwrap_err().contains("needs its end"));
+    }
+
+    #[test]
+    fn a_surface_binding_reproduces_the_garment_and_round_trips_as_text() {
+        let base: BTreeMap<u32, Point> = [(0, [0.0, 0.0, 0.0]), (1, [1.0, 0.0, 0.0]), (2, [0.0, 1.0, 0.0]), (3, [1.0, 1.0, 0.0]), (4, [0.0, 0.0, 2.0])].into();
+        let scales = [Scale { a: 0, b: 1, reference: 1.0 }, Scale { a: 0, b: 2, reference: 1.0 }, Scale { a: 0, b: 4, reference: 2.0 }];
+        let garment = vec![[0.25, 0.25, 0.1], [0.9, 0.8, -0.2], [2.0, 2.0, 0.0], [0.5, 0.5, 0.0]];
+        let b = bind_to_surface(&garment, &base, &[[0, 1, 2], [1, 3, 2]], scales).unwrap();
+        let mut flat = vec![[0.0; 3]; 5];
+        for (k, p) in &base {
+            flat[*k as usize] = *p;
+        }
+        let back = b.evaluate(&flat).unwrap();
+        for (p, q) in garment.iter().zip(&back) {
+            assert!((0..3).all(|k| (p[k] - q[k]).abs() < 1e-12), "{p:?} {q:?}");
+        }
+        assert_eq!(b.bound[0].offset, [0.0, 0.0, 0.1]);
+        let mut with_hidden = b.clone();
+        with_hidden.hidden = (0..20).collect();
+        with_hidden.keys.insert("name".into(), "probe".into());
+        assert_eq!(Binding::parse(&with_hidden.to_text()).unwrap(), with_hidden);
+        let mut scaled = flat.clone();
+        for p in &mut scaled {
+            p[0] *= 2.0;
+        }
+        assert!((b.evaluate(&scaled).unwrap()[0][0] - 0.5).abs() < 1e-12, "x offsets scale with the base");
+        assert!(bind_to_surface(&garment, &base, &[[0, 1, 7]], scales).unwrap_err().contains("no base face"));
     }
 
     #[test]

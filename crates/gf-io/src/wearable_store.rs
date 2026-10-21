@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use gf_core::catalog::BlobStore;
 use gf_core::hash;
 use gf_core::wearable::Binding;
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,38 @@ impl Store {
             material,
             transparent,
             double_sided,
+            source,
+            notes,
+        };
+        Ok((self.put_manifest("wearables", &manifest)?, manifest))
+    }
+
+    pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
+        let mesh = crate::body::read_obj(obj_path, None)?;
+        if mesh.positions.len() != binding.bound.len() {
+            return Err(format!("the binding has {} vertices, {} has {}", binding.bound.len(), obj_path.display(), mesh.positions.len()));
+        }
+        let mut material = BTreeMap::new();
+        let mut transparent = false;
+        let mut source = BTreeMap::from([("obj".to_string(), obj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())]);
+        if let Some(d) = diffuse {
+            let r = hash::reference(&self.put_file(d)?);
+            let (_, _, rgba) = crate::png::decode_rgba(&self.get_ref(&r)?)?;
+            transparent = rgba.chunks_exact(4).filter(|p| p[3] < 250).count() as f64 > ALPHA_TEXELS * (rgba.len() / 4) as f64;
+            material.insert("diffuse".to_string(), r);
+            source.insert("diffuse".into(), d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+        }
+        let manifest = WearableManifest {
+            format: WEARABLE_FORMAT.into(),
+            name: binding.keys.get("name").cloned().unwrap_or_else(|| "wearable".into()),
+            kind: kind.into(),
+            binding: hash::reference(&self.put(binding.to_text().as_bytes())?),
+            mesh: hash::reference(&self.put_file(obj_path)?),
+            vertices: binding.bound.len(),
+            hidden: binding.hidden.len(),
+            material,
+            transparent,
+            double_sided: false,
             source,
             notes,
         };

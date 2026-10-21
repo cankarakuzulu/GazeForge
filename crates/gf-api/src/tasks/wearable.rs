@@ -12,6 +12,49 @@ use super::{Options, need, only};
 
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
 pub const IMPORT_KEYS: &[&str] = &["store", "mhclo"];
+pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo"];
+const SCALE_PAIRS: [(u32, u32); 3] = [(5399, 11998), (791, 881), (962, 5320)];
+
+pub fn bind(opts: &Options) -> Result<Value, String> {
+    only(opts, "wearable bind", &[BIND_KEYS])?;
+    let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
+    let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
+    let source = opts.get("macro").map(|p| ch::read_macro_definition(Path::new(p))).transpose()?;
+    let (dense, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref())?;
+    let shaped = crate::body::spec_body(&store, &spec, source.as_ref(), pin.as_ref())?;
+    let frame = BaseFrame::new(&shaped.pack, &shaped.controls, &shaped.manifest, &dense);
+    let base = frame.surface_ids();
+    let polys = gf_io::body::read_obj(Path::new(need(opts, "base")?), Some("body"))?;
+    let faces: Vec<[u32; 3]> = polys.faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0].0, f[k].0, f[k + 1].0])).collect();
+    let mut scales = Vec::new();
+    for (axis, (a, b)) in SCALE_PAIRS.iter().enumerate() {
+        let (pa, pb) = (base.get(a).ok_or(format!("scale vertex {a} is not on the character"))?, base.get(b).ok_or(format!("scale vertex {b} is not on the character"))?);
+        scales.push(gf_core::wearable::Scale { a: *a, b: *b, reference: (pa[axis] - pb[axis]).abs() });
+    }
+    let obj_path = Path::new(need(opts, "obj")?);
+    let garment = gf_io::body::read_obj(obj_path, None)?;
+    let world = match opts.get("frame").map(String::as_str).unwrap_or("world") {
+        "world" => true,
+        "canonical" => false,
+        other => return Err(format!("--frame takes world (the character as exported or fitted) or canonical, got {other}")),
+    };
+    let canonical: Vec<Point> = garment.positions.iter().map(|&p| if world { shaped.similarity.invert(p) } else { p }).collect();
+    let mh: Vec<Point> = canonical.iter().map(|&p| frame.to_makehuman(p)).collect();
+    let mut binding = gf_core::wearable::bind_to_surface(&mh, &base, &faces, [scales[0], scales[1], scales[2]])?;
+    let name = opts.get("name").cloned().unwrap_or_else(|| obj_path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "wearable".into()));
+    binding.keys.insert("name".into(), name.clone());
+    binding.keys.insert("obj_file".into(), obj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    let back = frame.evaluate(&binding)?;
+    let worst = back.iter().zip(&canonical).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0f64, f64::max);
+    let offsets: Vec<f64> = binding.bound.iter().map(|b| (b.offset[0].powi(2) + b.offset[1].powi(2) + b.offset[2].powi(2)).sqrt() * frame.unit * 1000.0).collect();
+    if let Some(path) = opts.get("out-mhclo") {
+        std::fs::write(path, binding.to_text()).map_err(|e| format!("{path}: {e}"))?;
+    }
+    let (reference, m) = store.import_generated(&binding, obj_path, opts.get("diffuse").map(Path::new), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
+    Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent,
+              "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max),
+              "meaning": "each garment vertex bound to the nearest point of the character's base surface (body and head), with its offset; the reprojection is the binding evaluated back on that character against the garment"}))
+}
 
 pub fn import(opts: &Options) -> Result<Value, String> {
     only(opts, "wearable import", &[IMPORT_KEYS])?;
@@ -54,6 +97,14 @@ impl BaseFrame {
             head: pack.cage_source.iter().enumerate().filter_map(|(d, &o)| head.get(d).map(|p| (o, *p))).collect(),
             unit: pack_unit(pack_manifest),
         }
+    }
+
+    pub fn to_makehuman(&self, p: Point) -> Point {
+        [p[0] / self.unit, p[2] / self.unit, -p[1] / self.unit]
+    }
+
+    pub fn surface_ids(&self) -> std::collections::BTreeMap<u32, Point> {
+        self.body.iter().chain(&self.head).map(|(&k, &p)| (k, self.to_makehuman(p))).collect()
     }
 
     pub fn evaluate(&self, binding: &Binding) -> Result<Vec<Point>, String> {
