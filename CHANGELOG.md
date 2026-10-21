@@ -68,8 +68,10 @@ open, with its last measurement, rather than left out.
   0.05 mm and its free cloth 0 mm into the body with the spine bent 35 degrees either way, up to 78 mm without.
   Collider radii are the 10th-percentile distance (were the median: a round torso capsule stood out of the back by about
   10 cm). Open: the ponytail's 4 cm tie chain still reaches 13 mm into the neck capsule with the head tipped back 60
-  degrees (29 mm counting the joints within 3 cm of its root); the cape sags about 11 cm as it settles (Godot's soft
-  body at stiffness 1); the reader drives pins from a script, about 4 bone transforms per pinned vertex per frame.
+  degrees (29 mm counting the joints within 3 cm of its root); a few edges near the cape's hem stretch to about twice
+  their length where it meets the leg capsules; the reader drives pins from a script, about 4 bone transforms per pinned
+  vertex per frame. (The cape first settled 11 cm: a soft body ignores the scale in its transform, so it started 9%
+  small; the cloth's mesh is now baked into world space at the character's size.)
 
 ### Changed
 
