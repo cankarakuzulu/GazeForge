@@ -150,7 +150,7 @@ function mount(root, api) {
     persist();
     const character = api.character();
     const storePath = state.store || character.store;
-    if (!state.body || !storePath) {
+    if ((!state.body && !character.body) || !storePath) {
       status.textContent = tr('stitch.need_body');
       status.dataset.pass = '';
       return;
@@ -164,7 +164,8 @@ function mount(root, api) {
     status.textContent = tr('stitch.stitching');
     status.dataset.pass = '';
     try {
-      const input = Object.assign({ store: storePath, character, body: state.body, return_mesh: true }, state.values);
+      const input = Object.assign({ store: storePath, character, return_mesh: true }, state.values);
+      if (state.body) input.body = state.body;
       if (character.macro) input.macro = character.macro;
       let r;
       let pass = true;

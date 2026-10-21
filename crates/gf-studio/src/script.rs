@@ -809,6 +809,14 @@ impl Offscreen {
                         w.stitch_go();
                         w.wait(|w| w.stitch.job.is_none(), num("seconds").unwrap_or(300.0))?;
                     }
+                    "body" => {
+                        let b = match (text("pack"), text("targets")) {
+                            (Some(p), Some(t)) => Some(json!({"pack": p, "targets": t})),
+                            _ => None,
+                        };
+                        w.body_assign(b);
+                        w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
+                    }
                     "show" => {
                         w.stitch.show = step.get("on").and_then(Value::as_bool).unwrap_or(true);
                         w.stitch_draw();
@@ -820,7 +828,7 @@ impl Offscreen {
                         std::fs::write(&file, &bytes).map_err(|e| format!("{}: {e}", file.display()))?;
                     }
                     "summary" => {}
-                    other => return Err(format!("stitch do is go, show, dump or summary, got {other}")),
+                    other => return Err(format!("stitch do is go, body, show, dump or summary, got {other}")),
                 }
                 w.tick();
                 let m = w.stitch.last.as_ref();

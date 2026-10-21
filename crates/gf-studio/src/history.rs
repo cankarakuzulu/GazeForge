@@ -72,7 +72,7 @@ impl World {
         json!({"rig": {"mode": f.mode.name(), "weights": weights, "manual": manual},
                "stitch": {"values": s.values, "seam": s.seam, "auto": s.auto, "store": s.store, "body": s.body},
                "timeline": {"speed": t.speed, "loop": t.looping, "apply_head": t.apply_head},
-               "notes": self.project.notes})
+               "notes": self.project.notes, "body": self.session.as_ref().map_or(Value::Null, |s| s.character.body.clone())})
     }
 
     fn panel_apply(&mut self, v: &Value) {
@@ -106,6 +106,13 @@ impl World {
         self.timeline.looping = t["loop"] != false;
         self.timeline.apply_head = t["apply_head"] != false;
         self.project.notes = v["notes"].as_str().unwrap_or_default().to_string();
+        let body = v["body"].clone();
+        if self.session.as_ref().is_some_and(|s| s.character.body != body) {
+            if let Some(s) = self.session.as_mut() {
+                s.character.body = body;
+            }
+            self.request_settle();
+        }
     }
 
     pub fn journal_flush(&mut self) {

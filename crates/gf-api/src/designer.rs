@@ -169,11 +169,11 @@ impl Loaded {
         self.prepared.get_or_init(|| Prepared::new(self.dense.positions.len(), &self.dense.triangles, &self.dense.triangle_uvs, &self.game, f3_defaults().uv_ring))
     }
 
-    fn macro_layer(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64) -> Result<Vec<[f64; 3]>, ApiError> {
-        Ok(self.macro_layer_traced(source, mode, sliders, head_scale)?.0)
+    fn macro_layer(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64, follows_body: bool) -> Result<Vec<[f64; 3]>, ApiError> {
+        Ok(self.macro_layer_traced(source, mode, sliders, head_scale, follows_body)?.0)
     }
 
-    fn macro_layer_traced(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64) -> Result<(Vec<[f64; 3]>, MacroTrace), ApiError> {
+    fn macro_layer_traced(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64, follows_body: bool) -> Result<(Vec<[f64; 3]>, MacroTrace), ApiError> {
         let base = self.pack.macro_base.as_ref().ok_or_else(|| ApiError::invalid("the pack has no macro_base"))?;
         let mode = Mode::parse(mode).map_err(ApiError::invalid)?;
         let on_head = |n: &str| self.catalog.targets.contains_key(n);
@@ -183,7 +183,7 @@ impl Loaded {
             self.target(id)?.add_scaled(*dw, &mut raw);
         }
         let frame = self.frame()?;
-        let (mut pinned, coef) = frame.strip_and_pin(&raw);
+        let (mut pinned, coef) = if follows_body { frame.strip(&raw) } else { frame.strip_and_pin(&raw) };
         frame.add_head_scale(head_scale, &mut pinned).map_err(ApiError::invalid)?;
         Ok((pinned, MacroTrace { changes, coef, head_scale }))
     }
@@ -231,7 +231,7 @@ impl Loaded {
             if source.reference != m.definition {
                 return Err(ApiError::invalid(format!("macros.definition is {}, the file given hashes to {}", m.definition, source.reference)));
             }
-            let (layer, t) = self.macro_layer_traced(source, &m.mode, &m.sliders, m.head_scale)?;
+            let (layer, t) = self.macro_layer_traced(source, &m.mode, &m.sliders, m.head_scale, spec.body.is_some())?;
             layers.push(layer);
             trace = Some(t);
         }
@@ -820,6 +820,7 @@ struct MacroAt {
     macros: MacroSpec,
     slider: String,
     value: f64,
+    follows_body: bool,
 }
 
 impl MacroAt {
@@ -830,14 +831,14 @@ impl MacroAt {
         let macros = spec.macros.clone().expect("set above");
         let slider = text(input, "slider").to_string();
         let value = *macros.sliders.get(&slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
-        Ok(MacroAt { loaded, source, macros, slider, value })
+        Ok(MacroAt { loaded, source, macros, slider, value, follows_body: spec.body.is_some() })
     }
 
     fn layer(&self, v: f64) -> Result<Vec<[f64; 3]>, ApiError> {
         let m = &self.macros;
         let mut sliders = m.sliders.clone();
         sliders.insert(self.slider.clone(), v);
-        let layer = self.loaded.macro_layer(&self.source, &m.mode, &sliders, m.head_scale)?;
+        let layer = self.loaded.macro_layer(&self.source, &m.mode, &sliders, m.head_scale, self.follows_body)?;
         Ok(self.loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
     }
 }

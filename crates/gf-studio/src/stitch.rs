@@ -28,6 +28,8 @@ pub struct StitchMesh {
 pub struct Stitch {
     pub store: String,
     pub body: String,
+    pub body_ref: String,
+    pub targets_ref: String,
     pub values: [f64; 6],
     pub show: bool,
     pub seam: bool,
@@ -46,6 +48,8 @@ impl Default for Stitch {
         Stitch {
             store: String::new(),
             body: String::new(),
+            body_ref: String::new(),
+            targets_ref: String::new(),
             values: CONTROLS.map(|c| c.4),
             show: true,
             seam: true,
@@ -114,6 +118,35 @@ impl crate::studio::Studio<'_> {
                 ui.add(egui::TextEdit::singleline(&mut st.body).hint_text(tr("stitch.body_placeholder")).desired_width(f32::INFINITY));
                 ui.end_row();
             });
+            let spec_body = self.world.session.as_ref().is_some_and(|s| !s.character.body.is_null());
+            ui.separator();
+            ui.label(egui::RichText::new(tr("stitch.character_body")).strong());
+            let st = &mut self.world.stitch;
+            egui::Grid::new("stitch_refs").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                ui.label(tr("stitch.body_ref"));
+                ui.add(egui::TextEdit::singleline(&mut st.body_ref).hint_text(tr("stitch.ref_hint")).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label(tr("stitch.targets_ref"));
+                ui.add(egui::TextEdit::singleline(&mut st.targets_ref).hint_text(tr("stitch.ref_hint")).desired_width(f32::INFINITY));
+                ui.end_row();
+            });
+            let mut assign: Option<Option<Value>> = None;
+            ui.horizontal(|ui| {
+                let ready = !st.body_ref.trim().is_empty() && !st.targets_ref.trim().is_empty();
+                if ui.add_enabled(ready, egui::Button::new(tr("stitch.set_body"))).clicked() {
+                    assign = Some(Some(json!({"pack": st.body_ref.trim(), "targets": st.targets_ref.trim()})));
+                }
+                if ui.add_enabled(spec_body, egui::Button::new(tr("stitch.remove_body"))).clicked() {
+                    assign = Some(None);
+                }
+            });
+            if spec_body {
+                ui.label(egui::RichText::new(tr("stitch.spec_body_active")).weak());
+            }
+            if let Some(a) = assign {
+                self.world.body_assign(a);
+            }
+            let st = &mut self.world.stitch;
             let mut restitch = false;
             for (i, (id, lo, hi, step, _)) in CONTROLS.iter().enumerate() {
                 let r = ui.add(egui::Slider::new(&mut st.values[i], *lo..=*hi).step_by(*step).text(tr(&format!("stitch.control.{id}"))));
@@ -156,7 +189,7 @@ impl World {
             return;
         };
         let store = if self.stitch.store.trim().is_empty() { s.store.clone() } else { self.stitch.store.trim().to_string() };
-        if self.stitch.body.trim().is_empty() {
+        if self.stitch.body.trim().is_empty() && s.character.body.is_null() {
             self.stitch.status = tr("stitch.need_body").into();
             self.stitch.pass = None;
             return;
@@ -166,7 +199,10 @@ impl World {
             return;
         }
         let character = s.settle_input(&s.character, false);
-        let mut input = json!({"store": store, "character": character, "body": self.stitch.body.trim(), "return_mesh": true});
+        let mut input = json!({"store": store, "character": character, "return_mesh": true});
+        if !self.stitch.body.trim().is_empty() {
+            input["body"] = json!(self.stitch.body.trim());
+        }
         if let Some(m) = character.get("macro") {
             input["macro"] = m.clone();
         }
@@ -227,6 +263,17 @@ impl World {
         self.set_extra("stitch-body", body);
         self.set_overlay("stitch-seam", seam);
         let _ = self.set_pose("stitch-head", head);
+    }
+
+    pub fn body_assign(&mut self, body: Option<Value>) {
+        let Some(s) = self.session.as_mut() else { return };
+        let value = body.unwrap_or(Value::Null);
+        if s.character.body == value {
+            return;
+        }
+        s.character.body = value;
+        self.stitch.wanted = true;
+        self.request_settle();
     }
 
     pub fn stitch_changed(&mut self, slider: bool) {
