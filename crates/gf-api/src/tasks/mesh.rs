@@ -212,6 +212,10 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
     }
     let n = garment.len();
     let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
+    if item.manifest.transparent && let Some(levels) = card_levels(garment, &triangles, &uvs, body_counts) {
+        out.extend(levels);
+        return out;
+    }
     if body_counts.len() > 1 && body_counts[0] > 0 {
         let mut targets = Vec::new();
         let mut above = n;
@@ -239,6 +243,78 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
         }
     }
     out
+}
+
+const CARD_LARGEST_SHARE: f64 = 0.25;
+
+fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], body_counts: &[usize]) -> Option<Vec<GarmentLevel>> {
+    let n = garment.len();
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    fn root(parent: &mut [u32], mut v: u32) -> u32 {
+        while parent[v as usize] != v {
+            parent[v as usize] = parent[parent[v as usize] as usize];
+            v = parent[v as usize];
+        }
+        v
+    }
+    for t in triangles {
+        for k in 1..3 {
+            let (a, b) = (root(&mut parent, t[0]), root(&mut parent, t[k]));
+            if a != b {
+                parent[a as usize] = b;
+            }
+        }
+    }
+    let mut cards: HashMap<u32, (f64, Vec<usize>, std::collections::BTreeSet<u32>)> = HashMap::new();
+    for (i, t) in triangles.iter().enumerate() {
+        let c = cards.entry(root(&mut parent, t[0])).or_insert_with(|| (0.0, Vec::new(), Default::default()));
+        let [a, b, d] = t.map(|v| garment[v as usize]);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+        c.0 += 0.5 * ((u[1] * w[2] - u[2] * w[1]).powi(2) + (u[2] * w[0] - u[0] * w[2]).powi(2) + (u[0] * w[1] - u[1] * w[0]).powi(2)).sqrt();
+        c.1.push(i);
+        c.2.extend(t.iter().copied());
+    }
+    let mut order: Vec<(f64, Vec<usize>, std::collections::BTreeSet<u32>)> = cards.into_values().collect();
+    order.sort_by(|a, b| b.0.total_cmp(&a.0));
+    if order.iter().map(|c| c.2.len()).max().unwrap_or(n) as f64 > CARD_LARGEST_SHARE * n as f64 {
+        return None;
+    }
+    let centre = |c: &(f64, Vec<usize>, std::collections::BTreeSet<u32>)| -> Point {
+        let k = c.2.len().max(1) as f64;
+        c.2.iter().fold([0.0; 3], |a, &v| [a[0] + garment[v as usize][0] / k, a[1] + garment[v as usize][1] / k, a[2] + garment[v as usize][2] / k])
+    };
+    let centres: Vec<Point> = order.iter().map(centre).collect();
+    let mut spread: Vec<usize> = vec![0];
+    let mut gap: Vec<f64> = centres.iter().map(|c| (0..3).map(|k| (c[k] - centres[0][k]).powi(2)).sum::<f64>()).collect();
+    while spread.len() < order.len() {
+        let next = (0..order.len()).filter(|i| !spread.contains(i)).max_by(|&a, &b| gap[a].total_cmp(&gap[b])).unwrap_or(0);
+        spread.push(next);
+        for (i, g) in gap.iter_mut().enumerate() {
+            *g = g.min((0..3).map(|k| (centres[i][k] - centres[next][k]).powi(2)).sum::<f64>());
+        }
+    }
+    let order: Vec<(f64, Vec<usize>, std::collections::BTreeSet<u32>)> = spread.into_iter().map(|i| order[i].clone()).collect();
+    let mut out = Vec::new();
+    let mut above = n;
+    for &b in body_counts.iter().skip(1) {
+        let target = ((n as f64 * b as f64 / body_counts[0].max(1) as f64).round() as usize).max(WEARABLE_MIN_VERTICES).min(above);
+        let mut keep: std::collections::BTreeSet<u32> = Default::default();
+        let mut tris: Vec<usize> = Vec::new();
+        for card in &order {
+            if !keep.is_empty() && keep.len() + card.2.len() > target {
+                break;
+            }
+            keep.extend(card.2.iter().copied());
+            tris.extend(card.1.iter().copied());
+        }
+        let kept: Vec<u32> = keep.into_iter().collect();
+        let local: HashMap<u32, u32> = kept.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+        tris.sort_unstable();
+        above = kept.len();
+        out.push((kept, tris.iter().map(|&i| triangles[i].map(|v| local[&v])).collect(), tris.iter().map(|&i| uvs[i]).collect()));
+    }
+    Some(out)
 }
 
 fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, material: usize) -> Lod {
@@ -1612,7 +1688,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         if !worn.is_empty() {
             body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
-                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over, each coarser level pushed out of its own body level (lod_pushed: vertices moved per level) and layered again by z_depth; body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over (a wearable made of many alpha cards keeps whole cards, spread over it farthest-first from the largest, instead of collapsing them), each coarser level pushed out of its own body level (lod_pushed: vertices moved per level) and layered again by z_depth; body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
