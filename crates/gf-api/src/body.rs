@@ -440,6 +440,35 @@ impl HeadFit {
     }
 }
 
+pub fn head_fit(store: &Store, spec: &Spec, macros: Option<&ch::MacroSource>, pack: &b::BodyPack, controls: &Controls, positions: &[Point]) -> Result<HeadFit, String> {
+    let body = spec.body.as_ref().ok_or("the spec has no body")?.canonical();
+    let targets = store.load_body_targets(&body.targets)?;
+    let mut reference = spec.clone();
+    reference.weights.retain(|id, _| targets.targets.contains_key(id));
+    reference.residual = None;
+    if let Some(m) = reference.macros.as_mut() {
+        m.head_scale = 1.0;
+    }
+    let (plain, _, _, _) = ch::evaluate_traced(store, &reference, macros)?;
+    let n = pack.cage_source.len().min(plain.len()).min(positions.len());
+    let mut fitted = positions[..n].to_vec();
+    gf_core::body::scale_about(&mut fitted, pack.pivot(), controls.head_scale);
+    let at: std::collections::HashMap<u32, usize> = pack.source.iter().enumerate().map(|(i, &o)| (o, i)).collect();
+    let ring_offset_mm = pack.cage_source[..n].iter().enumerate().filter_map(|(d, o)| at.get(o).map(|&i| (plain[d], pack.mesh.positions[i])))
+        .map(|(a, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() * 1000.0).fold(0.0f64, f64::max);
+    Ok(HeadFit { reference: plain[..n].to_vec(), fitted, ring_offset_mm })
+}
+
+pub fn under_bone(rig: &gf_core::body_rig::RigDef, mut j: usize, ancestor: usize) -> bool {
+    while let Some(p) = rig.bones[j].parent.as_deref().and_then(|n| rig.bones.iter().position(|b| b.name == n)) {
+        if p == ancestor {
+            return true;
+        }
+        j = p;
+    }
+    false
+}
+
 pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weights_json: &Value, source: Value, head_fit: Option<&HeadFit>) -> Result<BodyRig, String> {
     let rig = gf_core::body_rig::RigDef::parse(rig_json)?;
     if rig.bones.len() > 256 {
@@ -461,18 +490,9 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weigh
     let head_joint = (0..score.len()).max_by(|&a, &b| score[a].total_cmp(&score[b])).ok_or("the rig has no bones")?;
     let unweighted = pack.source.iter().chain(&pack.cage_source).filter(|o| by_obj.get(o).is_none_or(Vec::is_empty)).count();
     let mut heads: Vec<Point> = ends.iter().map(|e| control(e.0)).collect();
-    let under_head = |mut j: usize| -> bool {
-        while let Some(p) = rig.bones[j].parent.as_deref().and_then(|n| rig.bones.iter().position(|b| b.name == n)) {
-            if p == head_joint {
-                return true;
-            }
-            j = p;
-        }
-        false
-    };
     let mut head_moves = Vec::new();
     if let Some(fit) = head_fit {
-        for j in (0..heads.len()).filter(|&j| under_head(j)) {
+        for j in (0..heads.len()).filter(|&j| under_bone(&rig, j, head_joint)) {
             let d = fit.shift(heads[j]);
             heads[j] = [heads[j][0] + d[0], heads[j][1] + d[1], heads[j][2] + d[2]];
             head_moves.push((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() * 1000.0);
@@ -581,14 +601,31 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "" => None,
         p => Some(ch::read_macro_definition(Path::new(p)).map_err(ApiError::invalid)?),
     };
-    let (_, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref()).map_err(ApiError::invalid)?;
+    let (dense, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref()).map_err(ApiError::invalid)?;
     let s = spec_body(&store, &spec, source.as_ref(), pin.as_ref()).map_err(ApiError::invalid)?;
     if s.pack.helpers.positions.is_empty() {
         return Err(ApiError::invalid("the body carries no shaped helper vertices: re-import the body (body.import) and its targets (body.targets) so the joints follow it"));
     }
     let at = gf_core::body_rig::Resolver::new(&s.pack.mesh.positions, &s.pack.source, &s.pack.helpers);
     let control = s.pack.control_joint(&s.controls);
-    let ends: Vec<(Point, Point)> = rig.evaluate(&at).map_err(ApiError::invalid)?.into_iter().map(|(h, t)| (control(h), control(t))).collect();
+    let mut ends: Vec<(Point, Point)> = rig.evaluate(&at).map_err(ApiError::invalid)?.into_iter().map(|(h, t)| (control(h), control(t))).collect();
+    let head_bone = rig.bones.iter().position(|b| {
+        let n = b.name.to_lowercase();
+        n == "head" || n.ends_with(":head") || n.ends_with("_head")
+    });
+    let mut head_joints = json!({"moved": 0, "method": "no bone named head: the joints follow the body targets only"});
+    if let Some(hb) = head_bone {
+        let fit = head_fit(&store, &spec, source.as_ref(), &s.pack, &s.controls, &dense).map_err(ApiError::invalid)?;
+        let add = |p: Point, d: Point| [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+        let mut moved = 0;
+        for j in (0..ends.len()).filter(|&j| under_bone(&rig, j, hb)) {
+            let (h, t) = ends[j];
+            ends[j] = (add(h, fit.shift(h)), add(t, fit.shift(t)));
+            moved += 1;
+        }
+        head_joints = json!({"head_bone": rig.bones[hb].name, "moved": moved, "ring_offset_mm": fit.ring_offset_mm,
+                             "method": "bones under the head bone follow the head's own shape, as export-glb --body-rig places them"});
+    }
     let r6 = |p: Point| p.map(|x| (x * 1e6).round() / 1e6);
     let bones: Vec<Value> = rig
         .bones
@@ -598,7 +635,7 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                                   "head_canonical": r6(*h), "tail_canonical": r6(*t)}))
         .collect();
     Ok(json!({"bones": bones, "frame": "metres, z up: head/tail in the world (the character's root similarity applied), *_canonical in the head's canonical frame as the body is stored, with the body controls (body_scale, neck_offset_mm) applied as the stitch applies them to joints below the neck ring (the head, which the controls do not move, keeps the joints above it)",
-              "body": s.report}))
+              "head_joints": head_joints, "body": s.report}))
 }
 
 pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
