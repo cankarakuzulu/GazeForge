@@ -151,6 +151,9 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     write_points(&dir.join("ring_targets.npy"), &pack.ring_targets)?;
     write_npy(dir.join("seam_loop.npy"), &Array1::from(pack.seam_loop.clone())).map_err(|e| e.to_string())?;
     write_points(&dir.join("seam_base.npy"), &pack.seam_base)?;
+    if !pack.source.is_empty() {
+        write_npy(dir.join("source.npy"), &Array1::from(pack.source.clone())).map_err(|e| e.to_string())?;
+    }
     for (i, lod) in pack.lods.iter().enumerate() {
         let d = Decimated { kept: lod.kept.clone(), owner: Vec::new(), triangles: lod.triangles.clone(), triangle_uvs: lod.uvs.clone(), stats: Stats::default() };
         crate::game_base::save(&dir.join(format!("lod{}", i + 1)), &d)?;
@@ -214,7 +217,11 @@ pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
         seam_base: read_points(&dir.join("seam_base.npy"))?,
         per_span: m["per_span"].as_u64().unwrap_or(16) as usize,
         lods,
+        source: if dir.join("source.npy").is_file() { read_u32(&dir.join("source.npy"))? } else { Vec::new() },
     };
+    if !pack.source.is_empty() && pack.source.len() != pack.mesh.positions.len() {
+        return Err(format!("{}: source.npy has {} entries for {} vertices", dir.display(), pack.source.len(), pack.mesh.positions.len()));
+    }
     if pack.ring_targets.len() != pack.ring.len() || pack.seam_base.len() != pack.seam_loop.len() {
         return Err(format!("{}: ring or seam arrays disagree", dir.display()));
     }
@@ -376,7 +383,7 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_obj.iter().enumerate().map(|(i, v)| RingVertex { vertex: local[v], param: i as f64 }).collect();
     let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
-    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods };
+    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone() };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({
@@ -511,7 +518,7 @@ pub fn import_mesh(input: &MeshInput, dense_dir: &Path, out: &Path) -> Result<Va
     if ring.windows(2).any(|w| w[1].param < w[0].param) {
         return Err("the neck ring's parameters are not monotone".into());
     }
-    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods };
+    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new() };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use gf_core::body::{self as b, Controls, Limits, Plant, Point};
+use gf_core::body_shape::{self as bs, Similarity};
 use gf_core::character::Spec;
+use gf_core::head;
 use gf_core::macros::{self, Mode};
 use gf_io::body as io;
 use gf_io::character as ch;
@@ -52,7 +54,8 @@ pub fn import_input() -> Value {
             "targets": {"type": "string", "description": "makehuman mode: the MakeHuman targets directory, to shape the body with macro sliders"},
             "macro": {"type": "string", "description": "makehuman mode: the macro definition (macro.json) for the sliders"},
             "sliders": {"type": "object", "description": "makehuman mode: macro sliders; missing ones default to 0.5 (races 1/3)"},
-            "weight_mode": {"enum": ["gf", "mpfb"], "description": "macro weight mode (default gf)"}
+            "weight_mode": {"enum": ["gf", "mpfb"], "description": "macro weight mode (default gf)"},
+            "store": {"type": "string", "minLength": 1, "description": "also put the pack into this store; the result's body is its reference, which a spec's body.pack and body.targets take"}
         }),
         &["mode", "obj", "dense", "out"],
     )
@@ -62,10 +65,10 @@ pub fn import_output() -> Value {
     shape(json!({"out": {"type": "string"}, "manifest": {"type": "object"}}))
 }
 
-fn shaping(input: &Value) -> Result<Vec<io::Shaping>, ApiError> {
+fn shaping(input: &Value) -> Result<(Vec<io::Shaping>, BTreeMap<String, f64>), ApiError> {
     let (root, def) = (text(input, "targets"), text(input, "macro"));
     if root.is_empty() && def.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), BTreeMap::new()));
     }
     if root.is_empty() || def.is_empty() {
         return Err(ApiError::invalid("shaping needs both targets and macro"));
@@ -90,7 +93,7 @@ fn shaping(input: &Value) -> Result<Vec<io::Shaping>, ApiError> {
             out.push((name.clone(), w, io::read_target(&file(&name)).map_err(ApiError::invalid)?));
         }
     }
-    Ok(out)
+    Ok((out, sliders))
 }
 
 pub fn import(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -105,11 +108,13 @@ pub fn import(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let manifest = match text(input, "mode") {
         "makehuman" => {
             let group = input.get("group").and_then(Value::as_str).unwrap_or("body");
-            let shaping = shaping(input)?;
+            let (shaping, used_sliders) = shaping(input)?;
             let mh = io::MakeHumanInput { obj: path, group, unit: number(input, "unit_m", 0.1)?, shaping, lods: &lods };
             let mut m = io::import_makehuman(&mh, dense, out).map_err(ApiError::invalid)?;
-            if let Some(s) = input.get("sliders") {
-                m["source"]["sliders"] = s.clone();
+            if !used_sliders.is_empty() {
+                m["source"]["sliders"] = json!(used_sliders);
+                std::fs::write(out.join("manifest.json"), serde_json::to_string_pretty(&m).map_err(|e| ApiError::internal(e.to_string()))?)
+                    .map_err(|e| ApiError::internal(format!("{}: {e}", out.display())))?;
             }
             m
         }
@@ -129,7 +134,83 @@ pub fn import(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         other => return Err(ApiError::invalid(format!("mode must be makehuman or mesh, got {other}"))),
     };
-    Ok(json!({"out": out.display().to_string(), "manifest": manifest}))
+    let stored = match input.get("store").and_then(Value::as_str) {
+        Some(root) => {
+            let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
+            Some(store.put_body(out).map_err(ApiError::invalid)?.0)
+        }
+        None => None,
+    };
+    Ok(json!({"out": out.display().to_string(), "manifest": manifest, "body": stored}))
+}
+
+pub fn targets_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1},
+               "body": {"type": "string", "minLength": 1, "description": "a body reference from body.import with store"},
+               "targets": {"type": "string", "minLength": 1, "description": "the MakeHuman targets directory"},
+               "families": {"type": "array", "items": {"type": "string"}, "description": "target folders to import (default macrodetails and breast)"},
+               "unit_m": {"type": "number", "description": "metres per MakeHuman unit (default 0.1)"}}),
+        &["store", "body", "targets"],
+    )
+}
+
+pub fn targets_output() -> Value {
+    shape(json!({"targets": {"type": "string"}, "summary": {"type": "object"}}))
+}
+
+pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::internal)?;
+    let families: Vec<String> = match input.get("families").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => vec!["macrodetails".into(), "breast".into()],
+    };
+    let (reference, m) = store.import_body_targets(text(input, "body"), Path::new(text(input, "targets")), &families, number(input, "unit_m", 0.1)?).map_err(ApiError::invalid)?;
+    Ok(json!({"targets": reference, "summary": gf_io::body_store::summary(&m)}))
+}
+
+pub struct Shaped {
+    pub pack: b::BodyPack,
+    pub manifest: Value,
+    pub controls: Controls,
+    pub similarity: Similarity,
+    pub report: Value,
+}
+
+pub fn spec_body(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>, pin: Option<&ch::Pin>) -> Result<Shaped, String> {
+    let body = spec.body.as_ref().ok_or("the spec has no body")?.canonical();
+    let (manifest, mut pack) = store.load_body(&body.pack)?;
+    let targets = store.load_body_targets(&body.targets)?;
+    if targets.body != body.pack {
+        return Err(format!("body.targets {} belong to body {}, not {}", body.targets, targets.body, body.pack));
+    }
+    let mut loaded = Vec::new();
+    for (id, &w) in &body.weights {
+        loaded.push((w, store.load_body_target(&targets, id)?));
+    }
+    let mut macro_changes = 0;
+    if let Some(m) = &spec.macros {
+        let source = source.ok_or("the spec has macros: pass the macro definition file")?;
+        let mode = Mode::parse(&m.mode)?;
+        let on_body = |n: &str| targets.targets.contains_key(n);
+        let changes = head::weight_changes(&source.definition, mode, &m.sliders, &targets.base_sliders, &on_body)?;
+        macro_changes = changes.len();
+        for (id, dw) in changes {
+            loaded.push((dw, store.load_body_target(&targets, &id)?));
+        }
+    }
+    let terms: Vec<(f64, &gf_core::catalog::SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t)).collect();
+    let full = bs::shape(&pack.mesh.positions, &terms)?;
+    let similarity = match pin {
+        Some((trace, frame)) => Similarity::from_linear(&trace.coef, frame.centre),
+        None => Similarity::identity(),
+    };
+    pack.mesh.positions = full.iter().map(|&p| similarity.invert(p)).collect();
+    let report = json!({"pack": body.pack, "targets": body.targets, "regional": body.weights.len(), "macro_targets_changed": macro_changes,
+                        "base_sliders": targets.base_sliders,
+                        "similarity": {"scale": similarity.scale, "translation_m": similarity.translation, "centre_m": similarity.centre, "rotation_quaternion": similarity.quaternion(),
+                                       "meaning": "the head follows the body: the head is built in its canonical frame (the macros' similarity stripped) and the whole character is mapped to the world by this similarity; the body was mapped into the canonical frame by its inverse"}});
+    Ok(Shaped { pack, manifest, controls: body.controls(), similarity, report })
 }
 
 pub fn controls(input: &Value) -> Result<Controls, ApiError> {
@@ -160,9 +241,10 @@ pub fn stitch_input() -> Value {
     let mut props = json!({
         "store": {"type": "string", "minLength": 1, "description": "path of the store directory"},
         "spec": {"type": "string", "description": "path of a spec file"},
+        "out_shaped": {"type": "string", "description": "with a spec body: write the shaped body (before the stitch, world frame, metres) to this .npy"},
         "character": {"type": "object", "description": "a spec object, or the designer's character (store, pack, catalog, game, weights, ...), instead of spec"},
         "macro": {"type": "string", "description": "the macro definition, for a spec with macro sliders"},
-        "body": {"type": "string", "minLength": 1, "description": "a body pack directory written by body.import"},
+        "body": {"type": "string", "minLength": 1, "description": "a body pack directory written by body.import; without it the spec's body is used, shaped by its macros"},
         "lod": {"type": "integer", "description": "0 (this command stitches the finest LOD; export-glb --body stitches every LOD)"},
         "out_obj": {"type": "string", "description": "write the head and the stitched body as one OBJ"},
         "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
@@ -172,7 +254,7 @@ pub fn stitch_input() -> Value {
     for (k, v) in control_props().as_object().unwrap() {
         props[k] = v.clone();
     }
-    obj(props, &["store", "body"])
+    obj(props, &["store"])
 }
 
 pub fn stitch_output() -> Value {
@@ -226,11 +308,21 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         "" => None,
         p => Some(ch::read_macro_definition(Path::new(p)).map_err(ApiError::invalid)?),
     };
-    let (dense, _) = ch::evaluate(&store, &spec, source.as_ref()).map_err(ApiError::invalid)?;
+    let (dense, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref()).map_err(ApiError::invalid)?;
     let game_ref = spec.base.game_base.clone().ok_or_else(|| ApiError::invalid("the spec names no game base"))?;
     let (_, base) = store.load_game(&game_ref).map_err(ApiError::not_found)?;
-    let (_, pack) = io::load(Path::new(text(input, "body"))).map_err(ApiError::not_found)?;
-    let controls = controls(input)?;
+    let (pack, controls, shaped_report, similarity) = match (text(input, "body"), &spec.body) {
+        ("", Some(_)) => {
+            let s = spec_body(&store, &spec, source.as_ref(), pin.as_ref()).map_err(ApiError::invalid)?;
+            if let Some(path) = input.get("out_shaped").and_then(Value::as_str) {
+                let world: Vec<Point> = s.pack.mesh.positions.iter().map(|&p| s.similarity.apply(p)).collect();
+                gf_io::dense::write_points(Path::new(path), &world).map_err(ApiError::internal)?;
+            }
+            (s.pack, s.controls, Some(s.report), s.similarity)
+        }
+        ("", None) => return Err(ApiError::invalid("pass body (a pack directory) or a spec with a body")),
+        (dir, _) => (io::load(Path::new(dir)).map_err(ApiError::not_found)?.1, controls(input)?, None, Similarity::identity()),
+    };
     let mut head: Vec<Point> = base.kept.iter().map(|&d| dense[d as usize]).collect();
     b::scale_about(&mut head, pack.pivot(), controls.head_scale);
     let seam = b::head_seam(&pack, &head, &base.triangles, &base.kept).map_err(ApiError::invalid)?;
@@ -262,6 +354,10 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let mut result = json!({"gates": gates, "controls": controls, "body": {"mode": pack.mode, "vertices": st.positions.len(), "triangles": st.triangles.len(),
                             "seam_points": seam.len(), "seam_copies": st.seam_copies.len()}});
+    if let Some(r) = shaped_report {
+        result["body"]["shaped"] = r;
+    }
+    result["body"]["world"] = json!({"scale": similarity.scale, "rotation_quaternion": similarity.quaternion(), "origin_m": similarity.translation_for_origin()});
     if input.get("return_mesh").and_then(Value::as_bool).unwrap_or(false) {
         let (_, normals) = b::two_sided_normals(&head, &base.triangles, &st);
         let indices: Vec<u8> = st.triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();

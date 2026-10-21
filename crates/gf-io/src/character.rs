@@ -136,10 +136,12 @@ pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_
         }
         let boundary = gf_geom::open_boundary(&resolved.dense.triangles);
         let frame = HeadOnly::new(&resolved.dense.positions, &boundary, settings.pin_top_m)?;
-        let (mut pinned, coef) = frame.strip_and_pin(&raw);
+        let follows_body = spec.body.is_some();
+        let (mut pinned, coef) = if follows_body { frame.strip(&raw) } else { frame.strip_and_pin(&raw) };
         frame.add_head_scale(m.head_scale, &mut pinned)?;
         report["macros"] = json!({"mode": mode.name(), "targets_changed": changes.len(), "similarity_stripped": coef,
-                                  "seam_top_m": frame.seam_top, "pin_top_m": frame.pin_top, "head_scale": m.head_scale});
+                                  "seam_top_m": frame.seam_top, "pin_top_m": frame.pin_top, "head_scale": m.head_scale,
+                                  "seam": if follows_body { "follows the body: the macros' shape is kept down to the seam (similarity stripped, not pinned)" } else { "pinned: the seam keeps the base's shape" }});
         layers.push(pinned);
         pin = Some((MacroTrace { changes, coef, head_scale: m.head_scale }, frame));
     }

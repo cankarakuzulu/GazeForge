@@ -149,6 +149,7 @@ pub struct Character {
     pub residual: Value,
     pub eyeballs: Value,
     pub skin: Value,
+    pub body: Value,
 }
 
 pub struct SettleOut {
@@ -329,7 +330,7 @@ pub struct Session {
 
 impl Session {
     pub fn base(&self) -> Character {
-        Character { skin: self.character.skin.clone(), ..self.start.clone() }
+        Character { skin: self.character.skin.clone(), body: self.character.body.clone(), ..self.start.clone() }
     }
 }
 
@@ -386,6 +387,7 @@ impl Session {
             residual: st["residual"].clone(),
             eyeballs: st["eyeballs"].clone(),
             skin: st["skin"].clone(),
+            body: st["body"].clone(),
         };
         let t = Instant::now();
         let scene = designer::scene_mesh(&json!({"store": store, "pack": pack, "catalog": catalog, "game": game})).map_err(err)?;
@@ -433,6 +435,9 @@ impl Session {
         }
         if !c.skin.is_null() {
             input["skin"] = c.skin.clone();
+        }
+        if !c.body.is_null() {
+            input["body"] = c.body.clone();
         }
         if !c.eyeballs.is_null() {
             input["eyeballs"] = c.eyeballs.clone();
@@ -529,7 +534,7 @@ impl Session {
     }
 
     pub fn reference_input(&self) -> Value {
-        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, skin: Value::Null, ..self.start.clone() };
+        let neutral = Character { name: "neutral".into(), weights: BTreeMap::new(), macros: Value::Null, residual: Value::Null, eyeballs: Value::Null, skin: Value::Null, body: Value::Null, ..self.start.clone() };
         let mut input = self.settle_input(&neutral, false);
         input.as_object_mut().map(|o| o.remove("residual"));
         input

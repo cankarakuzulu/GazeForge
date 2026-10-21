@@ -644,6 +644,7 @@ pub fn new(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 residual: None,
                 eyeballs: s.pointer("/start/eyeballs").and_then(|e| serde_json::from_value(e.clone()).ok()),
                 skin: None,
+                body: None,
             }
         }
     };

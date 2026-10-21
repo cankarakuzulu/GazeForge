@@ -21,7 +21,7 @@ pub struct Store {
     pub root: PathBuf,
 }
 
-pub const KINDS: [&str; 4] = ["packs", "catalogs", "game", "eyerigs"];
+pub const KINDS: [&str; 6] = ["packs", "catalogs", "game", "eyerigs", "bodies", "bodytargets"];
 const HELPER_GROUPS: [&str; 3] = ["helper-l-eye", "helper-r-eye", "body"];
 const REGISTRATION_CELL: f64 = 0.004;
 const REGISTRATION_LIMIT_MM: f64 = 2.0;

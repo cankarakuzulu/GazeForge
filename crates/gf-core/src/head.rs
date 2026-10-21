@@ -132,6 +132,20 @@ impl HeadOnly {
         (out, coef)
     }
 
+    pub fn strip(&self, delta: &[[f64; 3]]) -> (Vec<[f64; 3]>, [f64; 7]) {
+        let coef = self.similarity(delta);
+        let out = self
+            .x
+            .iter()
+            .zip(delta)
+            .map(|(&xv, &d)| {
+                let c = columns(xv);
+                std::array::from_fn(|k| d[k] - (0..7).map(|i| coef[i] * c[i][k]).sum::<f64>())
+            })
+            .collect();
+        (out, coef)
+    }
+
     pub fn pin_points(&self, points: &[[f64; 3]], delta: &[[f64; 3]], coef: &[f64; 7], head_scale: f64) -> Vec<[f64; 3]> {
         points
             .iter()

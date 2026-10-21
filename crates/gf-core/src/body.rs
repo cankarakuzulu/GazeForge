@@ -1319,6 +1319,7 @@ pub struct BodyPack {
     pub seam_base: Vec<Point>,
     pub per_span: usize,
     pub lods: Vec<BodyLod>,
+    pub source: Vec<u32>,
 }
 
 impl BodyPack {

@@ -169,6 +169,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: eyes::textures,
     },
     CommandDef {
+        name: "body.targets",
+        kind: Kind::Mutation,
+        summary: "Import MakeHuman targets onto a stored body pack (by each pack vertex's base.obj index), in metres in the dense frame, so a character spec's body can be shaped live by the macro sliders and by regional targets. Returns the reference a spec's body.targets takes.",
+        limits: "Needs a pack imported in makehuman mode with this version (it records source.npy) and put in the store (body.import with store). Targets that touch none of the pack's vertices are skipped.",
+        input: body::targets_input,
+        output: body::targets_output,
+        run: body::targets,
+    },
+    CommandDef {
         name: "skin.models",
         kind: Kind::Query,
         summary: "The procedural skin presets: tone (melanin, haemoglobin, undertone), regional redness, lips, under-eyes, freckles, moles, pores, age, stubble and its hair colour, T-zone oil.",
@@ -1014,6 +1023,7 @@ fn character_create(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         residual: None,
         eyeballs: None,
         skin: None,
+        body: None,
     }
     .canonical();
     let (problems, _) = ch::problems(&store, &spec, None);
