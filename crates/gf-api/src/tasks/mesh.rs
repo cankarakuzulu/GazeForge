@@ -52,6 +52,128 @@ pub const GLB_KEYS: &[&str] = &[
 pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
 pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
+pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates"];
+const GENITAL_SINK_M: f64 = 0.002;
+const GENITAL_MIN_BODY_VERTICES: usize = 2500;
+
+fn face_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
+    let mut n = vec![[0.0; 3]; positions.len()];
+    for t in triangles {
+        let (a, b, c) = (positions[t[0] as usize], positions[t[1] as usize], positions[t[2] as usize]);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let f = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        for &k in t {
+            for d in 0..3 {
+                n[k as usize][d] += f[d];
+            }
+        }
+    }
+    n.into_iter().map(|p| {
+        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-30);
+        p.map(|x| x / l)
+    }).collect()
+}
+
+fn genital_lod(
+    pack: &gf_core::body::BodyPack,
+    controls: &gf_core::body::Controls,
+    level: usize,
+    body_positions: &[Point],
+    body_normals: &[Point],
+    by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>,
+    name: String,
+) -> Result<(Lod, Value), String> {
+    let g = pack.genital.as_ref().ok_or("the spec asks for genitals but the body has no helper-genital patch: re-import it (body.import)")?;
+    if pack.helpers.positions.is_empty() {
+        return Err("the body carries no helper vertices: re-import it (body.import, then body.targets)".into());
+    }
+    let control = pack.control_joint(controls);
+    let base = g.positions(&pack.helpers);
+    let l = gf_core::subdiv::subdivide(&g.quads, &g.quad_uvs, base.len(), level)?;
+    let mut positions: Vec<Point> = l.stencil.apply(&base).into_iter().map(&control).collect();
+    let (mut triangles, mut uvs) = gf_core::subdiv::triangles(&l.quads, &l.uvs);
+    let mut count: HashMap<(u32, u32), u32> = HashMap::new();
+    for q in &l.quads {
+        for k in 0..4 {
+            *count.entry((q[k].min(q[(k + 1) % 4]), q[k].max(q[(k + 1) % 4]))).or_default() += 1;
+        }
+    }
+    let mut rim: Vec<u32> = count.into_iter().filter(|e| e.1 == 1).flat_map(|e| [e.0.0, e.0.1]).collect();
+    rim.sort_unstable();
+    rim.dedup();
+    let nearest = |p: Point| -> usize {
+        let d = |q: &Point| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
+        (0..body_positions.len()).min_by(|&a, &b| d(&body_positions[a]).total_cmp(&d(&body_positions[b]))).unwrap_or(0)
+    };
+    let before = face_normals(&positions, &triangles);
+    let mut facing = 0.0;
+    let mut gap_mm: f64 = 0.0;
+    for &v in &rim {
+        let j = nearest(positions[v as usize]);
+        let (q, n) = (body_positions[j], body_normals[j]);
+        facing += before[v as usize][0] * n[0] + before[v as usize][1] * n[1] + before[v as usize][2] * n[2];
+        let p = positions[v as usize];
+        gap_mm = gap_mm.max(((p[0] - q[0]) * n[0] + (p[1] - q[1]) * n[1] + (p[2] - q[2]) * n[2]).abs() * 1000.0);
+        positions[v as usize] = [q[0] - GENITAL_SINK_M * n[0], q[1] - GENITAL_SINK_M * n[1], q[2] - GENITAL_SINK_M * n[2]];
+    }
+    let flipped = facing < 0.0;
+    if flipped {
+        for (t, u) in triangles.iter_mut().zip(uvs.iter_mut()) {
+            t.swap(1, 2);
+            u.swap(1, 2);
+        }
+    }
+    let normals = face_normals(&positions, &triangles);
+    let surface = gm::split_seams(&triangles, &uvs);
+    let skin = match by_obj {
+        Some(w) => {
+            let none: Vec<(usize, f64)> = Vec::new();
+            let infl: Vec<gf_core::body_rig::Influences> = surface
+                .source
+                .iter()
+                .map(|&v| {
+                    let parts: Vec<(f64, &[(usize, f64)])> = l.stencil.rows[v as usize]
+                        .iter()
+                        .map(|&(c, k)| (k, w.get(&pack.helpers.source[g.helpers[c as usize] as usize]).map(Vec::as_slice).unwrap_or(&none)))
+                        .collect();
+                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+                    if x.is_empty() { vec![(0, 1.0)] } else { x }
+                })
+                .collect();
+            Some(skin_data(&infl.iter().map(Vec::as_slice).collect::<Vec<_>>()))
+        }
+        None => None,
+    };
+    let report = json!({"node": name, "subdivision_level": level, "vertices": surface.source.len(), "triangles": triangles.len(), "rim_vertices": rim.len(),
+                        "rim_off_body_before_mm": gap_mm, "winding_flipped": flipped});
+    let lod = Lod {
+        name,
+        positions: surface.source.iter().map(|&v| gm::to_gltf(positions[v as usize])).collect(),
+        normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
+        uvs: surface.uvs.clone(),
+        indices: surface.indices,
+        morphs: Vec::new(),
+        skin,
+        material: None,
+    };
+    Ok((lod, report))
+}
+
+fn skin_data(influences: &[&[(usize, f64)]]) -> gltf::SkinData {
+    let mut joints = Vec::with_capacity(influences.len());
+    let mut weights = Vec::with_capacity(influences.len());
+    for inf in influences {
+        let (mut j, mut w) = ([0u8; 4], [0.0f32; 4]);
+        for (k, &(joint, weight)) in inf.iter().take(4).enumerate() {
+            j[k] = joint as u8;
+            w[k] = weight as f32;
+        }
+        joints.push(j);
+        weights.push(w);
+    }
+    gltf::SkinData { joints, weights, joints_1: Vec::new(), weights_1: Vec::new() }
+}
 
 fn body_options(opts: &Options) -> Result<Option<(gf_core::body::BodyPack, Value, gf_core::body::Controls)>, String> {
     let Some(dir) = opts.get("body") else {
@@ -675,6 +797,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut allowed: Vec<&[&str]> = vec![GLB_KEYS];
     allowed.extend_from_slice(placement_keys(version.name));
     allowed.push(BODY_KEYS);
+    allowed.push(BODY_RIG_KEYS);
     if opts.get("lids").map(String::as_str) == Some("auto") {
         allowed.push(LID_EXPORT_KEYS);
         if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
@@ -709,7 +832,20 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let catalog = store.load_catalog(&spec.base.catalog)?;
     let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
     let (manifest, base) = store.load_game(&game_ref)?;
-    let body = body_options(opts)?;
+    let mut world: Option<gf_core::body_shape::Similarity> = None;
+    let mut shaped_report = Value::Null;
+    let body = match body_options(opts)? {
+        Some(b) => Some(b),
+        None => match &spec.body {
+            Some(_) => {
+                let s = crate::body::spec_body(&store, &spec, source.as_ref(), pin.as_ref())?;
+                world = Some(s.similarity);
+                shaped_report = s.report;
+                Some((s.pack, s.manifest, s.controls))
+            }
+            None => None,
+        },
+    };
     let head_scale = body.as_ref().map(|(p, _, c)| (p.pivot(), c.head_scale)).filter(|(_, s)| *s != 1.0);
     let facing = opts.get("facing").map(String::as_str).unwrap_or("keep");
     if !matches!(facing, "keep" | "repair" | "repair-states") {
@@ -749,6 +885,44 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let body_rig = match (opts.get("body-rig"), opts.get("body-weights")) {
+        (None, None) => None,
+        (None, Some(_)) => return Err("--body-weights goes with --body-rig".into()),
+        (Some(r), w) => {
+            if rigged {
+                return Err("--body-rig cannot be combined with --rig yet: the head and face rig on the body's head bone is the next step".into());
+            }
+            let (pack, _, controls) = body.as_ref().filter(|_| world.is_some()).ok_or("--body-rig needs the spec's own body (a makehuman-mode body in the spec), not --body")?;
+            let (rig_json, weights_json, source) = crate::body::rig_source(r, w.map(String::as_str))?;
+            Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source)?)
+        }
+    };
+    let head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
+        (Some(br), Some((pack, _, _))) => {
+            let quads = store.load_pack_quads(&spec.base.pack)?;
+            let points = gf_core::cage::cage_points(&quads, dense.positions.len(), 256)?;
+            let none: Vec<(usize, f64)> = Vec::new();
+            let mut out = Vec::with_capacity(base.kept.len());
+            for &d in &base.kept {
+                let terms = points.get(d as usize).ok_or_else(|| format!("game vertex on dense vertex {d}, outside the dense base"))?.terms();
+                let mut parts: Vec<(f64, &[(usize, f64)])> = Vec::with_capacity(4);
+                for (c, k) in terms {
+                    let o = pack.cage_source.get(c as usize).ok_or_else(|| format!("cage corner {c} is outside the body's cage map"))?;
+                    parts.push((k, br.by_obj.get(o).map(Vec::as_slice).unwrap_or(&none)));
+                }
+                out.push(gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4));
+            }
+            Some(out)
+        }
+        _ => None,
+    };
+    let body_gltf_rig = body_rig.as_ref().map(|br| gltf::Rig {
+        names: br.rig.bones.iter().map(|b| b.name.clone()).collect(),
+        parents: br.rig.bones.iter().map(|b| b.parent.as_ref().and_then(|p| br.rig.bones.iter().position(|q| &q.name == p))).collect(),
+        global: br.heads.iter().map(|h| gm::to_gltf(*h)).collect(),
+        attachments: Vec::new(),
+        animations: Vec::new(),
+    });
     let correctives = match opts.get("rig-correctives").map(String::as_str) {
         None | Some("off") => false,
         Some("on") if face_version == 2 => true,
@@ -786,7 +960,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let screens: Vec<f64> = match opts.get("lod-screen") {
         _ if measured => Vec::new(),
         Some(text) => text.split(',').map(|s| s.trim().parse::<f64>().map_err(|_| format!("--lod-screen takes numbers, got {text}"))).collect::<Result<_, _>>()?,
-        None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or(0.02)).collect(),
+        None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or_else(|| 0.04 * 0.4f64.powi(i as i32 - 2))).collect(),
     };
     if !measured && (screens.len() != manifest.lods.len() || screens.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s >= 1.0)) {
         return Err(format!("--lod-screen needs {} numbers in (0, 1), one per LOD below the finest", manifest.lods.len()));
@@ -1147,6 +1321,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut body_lods = Vec::new();
     let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
     let mut body_meta = Value::Null;
+    let genitals = spec.body.as_ref().is_some_and(|b| b.canonical().genitals == "male");
+    let mut genital_rows: Vec<Value> = Vec::new();
     if let Some((pack, pack_manifest, controls)) = &body {
         crate::jobs::progress("body", 0, 1, "");
         use gf_core::body as gb;
@@ -1165,6 +1341,34 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             seam_normals.push(shared.into_iter().collect());
             let surface = gm::split_seams(&st.triangles, &st.uvs);
             let name = format!("Body_LOD{i}");
+            let body_skin = match (&body_rig, &head_influences) {
+                (Some(br), Some(hi)) => {
+                    let (_, kept) = pack.lod_mesh(body_lod)?;
+                    let copies: HashMap<u32, u32> = st.seam_copies.iter().copied().collect();
+                    let mut infl: Vec<gf_core::body_rig::Influences> = Vec::with_capacity(surface.source.len());
+                    for &v in &surface.source {
+                        let x = match (st.source[v as usize], copies.get(&v)) {
+                            (Some(u), _) => {
+                                let k = *kept.get(u as usize).ok_or_else(|| format!("{name}: body vertex {u} is outside its LOD"))?;
+                                let none: Vec<(usize, f64)> = Vec::new();
+                                let of_cage = |c: u32| br.by_obj.get(&pack.source[c as usize]).map(Vec::as_slice).unwrap_or(&none);
+                                match &pack.fine {
+                                    Some(f) => {
+                                        let parts: Vec<(f64, &[(usize, f64)])> = f.stencil.rows[k as usize].iter().map(|&(c, w)| (w, of_cage(c))).collect();
+                                        gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4)
+                                    }
+                                    None => gf_core::body_rig::strongest(of_cage(k), 4),
+                                }
+                            }
+                            (None, Some(&h)) => hi[level.map[h as usize] as usize].clone(),
+                            (None, None) => return Err(format!("{name}: body vertex {v} is neither the body's nor a seam copy")),
+                        };
+                        infl.push(if x.is_empty() { vec![(0, 1.0)] } else { x });
+                    }
+                    Some(skin_data(&infl.iter().map(Vec::as_slice).collect::<Vec<_>>()))
+                }
+                _ => None,
+            };
             rows.push(json!({"node": name, "body_lod": body_lod, "head_node": level.name, "vertices": surface.source.len(),
                              "triangles": st.triangles.len(), "seam_points": seam.len(), "gates": report}));
             body_lods.push(Lod {
@@ -1174,21 +1378,39 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 uvs: surface.uvs.clone(),
                 indices: surface.indices,
                 morphs: Vec::new(),
-                skin: rig_data.as_ref().map(|_| gltf::SkinData {
+                skin: body_skin.or_else(|| rig_data.as_ref().map(|_| gltf::SkinData {
                     joints: vec![[0, 1, 2, 0]; surface.source.len()],
                     weights: vec![[1.0, 0.0, 0.0, 0.0]; surface.source.len()],
                     joints_1: Vec::new(),
                     weights_1: Vec::new(),
-                }),
+                })),
                 material: None,
             });
+            if genitals && st.positions.len() >= GENITAL_MIN_BODY_VERTICES {
+                let level = pack.fine.as_ref().map_or(2, |f| f.level).saturating_sub(i);
+                let (lod, report) = genital_lod(pack, controls, level, &st.positions, &normals, body_rig.as_ref().map(|br| &br.by_obj), format!("Genitals_LOD{i}"))?;
+                genital_rows.push(report);
+                body_lods.push(lod);
+            }
         }
-        if !failures.is_empty() {
+        let report_only = match opts.get("body-gates").map(String::as_str).unwrap_or("refuse") {
+            "refuse" => false,
+            "report" => true,
+            other => return Err(format!("--body-gates must be refuse or report, got {other}")),
+        };
+        if !failures.is_empty() && !report_only {
             return Err(format!("body stitch gates failed: {}", failures.join("; ")));
         }
         body_meta = json!({"mode": pack.mode, "pack": opts.get("body"), "source": pack_manifest["source"], "controls": controls, "lods": rows,
                            "mesh": "one mesh node per body LOD (Body_LODn beside Head_LODn), its own material slot and the body's UV layout; the seam vertices are copies of the head's with the same position, normal and skin weights",
-                           "skin": if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+                           "skin": if let Some(br) = &body_rig { br.meta.clone() } else if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+        if !failures.is_empty() {
+            body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
+        }
+        if genitals {
+            body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
+                                           "method": "MakeHuman's helper-genital patch, shaped with the body's helpers (macros and the genital targets), refined by Catmull-Clark (one level less per LOD), its rim set on that LOD's body surface 2 mm inside along the body normal; one mesh per LOD (Genitals_LODn) on every LOD whose body keeps at least 2500 vertices (coarser LODs carry none), skinned like the body when a rig is asked"});
+        }
     }
     let mut lods = Vec::new();
     let mut lod_meta = Vec::new();
@@ -1271,7 +1493,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             gltf::SkinData { joints, weights, joints_1, weights_1 }
         });
-        let skin = if face_lod_skin.is_some() { face_lod_skin } else { rig_data.as_ref().map(|(_, weights)| {
+        let body_rig_skin = head_influences.as_ref().map(|hi| skin_data(&surface.source.iter().map(|&g| hi[level.map[g as usize] as usize].as_slice()).collect::<Vec<_>>()));
+        let skin = if face_lod_skin.is_some() { face_lod_skin } else if body_rig_skin.is_some() { body_rig_skin } else { rig_data.as_ref().map(|(_, weights)| {
             let w: Vec<[f32; 4]> = surface
                 .source
                 .iter()
@@ -1317,7 +1540,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 gf_core::body::scale_about(&mut vertices, pivot, s);
             }
             if eye_model.is_some() {
-                eye_parts.push(eye_part_mesh(eye, if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }, None, [0.0; 3], &vertices));
+                let (joint, origin) = match &body_rig {
+                    Some(br) => (Some(br.head_joint), br.heads[br.head_joint]),
+                    None => (None, [0.0; 3]),
+                };
+                eye_parts.push(eye_part_mesh(eye, if eye.centre[0] < 0.0 { "Eye_R" } else { "Eye_L" }, joint, origin, &vertices));
                 continue;
             }
             body_lods.push(Lod {
@@ -1327,7 +1554,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 uvs: vec![[0.0, 0.0]; vertices.len()],
                 indices: eye.triangles.iter().flatten().copied().collect(),
                 morphs: Vec::new(),
-                skin: None,
+                skin: body_rig.as_ref().map(|br| skin_data(&vec![[(br.head_joint, 1.0)].as_slice(); vertices.len()])),
                 material: None,
             });
         }
@@ -1349,7 +1576,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         None => None,
     };
     crate::jobs::progress("write", 0, 1, "glb");
-    let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &materials)?;
+    let root = world.map(|w| {
+        let t = w.translation_for_origin();
+        let q = w.quaternion();
+        gltf::Root { name: "Character".into(), translation: [t[0], t[2], -t[1]], rotation: [q[0], q[2], -q[1], q[3]], scale: w.scale }
+    });
+    let (bytes, report) = gltf::glb_with_root(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r).or(body_gltf_rig.as_ref()), &eye_parts, &materials, root.as_ref())?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -1396,6 +1628,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if !body_meta.is_null() {
         sidecar["body"] = body_meta.clone();
+        if !shaped_report.is_null() {
+            sidecar["body"]["shaped"] = shaped_report.clone();
+            sidecar["body"]["root"] = json!(root.as_ref().map(|r| json!({"node": r.name, "translation_gltf": r.translation, "rotation_gltf": r.rotation, "scale": r.scale})));
+        }
     }
     if let Some(skin) = &skin_report {
         sidecar["skin"] = skin.clone();

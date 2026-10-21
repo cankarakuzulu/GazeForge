@@ -792,6 +792,31 @@ impl Offscreen {
                 json!({"status": w.timeline.status, "rig_note": w.timeline.rig_note, "readout": w.timeline.readout, "t": w.timeline.t, "frames": w.timeline.clip.as_ref().map(|c| c.times.len()),
                        "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), "eye_pose": w.eye_pose.is_some()})
             }
+            "body" => {
+                w.body_sliders_load();
+                if let Some(e) = &w.body_ui.error {
+                    return Err(format!("body.sliders: {e}"));
+                }
+                let changed = match text("do").unwrap_or("summary") {
+                    "set" => match (text("slider"), text("compound"), num("value")) {
+                        (Some(id), None, Some(v)) => w.body_set_pair(id, v)?,
+                        (None, Some(c), Some(v)) => w.body_set_compound(c, v)?,
+                        _ => return Err("body set needs value and one of slider or compound".into()),
+                    },
+                    "reset" => w.body_reset(),
+                    "summary" => false,
+                    other => return Err(format!("body do is set, reset or summary, got {other}")),
+                };
+                if changed {
+                    w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
+                }
+                w.tick();
+                let body = w.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
+                let values: serde_json::Map<String, Value> =
+                    w.body_ui.pairs.iter().map(|p| (p.id.clone(), json!(crate::body_panel::pair_value(&body, p)))).filter(|(_, v)| v.as_f64() != Some(0.0)).collect();
+                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "values": values,
+                       "settle_error": w.settle_error})
+            }
             "stitch" => {
                 match text("do").unwrap_or("summary") {
                     "go" => {
@@ -809,6 +834,14 @@ impl Offscreen {
                         w.stitch_go();
                         w.wait(|w| w.stitch.job.is_none(), num("seconds").unwrap_or(300.0))?;
                     }
+                    "body" => {
+                        let b = match (text("pack"), text("targets")) {
+                            (Some(p), Some(t)) => Some(json!({"pack": p, "targets": t})),
+                            _ => None,
+                        };
+                        w.body_assign(b);
+                        w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
+                    }
                     "show" => {
                         w.stitch.show = step.get("on").and_then(Value::as_bool).unwrap_or(true);
                         w.stitch_draw();
@@ -820,7 +853,7 @@ impl Offscreen {
                         std::fs::write(&file, &bytes).map_err(|e| format!("{}: {e}", file.display()))?;
                     }
                     "summary" => {}
-                    other => return Err(format!("stitch do is go, show, dump or summary, got {other}")),
+                    other => return Err(format!("stitch do is go, body, show, dump or summary, got {other}")),
                 }
                 w.tick();
                 let m = w.stitch.last.as_ref();

@@ -21,7 +21,7 @@ pub struct Store {
     pub root: PathBuf,
 }
 
-pub const KINDS: [&str; 4] = ["packs", "catalogs", "game", "eyerigs"];
+pub const KINDS: [&str; 6] = ["packs", "catalogs", "game", "eyerigs", "bodies", "bodytargets"];
 const HELPER_GROUPS: [&str; 3] = ["helper-l-eye", "helper-r-eye", "body"];
 const REGISTRATION_CELL: f64 = 0.004;
 const REGISTRATION_LIMIT_MM: f64 = 2.0;
@@ -265,6 +265,20 @@ impl Store {
             source,
         };
         Ok((self.put_manifest("packs", &manifest)?, manifest))
+    }
+
+    pub fn load_pack_quads(&self, reference: &str) -> Result<Vec<[u32; 4]>, String> {
+        let manifest: PackManifest = self.get_manifest("packs", reference)?;
+        let blob = |name: &str| -> Result<Vec<u8>, String> {
+            self.get_ref(manifest.arrays.get(name).ok_or_else(|| format!("pack {reference} has no array {name}"))?)
+        };
+        let npy = |e: ndarray_npy::ReadNpyError| e.to_string();
+        let sizes: Array1<u32> = Array1::read_npy(Cursor::new(blob("face_sizes")?)).map_err(npy)?;
+        let corners: Array1<u32> = Array1::read_npy(Cursor::new(blob("corner_vertices")?)).map_err(npy)?;
+        if sizes.iter().any(|&s| s != 4) || corners.len() != sizes.len() * 4 {
+            return Err(format!("pack {reference} is not all quads"));
+        }
+        Ok(corners.iter().copied().collect::<Vec<u32>>().chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect())
     }
 
     pub fn load_pack(&self, reference: &str) -> Result<(PackManifest, Dense), String> {

@@ -19,6 +19,78 @@ pub struct Polys {
     pub faces: Vec<Vec<(u32, Option<u32>)>>,
 }
 
+pub fn read_obj_groups(path: &Path, prefix: &str) -> Result<BTreeMap<String, Vec<u32>>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    let mut count: i64 = 0;
+    for (n, line) in text.lines().enumerate() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => count += 1,
+            Some("g") | Some("o") => current = parts.next().filter(|g| g.starts_with(prefix)).map(str::to_string),
+            Some("f") => {
+                let Some(g) = &current else { continue };
+                let ids = out.entry(g.clone()).or_default();
+                for corner in parts {
+                    let v: i64 = corner.split('/').next().unwrap_or("").parse().map_err(|_| format!("{} line {}: bad f", path.display(), n + 1))?;
+                    let k = if v < 0 { count + v } else { v - 1 };
+                    if k < 0 || k >= count {
+                        return Err(format!("{} line {}: face index out of range", path.display(), n + 1));
+                    }
+                    ids.push(k as u32);
+                }
+            }
+            _ => {}
+        }
+    }
+    for ids in out.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    Ok(out)
+}
+
+pub fn helpers_of(groups: &BTreeMap<String, Vec<u32>>, extra: &[u32], positions: &[Point]) -> Result<b::Helpers, String> {
+    let mut source: Vec<u32> = groups.values().flatten().chain(extra).copied().collect();
+    source.sort_unstable();
+    source.dedup();
+    let at: HashMap<u32, u32> = source.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+    let positions = source.iter().map(|&v| positions.get(v as usize).copied().ok_or_else(|| format!("helper vertex {v} is outside the mesh"))).collect::<Result<Vec<_>, _>>()?;
+    let groups = groups.iter().map(|(g, ids)| (g.clone(), ids.iter().map(|v| at[v]).collect())).collect();
+    Ok(b::Helpers { source, positions, groups })
+}
+
+pub fn patch_of(obj: &Path, group: &str, helpers: &b::Helpers) -> Result<Option<b::Patch>, String> {
+    let polys = match read_obj(obj, Some(group)) {
+        Ok(p) => p,
+        Err(e) if e.contains("no faces") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if polys.faces.iter().any(|f| f.len() != 4) {
+        return Err(format!("{group}: the patch must be all quads"));
+    }
+    let at: HashMap<u32, u32> = helpers.source.iter().enumerate().map(|(i, &o)| (o, i as u32)).collect();
+    let mut local: HashMap<u32, u32> = HashMap::new();
+    let mut ids = Vec::new();
+    let mut quads = Vec::with_capacity(polys.faces.len());
+    let mut quad_uvs = Vec::with_capacity(polys.faces.len());
+    for face in &polys.faces {
+        let mut q = [0u32; 4];
+        for k in 0..4 {
+            let o = face[k].0;
+            let h = *at.get(&o).ok_or_else(|| format!("{group}: base.obj vertex {o} is not a helper of the body"))?;
+            q[k] = *local.entry(h).or_insert_with(|| {
+                ids.push(h);
+                (ids.len() - 1) as u32
+            });
+        }
+        quads.push(q);
+        quad_uvs.push([0, 1, 2, 3].map(|k| corner_uv(&polys, face[k].1)));
+    }
+    Ok(Some(b::Patch { helpers: ids, quads, quad_uvs }))
+}
+
 pub fn read_obj(path: &Path, group: Option<&str>) -> Result<Polys, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut out = Polys { positions: Vec::new(), uvs: Vec::new(), faces: Vec::new() };
@@ -151,6 +223,40 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     write_points(&dir.join("ring_targets.npy"), &pack.ring_targets)?;
     write_npy(dir.join("seam_loop.npy"), &Array1::from(pack.seam_loop.clone())).map_err(|e| e.to_string())?;
     write_points(&dir.join("seam_base.npy"), &pack.seam_base)?;
+    if !pack.source.is_empty() {
+        write_npy(dir.join("source.npy"), &Array1::from(pack.source.clone())).map_err(|e| e.to_string())?;
+    }
+    if !pack.cage_source.is_empty() {
+        write_npy(dir.join("cage_source.npy"), &Array1::from(pack.cage_source.clone())).map_err(|e| e.to_string())?;
+    }
+    if let Some(g) = &pack.genital {
+        let d = dir.join("genital");
+        std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+        write_npy(d.join("helpers.npy"), &Array1::from(g.helpers.clone())).map_err(|e| e.to_string())?;
+        let q = Array2::from_shape_vec((g.quads.len(), 4), g.quads.iter().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quads.npy"), &q).map_err(|e| e.to_string())?;
+        let u = Array2::from_shape_vec((g.quad_uvs.len(), 8), g.quad_uvs.iter().flatten().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quad_uvs.npy"), &u).map_err(|e| e.to_string())?;
+    }
+    if let Some(f) = &pack.fine {
+        let d = dir.join("fine");
+        std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+        let q = Array2::from_shape_vec((f.quads.len(), 4), f.quads.iter().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quads.npy"), &q).map_err(|e| e.to_string())?;
+        let u = Array2::from_shape_vec((f.quad_uvs.len(), 8), f.quad_uvs.iter().flatten().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quad_uvs.npy"), &u).map_err(|e| e.to_string())?;
+        for (i, lod) in f.lods.iter().enumerate() {
+            let dd = Decimated { kept: lod.kept.clone(), owner: Vec::new(), triangles: lod.triangles.clone(), triangle_uvs: lod.uvs.clone(), stats: Stats::default() };
+            crate::game_base::save(&d.join(format!("lod{i}")), &dd)?;
+        }
+    }
+    if !pack.helpers.source.is_empty() {
+        let h = dir.join("helpers");
+        std::fs::create_dir_all(&h).map_err(|e| format!("{}: {e}", h.display()))?;
+        write_npy(h.join("source.npy"), &Array1::from(pack.helpers.source.clone())).map_err(|e| e.to_string())?;
+        write_points(&h.join("positions.npy"), &pack.helpers.positions)?;
+        std::fs::write(h.join("groups.json"), serde_json::to_string(&pack.helpers.groups).map_err(|e| e.to_string())?).map_err(|e| format!("groups.json: {e}"))?;
+    }
     for (i, lod) in pack.lods.iter().enumerate() {
         let d = Decimated { kept: lod.kept.clone(), owner: Vec::new(), triangles: lod.triangles.clone(), triangle_uvs: lod.uvs.clone(), stats: Stats::default() };
         crate::game_base::save(&dir.join(format!("lod{}", i + 1)), &d)?;
@@ -159,6 +265,19 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     m["format"] = json!(FORMAT);
     m["mode"] = json!(pack.mode);
     m["per_span"] = json!(pack.per_span);
+    if let Some(g) = &pack.genital {
+        m["genital"] = json!({"dir": "genital", "group": "helper-genital", "quads": g.quads.len(), "vertices": g.helpers.len(),
+                              "meaning": "MakeHuman's helper-genital patch (male), on the body's helpers: shaped with them, exported as its own part when the spec asks for genitals"});
+    }
+    if let Some(f) = &pack.fine {
+        m["fine"] = json!({"level": f.level, "dir": "fine", "cage_quads": f.quads.len(), "vertices": f.stencil.rows.len(), "triangles": f.triangles.len(),
+                           "lods": f.lods.iter().enumerate().map(|(i, l)| json!({"name": format!("Body_LOD{i}"), "dir": format!("fine/lod{i}"), "vertices": l.kept.len(), "triangles": l.triangles.len()})).collect::<Vec<_>>(),
+                           "meaning": "the body is shaped on its cage (positions.npy, the targets' vertices) and refined by Catmull-Clark (B-spline boundary) to this level; every game LOD is a decimation of the refined body, the neck band kept fine"});
+    }
+    if !pack.helpers.source.is_empty() {
+        m["helpers"] = json!({"vertices": pack.helpers.source.len(), "groups": pack.helpers.groups.len(), "dir": "helpers",
+                              "meaning": "every base.obj vertex the body does not keep (the joint-* helper cubes, the head the dense head replaces, the other helper geometry), in the body's frame at its base shape: a MakeHuman rig's joints are cube means, vertices or vertex means of these, so they are shaped with the body"});
+    }
     m["lods"] = json!(std::iter::once(json!({"name": "Body_LOD0", "vertices": pack.mesh.positions.len(), "triangles": pack.mesh.triangles.len()}))
         .chain(pack.lods.iter().enumerate().map(|(i, l)| {
             let kept: HashSet<u32> = l.kept.iter().copied().collect();
@@ -174,6 +293,20 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     m["sha256"] = json!(files);
     std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?).map_err(|e| format!("manifest.json: {e}"))?;
     Ok(m)
+}
+
+fn load_helpers(dir: &Path) -> Result<b::Helpers, String> {
+    if !dir.join("source.npy").is_file() {
+        return Ok(b::Helpers::default());
+    }
+    let source = read_u32(&dir.join("source.npy"))?;
+    let positions = read_points(&dir.join("positions.npy"))?;
+    let text = std::fs::read_to_string(dir.join("groups.json")).map_err(|e| format!("helpers/groups.json: {e}"))?;
+    let groups: BTreeMap<String, Vec<u32>> = serde_json::from_str(&text).map_err(|e| format!("helpers/groups.json: {e}"))?;
+    if positions.len() != source.len() || groups.values().flatten().any(|&i| i as usize >= source.len()) {
+        return Err(format!("{}: the helper arrays disagree", dir.display()));
+    }
+    Ok(b::Helpers { source, positions, groups })
 }
 
 pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
@@ -214,7 +347,48 @@ pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
         seam_base: read_points(&dir.join("seam_base.npy"))?,
         per_span: m["per_span"].as_u64().unwrap_or(16) as usize,
         lods,
+        source: if dir.join("source.npy").is_file() { read_u32(&dir.join("source.npy"))? } else { Vec::new() },
+        helpers: load_helpers(&dir.join("helpers"))?,
+        cage_source: if dir.join("cage_source.npy").is_file() { read_u32(&dir.join("cage_source.npy"))? } else { Vec::new() },
+        fine: None,
+        genital: None,
     };
+    let mut pack = pack;
+    let gd = dir.join("genital");
+    if gd.join("quads.npy").is_file() {
+        let helpers = read_u32(&gd.join("helpers.npy"))?;
+        let q: Array2<u32> = read_npy(gd.join("quads.npy")).map_err(|e| format!("genital/quads.npy: {e}"))?;
+        let u: Array2<f32> = read_npy(gd.join("quad_uvs.npy")).map_err(|e| format!("genital/quad_uvs.npy: {e}"))?;
+        let quads: Vec<[u32; 4]> = q.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3]]).collect();
+        if helpers.iter().any(|&h| h as usize >= pack.helpers.positions.len()) || quads.iter().flatten().any(|&v| v as usize >= helpers.len()) {
+            return Err(format!("{}: the genital patch disagrees with the helpers", gd.display()));
+        }
+        let quad_uvs = u.rows().into_iter().map(|r| [[r[0], r[1]], [r[2], r[3]], [r[4], r[5]], [r[6], r[7]]]).collect();
+        pack.genital = Some(b::Patch { helpers, quads, quad_uvs });
+    }
+    if let Some(level) = m["fine"]["level"].as_u64().filter(|&l| l > 0) {
+        let d = dir.join("fine");
+        let q: Array2<u32> = read_npy(d.join("quads.npy")).map_err(|e| format!("fine/quads.npy: {e}"))?;
+        let u: Array2<f32> = read_npy(d.join("quad_uvs.npy")).map_err(|e| format!("fine/quad_uvs.npy: {e}"))?;
+        let quads = q.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3]]).collect();
+        let quad_uvs = u.rows().into_iter().map(|r| [[r[0], r[1]], [r[2], r[3]], [r[4], r[5]], [r[6], r[7]]]).collect();
+        let mut fine = b::Fine::new(quads, quad_uvs, pack.mesh.positions.len(), level as usize, &pack.ring, &pack.ring_targets)?;
+        for i in 0.. {
+            let dd = d.join(format!("lod{i}"));
+            if !dd.is_dir() {
+                break;
+            }
+            let l = crate::game_base::load(&dd)?;
+            if l.kept.iter().any(|&k| k as usize >= fine.stencil.rows.len()) {
+                return Err(format!("{}: a fine LOD keeps a vertex the refined body does not have", dd.display()));
+            }
+            fine.lods.push(BodyLod { kept: l.kept, triangles: l.triangles, uvs: l.triangle_uvs });
+        }
+        pack.fine = Some(fine);
+    }
+    if !pack.source.is_empty() && pack.source.len() != pack.mesh.positions.len() {
+        return Err(format!("{}: source.npy has {} entries for {} vertices", dir.display(), pack.source.len(), pack.mesh.positions.len()));
+    }
     if pack.ring_targets.len() != pack.ring.len() || pack.seam_base.len() != pack.seam_loop.len() {
         return Err(format!("{}: ring or seam arrays disagree", dir.display()));
     }
@@ -276,9 +450,10 @@ fn compact(positions: &[Point], triangles: &[[u32; 3]]) -> (Vec<Point>, Vec<[u32
 }
 
 pub const COLLAR_RINGS: usize = 2;
+pub const FINE_COLLAR_ROWS: usize = 2;
 const COLLAR_WEIGHT: f64 = 1e9;
 
-fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32]) -> Vec<BodyLod> {
+fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32], collar_rings: usize) -> Vec<BodyLod> {
     let wanted: Vec<usize> = lods.iter().copied().filter(|&t| t < mesh.positions.len()).collect();
     if wanted.is_empty() {
         return Vec::new();
@@ -295,7 +470,7 @@ fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32]) -> Vec<BodyLod> {
     for &v in ring {
         weights[v as usize] = COLLAR_WEIGHT;
     }
-    for _ in 0..COLLAR_RINGS {
+    for _ in 0..collar_rings {
         let mut next = Vec::new();
         for &v in &front {
             for &u in &neighbours[v as usize] {
@@ -323,6 +498,8 @@ pub struct MakeHumanInput<'a> {
     pub unit: f64,
     pub shaping: Vec<Shaping>,
     pub lods: &'a [usize],
+    pub subdivide: usize,
+    pub fine_lods: &'a [usize],
 }
 
 pub type Shaping = (String, f64, Vec<(u32, Point)>);
@@ -375,8 +552,39 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
     let local: HashMap<u32, u32> = used.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_obj.iter().enumerate().map(|(i, v)| RingVertex { vertex: local[v], param: i as f64 }).collect();
-    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
-    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods };
+    let quads: Vec<[u32; 4]> = polys.faces.iter().enumerate().filter(|(f, _)| !head_faces.contains(f)).map(|(_, face)| [0, 1, 2, 3].map(|k| local[&face[k].0])).collect();
+    let quad_uvs: Vec<[gf_geom::Uv; 4]> = polys.faces.iter().enumerate().filter(|(f, _)| !head_faces.contains(f)).map(|(_, face)| [0, 1, 2, 3].map(|k| corner_uv(&polys, face[k].1))).collect();
+    let (lods, fine) = if input.subdivide == 0 {
+        (make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>(), COLLAR_RINGS), None)
+    } else {
+        let mut fine = b::Fine::new(quads, quad_uvs, mesh.positions.len(), input.subdivide, &ring, &controls)?;
+        let all = fine.stencil.apply(&mesh.positions);
+        for (i, &target) in input.fine_lods.iter().enumerate() {
+            let level = if i == 0 { input.subdivide } else { input.subdivide.min(1) };
+            let (triangles, uvs) = if level == input.subdivide {
+                (fine.triangles.clone(), fine.uvs.clone())
+            } else {
+                let l = gf_core::subdiv::subdivide(&fine.quads, &fine.quad_uvs, mesh.positions.len(), level)?;
+                gf_core::subdiv::triangles(&l.quads, &l.uvs)
+            };
+            let n = triangles.iter().flatten().map(|&v| v as usize + 1).max().unwrap_or(0);
+            let source = Mesh { positions: all[..n].to_vec(), triangles, uvs };
+            let ring: Vec<u32> = fine.ring.iter().map(|r| r.vertex).filter(|&v| (v as usize) < n).collect();
+            let mut made = make_lods(&source, &[target], &ring, FINE_COLLAR_ROWS << level);
+            if made.len() != 1 {
+                return Err(format!("fine LOD{i}: {target} vertices is not below the {n} vertices of subdivision level {level}"));
+            }
+            fine.lods.push(made.remove(0));
+        }
+        (Vec::new(), Some(fine))
+    };
+    let kept: HashSet<u32> = used.iter().copied().collect();
+    let cut: Vec<u32> = (0..moved.len() as u32).filter(|v| !kept.contains(v)).collect();
+    let helpers = helpers_of(&read_obj_groups(input.obj, "joint-")?, &cut, &moved)?;
+    let genital = patch_of(input.obj, "helper-genital", &helpers)?;
+    let cage_count = embedding.vertices.len();
+    let cage_source: Vec<u32> = (0..cage_count as u32).map(|d| embedding.vertices.get(&d).copied().ok_or_else(|| format!("cage vertex {d} has no base.obj vertex: the cage is not the dense base's first {cage_count} vertices"))).collect::<Result<_, _>>()?;
+    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone(), helpers, cage_source, fine, genital };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({
@@ -507,11 +715,11 @@ pub fn import_mesh(input: &MeshInput, dense_dir: &Path, out: &Path) -> Result<Va
     let local: HashMap<u32, u32> = used.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_ids.iter().zip(&params).map(|(v, &p)| RingVertex { vertex: local[v], param: p }).collect();
-    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
+    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>(), COLLAR_RINGS);
     if ring.windows(2).any(|w| w[1].param < w[0].param) {
         return Err("the neck ring's parameters are not monotone".into());
     }
-    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods };
+    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new(), helpers: b::Helpers::default(), cage_source: Vec::new(), fine: None, genital: None };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({

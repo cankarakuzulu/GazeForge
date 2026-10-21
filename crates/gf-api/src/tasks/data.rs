@@ -143,6 +143,7 @@ fn create(opts: &Options) -> Result<Value, String> {
         residual: None,
         eyeballs: None,
         skin: None,
+        body: None,
     };
     if let Some(source) = &source {
         let (pack, _) = store.load_pack(&pack_ref)?;

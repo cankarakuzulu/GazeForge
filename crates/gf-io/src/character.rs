@@ -117,8 +117,8 @@ pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_
     let spec = spec.canonical();
     let mut pin = None;
     let mut loaded = Vec::new();
-    for (id, &w) in &spec.weights {
-        loaded.push((w, store.load_target(&resolved.catalog, id)?));
+    for (id, w) in spec.head_weights(|n| resolved.catalog.targets.contains_key(n)) {
+        loaded.push((w, store.load_target(&resolved.catalog, &id)?));
     }
     let terms: Vec<(f64, &gf_core::catalog::SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t)).collect();
     let mut layers: Vec<Vec<[f64; 3]>> = Vec::new();
@@ -136,10 +136,12 @@ pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_
         }
         let boundary = gf_geom::open_boundary(&resolved.dense.triangles);
         let frame = HeadOnly::new(&resolved.dense.positions, &boundary, settings.pin_top_m)?;
-        let (mut pinned, coef) = frame.strip_and_pin(&raw);
+        let follows_body = spec.body.is_some();
+        let (mut pinned, coef) = if follows_body { frame.strip(&raw) } else { frame.strip_and_pin(&raw) };
         frame.add_head_scale(m.head_scale, &mut pinned)?;
         report["macros"] = json!({"mode": mode.name(), "targets_changed": changes.len(), "similarity_stripped": coef,
-                                  "seam_top_m": frame.seam_top, "pin_top_m": frame.pin_top, "head_scale": m.head_scale});
+                                  "seam_top_m": frame.seam_top, "pin_top_m": frame.pin_top, "head_scale": m.head_scale,
+                                  "seam": if follows_body { "follows the body: the macros' shape is kept down to the seam (similarity stripped, not pinned)" } else { "pinned: the seam keeps the base's shape" }});
         layers.push(pinned);
         pin = Some((MacroTrace { changes, coef, head_scale: m.head_scale }, frame));
     }
@@ -202,7 +204,8 @@ pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>)
         }
         _ => None,
     };
-    let weights = spec.canonical().weights;
+    let catalog = store.load_catalog(&spec.base.catalog)?;
+    let weights = spec.head_weights(|n| catalog.targets.contains_key(n));
     let (placed, report) = eyerig::place_eyes(eb, rig.as_ref(), &weights, pin.map(|(t, h)| (t, h)), &eyes)?;
     Ok((placed, Some(report)))
 }

@@ -1,0 +1,25 @@
+{
+ "format": "gazeforge.bodycompounds/1",
+ "compounds": [
+  {"name": "leg_length", "plus": [["legs/upperlegs-height-incr", 1.0], ["legs/lowerlegs-height-incr", 1.0]], "minus": [["legs/upperlegs-height-decr", 1.0], ["legs/lowerlegs-height-decr", 1.0]]},
+  {"name": "arm_length", "plus": [["arms/measure-upperarm-length-incr", 1.0], ["arms/measure-lowerarm-length-incr", 1.0]], "minus": [["arms/measure-upperarm-length-decr", 1.0], ["arms/measure-lowerarm-length-decr", 1.0]]},
+  {"name": "shoulder_width", "plus": [["torso/measure-shoulder-dist-incr", 1.0]], "minus": [["torso/measure-shoulder-dist-decr", 1.0]]},
+  {"name": "torso_length", "plus": [["torso/measure-napetowaist-dist-incr", 1.0], ["torso/measure-waisttohip-dist-incr", 0.5]], "minus": [["torso/measure-napetowaist-dist-decr", 1.0], ["torso/measure-waisttohip-dist-decr", 0.5]]},
+  {"name": "hip_width", "plus": [["hip/hip-scale-horiz-incr", 1.0], ["torso/measure-hips-circ-incr", 0.5]], "minus": [["hip/hip-scale-horiz-decr", 1.0], ["torso/measure-hips-circ-decr", 0.5]]},
+  {"name": "waist", "plus": [["torso/measure-waist-circ-incr", 1.0]], "minus": [["torso/measure-waist-circ-decr", 1.0]]},
+  {"name": "chest", "plus": [["torso/measure-bust-circ-incr", 0.7], ["torso/measure-frontchest-dist-incr", 0.5]], "minus": [["torso/measure-bust-circ-decr", 0.7], ["torso/measure-frontchest-dist-decr", 0.5]]},
+  {"name": "athletic", "plus": [["torso/torso-vshape-incr", 0.6], ["torso/torso-muscle-pectoral-incr", 0.5], ["torso/torso-muscle-dorsi-incr", 0.5], ["arms/l-upperarm-muscle-incr", 0.5], ["arms/r-upperarm-muscle-incr", 0.5], ["arms/l-lowerarm-muscle-incr", 0.3], ["arms/r-lowerarm-muscle-incr", 0.3], ["legs/l-upperleg-muscle-incr", 0.4], ["legs/r-upperleg-muscle-incr", 0.4], ["legs/l-lowerleg-muscle-incr", 0.3], ["legs/r-lowerleg-muscle-incr", 0.3], ["stomach/stomach-tone-incr", 0.5]],
+   "minus": [["torso/torso-vshape-decr", 0.6], ["torso/torso-muscle-pectoral-decr", 0.5], ["torso/torso-muscle-dorsi-decr", 0.5], ["arms/l-upperarm-muscle-decr", 0.5], ["arms/r-upperarm-muscle-decr", 0.5], ["arms/l-lowerarm-muscle-decr", 0.3], ["arms/r-lowerarm-muscle-decr", 0.3], ["legs/l-upperleg-muscle-decr", 0.4], ["legs/r-upperleg-muscle-decr", 0.4], ["legs/l-lowerleg-muscle-decr", 0.3], ["legs/r-lowerleg-muscle-decr", 0.3], ["stomach/stomach-tone-decr", 0.5]]},
+  {"name": "curvy", "plus": [["hip/hip-scale-horiz-incr", 0.6], ["torso/measure-waist-circ-decr", 0.5], ["buttocks/buttocks-volume-incr", 0.6], ["torso/measure-bust-circ-incr", 0.3], ["legs/l-upperleg-fat-incr", 0.3], ["legs/r-upperleg-fat-incr", 0.3]],
+   "minus": [["hip/hip-scale-horiz-decr", 0.6], ["torso/measure-waist-circ-incr", 0.5], ["buttocks/buttocks-volume-decr", 0.6], ["torso/measure-bust-circ-decr", 0.3], ["legs/l-upperleg-fat-decr", 0.3], ["legs/r-upperleg-fat-decr", 0.3]]},
+  {"name": "breast_shape", "plus": [["breast/breast-volume-vert-up", 0.6], ["breast/breast-trans-up", 0.4], ["breast/breast-dist-decr", 0.4], ["breast/breast-point-decr", 0.5]],
+   "minus": [["breast/breast-volume-vert-down", 0.6], ["breast/breast-trans-down", 0.4], ["breast/breast-dist-incr", 0.4], ["breast/breast-point-incr", 0.5]]},
+  {"name": "belly", "plus": [["stomach/stomach-pregnant-incr", 0.5], ["stomach/stomach-tone-decr", 0.6]], "minus": [["stomach/stomach-pregnant-decr", 0.5], ["stomach/stomach-tone-incr", 0.6]]},
+  {"name": "hand_size", "plus": [["hands/l-hand-scale-incr", 1.0], ["hands/r-hand-scale-incr", 1.0]], "minus": [["hands/l-hand-scale-decr", 1.0], ["hands/r-hand-scale-decr", 1.0]]},
+  {"name": "foot_size", "plus": [["feet/l-foot-scale-incr", 1.0], ["feet/r-foot-scale-incr", 1.0]], "minus": [["feet/l-foot-scale-decr", 1.0], ["feet/r-foot-scale-decr", 1.0]]},
+  {"name": "arm_muscle", "plus": [["arms/l-upperarm-muscle-incr", 1.0], ["arms/r-upperarm-muscle-incr", 1.0], ["arms/l-lowerarm-muscle-incr", 0.7], ["arms/r-lowerarm-muscle-incr", 0.7], ["arms/l-upperarm-shoulder-muscle-incr", 0.6], ["arms/r-upperarm-shoulder-muscle-incr", 0.6]],
+   "minus": [["arms/l-upperarm-muscle-decr", 1.0], ["arms/r-upperarm-muscle-decr", 1.0], ["arms/l-lowerarm-muscle-decr", 0.7], ["arms/r-lowerarm-muscle-decr", 0.7], ["arms/l-upperarm-shoulder-muscle-decr", 0.6], ["arms/r-upperarm-shoulder-muscle-decr", 0.6]]},
+  {"name": "leg_muscle", "plus": [["legs/l-upperleg-muscle-incr", 1.0], ["legs/r-upperleg-muscle-incr", 1.0], ["legs/l-lowerleg-muscle-incr", 0.8], ["legs/r-lowerleg-muscle-incr", 0.8]],
+   "minus": [["legs/l-upperleg-muscle-decr", 1.0], ["legs/r-upperleg-muscle-decr", 1.0], ["legs/l-lowerleg-muscle-decr", 0.8], ["legs/r-lowerleg-muscle-decr", 0.8]]}
+ ]
+}

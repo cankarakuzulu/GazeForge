@@ -1,4 +1,7 @@
 pub mod body;
+pub mod body_rig;
+pub mod body_shape;
+pub mod cage;
 pub mod catalog;
 pub mod face_rig;
 pub mod face_rig2;
@@ -14,6 +17,7 @@ pub mod head;
 pub mod macros;
 pub mod measure;
 pub mod placement;
+pub mod rig_presets;
 pub mod rig;
 pub mod residual;
 pub mod skin_authored;
@@ -21,5 +25,6 @@ pub mod skin_layers;
 pub mod skin_map;
 pub mod skin_regions;
 pub mod skin_texture;
+pub mod subdiv;
 
 pub use gf_geom;

@@ -392,6 +392,43 @@ on export they are `--body-blend-mm`, `--body-neck-offset-mm`, `--head-scale`, `
 `--body-tangent`. `character.stitch` takes a spec file, a spec object or the designer's character; with `return_mesh` it
 also returns the head positions it stitched to (`head_scale` applied, finest-level order).
 
+**A body shaped by the macros.** A character spec can carry `body`: a body pack and its targets in the store, regional
+weights and the stitch controls. Put a makehuman-mode pack into the store with `body.import` (`store`); it records each
+vertex's `base.obj` index and the macro sliders it was shaped at. `body.targets` then imports MakeHuman targets onto it
+(the macro and breast families by default). With `body` in the spec, the macro sliders (gender, age, muscle, weight,
+height, proportions, ethnicity, cup size, firmness) shape the body live, in the designer, the studio and `export-glb`,
+with the same target weights as the head. The head follows the body: it is built in its canonical frame (the macros'
+similarity stripped, its neck shape kept down to the seam) and the whole character is mapped to the world by that
+similarity, as one root node (`Character`) in the glb - so height, age and gender change the head's size as MakeHuman
+does, and the figure stands on the floor. Measured: a body shaped live equals a fresh MakeHuman import at the same sliders
+to 0.0002 mm; heights match MakeHuman's own figure within 0.4 % (1.612 / 0.991 / 2.425 m against 1.613 / 0.993 /
+2.433 m for a base, a child and a tall muscular man); a spec without a body exports exactly as before.
+
+Beyond the macros, `body.weights` sets MakeHuman's regional targets (arms, legs, torso, hips, stomach, buttocks, pelvis,
+hands, feet: `body.sliders` lists them as decrease / increase pairs) and `body.compounds` sets compound parameters, each a
+fixed linear mix of regional targets from -1 to +1: leg and arm length, shoulder and hip width, torso length, waist,
+chest, athletic, curvy, belly, hand and foot size, arm and leg muscle. A target the head's catalog also has drives both
+sides, whichever slider sets it, so the neck stays matched.
+
+**A rig on the body.** `export-glb --body-rig game_engine` takes one of MakeHuman's standard rigs with its weights,
+bundled in the binary (CC0, see THIRD_PARTY.md): `game_engine`, `game_engine_with_breast`, `default`, `mixamo`, `mixamo_unity`,
+`cmu_mb` or `openpose`; a rig file of the same format works too, with its weights file as `--body-weights`. It skins
+the whole character: the joints are evaluated on this body as MakeHuman places them (the mean of a helper cube, a vertex or a
+mean of vertices of the base mesh), so they follow the macros, regional sliders and compounds; the body takes
+MakeHuman's weights per vertex, the head the bilinear mix of the weights of the head cage's corners around each vertex,
+and the seam vertices of both meshes share theirs, so the neck stays closed in any pose; the eyes ride the head bone.
+`body.joints` returns the joints alone. Bodies need their helper vertices: import them (`body.import`, `body.targets`)
+with this version. Measured: every joint equals an independent evaluation of MakeHuman's rule to 0.001 mm on all
+eight standard rigs; in Godot 4.7 the rest pose reproduces to 0.07 mm and the seam stays shut (gap 0) with the spine,
+neck and head rotated. Not yet: the face rig together with a body rig, head-region joints that follow the head's own
+sliders and sculpt, humanoid retargeting presets.
+
+**Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
+(`Genitals_LODn`), shaped by the macros and the genital sliders (penis length and girth, testicle size), its rim set
+just inside the body surface, and skinned with the body when a rig is asked. There is no female option yet: MakeHuman
+ships no female genital geometry (only a texture mask of the region), so one would have to be authored; the field takes
+a kind, so a contributed asset can be added as `"female"` without changing existing specs.
+
 In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
 layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
 of both meshes share position, normal (the two sides' average) and skin weights (1.0 on the neck joint), so they stay

@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
 use super::data::{IMPORT_CATALOG_KEYS, IMPORT_EYERIG_KEYS, IMPORT_GAME_KEYS, IMPORT_PACK_KEYS, LABELS_KEYS, WEIGHTS_KEYS};
-use super::mesh::{BODY_KEYS, GAME_KEYS, GLB_KEYS, LID_EXPORT_KEYS, LIDS_GATE_KEYS, PATH_KEYS, SHELL_KEYS};
+use super::mesh::{BODY_KEYS, BODY_RIG_KEYS, GAME_KEYS, GLB_KEYS, LID_EXPORT_KEYS, LIDS_GATE_KEYS, PATH_KEYS, SHELL_KEYS};
 use super::topology::{IMPROVE_KEYS, INSPECT_KEYS};
 use super::{BUILD_KEYS, COLLIDE_KEYS, EXPORT_KEYS, F2_KEYS, F3_KEYS, F4_KEYS, F5_KEYS, F6_KEYS, FIT_KEYS, OPTIMAL_KEYS, Options, data, mesh, rig, topology};
 use crate::commands::{obj, shape};
@@ -285,7 +285,7 @@ pub fn export_obj(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 }
 
 pub fn glb_input() -> Value {
-    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS];
+    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS, BODY_RIG_KEYS];
     sets.extend_from_slice(PLACEMENT_KEYS);
     schema(&sets, &["store", "spec", "out"])
 }

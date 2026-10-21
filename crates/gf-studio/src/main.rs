@@ -1,4 +1,5 @@
 mod app;
+mod body_panel;
 mod cube;
 mod face_rig;
 mod godot;

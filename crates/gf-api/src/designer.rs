@@ -169,11 +169,11 @@ impl Loaded {
         self.prepared.get_or_init(|| Prepared::new(self.dense.positions.len(), &self.dense.triangles, &self.dense.triangle_uvs, &self.game, f3_defaults().uv_ring))
     }
 
-    fn macro_layer(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64) -> Result<Vec<[f64; 3]>, ApiError> {
-        Ok(self.macro_layer_traced(source, mode, sliders, head_scale)?.0)
+    fn macro_layer(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64, follows_body: bool) -> Result<Vec<[f64; 3]>, ApiError> {
+        Ok(self.macro_layer_traced(source, mode, sliders, head_scale, follows_body)?.0)
     }
 
-    fn macro_layer_traced(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64) -> Result<(Vec<[f64; 3]>, MacroTrace), ApiError> {
+    fn macro_layer_traced(&self, source: &MacroSource, mode: &str, sliders: &BTreeMap<String, f64>, head_scale: f64, follows_body: bool) -> Result<(Vec<[f64; 3]>, MacroTrace), ApiError> {
         let base = self.pack.macro_base.as_ref().ok_or_else(|| ApiError::invalid("the pack has no macro_base"))?;
         let mode = Mode::parse(mode).map_err(ApiError::invalid)?;
         let on_head = |n: &str| self.catalog.targets.contains_key(n);
@@ -183,7 +183,7 @@ impl Loaded {
             self.target(id)?.add_scaled(*dw, &mut raw);
         }
         let frame = self.frame()?;
-        let (mut pinned, coef) = frame.strip_and_pin(&raw);
+        let (mut pinned, coef) = if follows_body { frame.strip(&raw) } else { frame.strip_and_pin(&raw) };
         frame.add_head_scale(head_scale, &mut pinned).map_err(ApiError::invalid)?;
         Ok((pinned, MacroTrace { changes, coef, head_scale }))
     }
@@ -213,15 +213,16 @@ impl Loaded {
             Some(t) => Some((t, self.frame()?)),
             None => None,
         };
-        let (placed, report) = er::place_eyes(eb, rig.as_deref(), &spec.weights, pin, &eyes).map_err(ApiError::invalid)?;
+        let weights = spec.head_weights(|n| self.catalog.targets.contains_key(n));
+        let (placed, report) = er::place_eyes(eb, rig.as_deref(), &weights, pin, &eyes).map_err(ApiError::invalid)?;
         Ok((placed, Some(report.iter().map(|p| serde_json::to_value(p).unwrap_or(Value::Null)).collect())))
     }
 
     fn evaluate_traced(&self, spec: &Spec, source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Option<MacroTrace>), ApiError> {
         let spec = spec.canonical();
         let mut loaded = Vec::new();
-        for (id, &w) in &spec.weights {
-            loaded.push((w, self.target(id)?));
+        for (id, w) in spec.head_weights(|n| self.catalog.targets.contains_key(n)) {
+            loaded.push((w, self.target(&id)?));
         }
         let terms: Vec<(f64, &SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t.as_ref())).collect();
         let mut layers: Vec<Vec<[f64; 3]>> = Vec::new();
@@ -231,7 +232,7 @@ impl Loaded {
             if source.reference != m.definition {
                 return Err(ApiError::invalid(format!("macros.definition is {}, the file given hashes to {}", m.definition, source.reference)));
             }
-            let (layer, t) = self.macro_layer_traced(source, &m.mode, &m.sliders, m.head_scale)?;
+            let (layer, t) = self.macro_layer_traced(source, &m.mode, &m.sliders, m.head_scale, spec.body.is_some())?;
             layers.push(layer);
             trace = Some(t);
         }
@@ -340,6 +341,10 @@ fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Resu
         Some(e) => Some(serde_json::from_value::<gf_core::skin_layers::SkinSpec>(e.clone()).map_err(|e| ApiError::invalid(format!("skin: {e}")))?),
         None => None,
     };
+    let body = match input.get("body").filter(|e| !e.is_null()) {
+        Some(e) => Some(serde_json::from_value::<gf_core::body_shape::BodySpec>(e.clone()).map_err(|e| ApiError::invalid(format!("body: {e}")))?),
+        None => None,
+    };
     let spec = Spec {
         format: FORMAT.into(),
         name: input.get("name").and_then(Value::as_str).unwrap_or("character").to_string(),
@@ -354,6 +359,7 @@ fn spec_of(input: &Value, loaded: &Loaded, source: Option<&MacroSource>) -> Resu
         residual,
         eyeballs,
         skin,
+        body,
     }
     .canonical();
     let mut problems = spec.problems();
@@ -405,6 +411,7 @@ fn character_props() -> Value {
            "macro": {"type": "string", "minLength": 1, "description": "path of the macro definition file, needed when macros are set"},
            "residual": {"type": ["object", "null"], "description": "a spec's residual reference, as designer.sliders returns it in start"},
            "skin": {"type": ["object", "null"], "description": "a spec's skin (look, landmarks, size, layers), as designer.sliders returns it in start; kept unchanged so a save does not drop it"},
+           "body": {"type": ["object", "null"], "description": "a spec's body (pack, targets, regional weights, stitch controls), as designer.sliders returns it in start"},
            "eyeballs": {"type": ["object", "null"], "description": "{follow: makehuman-helper/1|none, rig: the catalog's eye rig (designer.sliders gives it as eyerig), left/right: {offset_mm: [out, up, forward], rotation_deg: [pitch up, yaw out, roll], scale}}; with an eyes file, the eyeballs follow the sockets and take the adjustments, and the eyelid clearance uses the moved eyes"}})
 }
 
@@ -671,8 +678,8 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     };
     let new_eyeballs = eyerig.as_ref().map(|r| EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(r.clone()), model: None, left: Default::default(), right: Default::default() });
     let start = match &spec {
-        Some(s) => json!({"name": s.name, "placement": s.base.placement, "weights": s.weights, "macros": s.macros, "residual": s.residual, "eyeballs": s.eyeballs, "skin": s.skin}),
-        None => json!({"name": "character", "placement": gp::DEFAULT.to_string(), "weights": {}, "macros": null, "residual": null, "eyeballs": new_eyeballs, "skin": null}),
+        Some(s) => json!({"name": s.name, "placement": s.base.placement, "weights": s.weights, "macros": s.macros, "residual": s.residual, "eyeballs": s.eyeballs, "skin": s.skin, "body": s.body}),
+        None => json!({"name": "character", "placement": gp::DEFAULT.to_string(), "weights": {}, "macros": null, "residual": null, "eyeballs": new_eyeballs, "skin": null, "body": null}),
     };
     Ok(json!({"pack": pack, "catalog": catalog, "game": game, "head_categories": HEAD_CATEGORIES, "categories": categories,
               "targets": targets, "eyerig": eyerig, "eyerig_problem": eyerig_problem,
@@ -814,6 +821,7 @@ struct MacroAt {
     macros: MacroSpec,
     slider: String,
     value: f64,
+    follows_body: bool,
 }
 
 impl MacroAt {
@@ -824,14 +832,14 @@ impl MacroAt {
         let macros = spec.macros.clone().expect("set above");
         let slider = text(input, "slider").to_string();
         let value = *macros.sliders.get(&slider).ok_or_else(|| ApiError::invalid(format!("{slider} is not a macro slider of the pack")))?;
-        Ok(MacroAt { loaded, source, macros, slider, value })
+        Ok(MacroAt { loaded, source, macros, slider, value, follows_body: spec.body.is_some() })
     }
 
     fn layer(&self, v: f64) -> Result<Vec<[f64; 3]>, ApiError> {
         let m = &self.macros;
         let mut sliders = m.sliders.clone();
         sliders.insert(self.slider.clone(), v);
-        let layer = self.loaded.macro_layer(&self.source, &m.mode, &sliders, m.head_scale)?;
+        let layer = self.loaded.macro_layer(&self.source, &m.mode, &sliders, m.head_scale, self.follows_body)?;
         Ok(self.loaded.game.kept.iter().map(|&d| layer[d as usize]).collect())
     }
 }
