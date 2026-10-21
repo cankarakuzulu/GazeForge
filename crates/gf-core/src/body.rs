@@ -881,11 +881,12 @@ pub struct Limits {
     pub penetration_m: f64,
     pub reach_m: f64,
     pub near_m: f64,
+    pub relative_dihedral: bool,
 }
 
 impl Limits {
     pub fn exact() -> Limits {
-        Limits { gap_m: 1e-5, dihedral_deg: 40.0, fold_deg: 120.0, penetration_m: 0.0005, reach_m: 0.08, near_m: 0.025 }
+        Limits { gap_m: 1e-5, dihedral_deg: 40.0, fold_deg: 120.0, penetration_m: 0.0005, reach_m: 0.08, near_m: 0.025, relative_dihedral: false }
     }
 
     pub fn any_body() -> Limits {
@@ -1088,9 +1089,6 @@ pub fn gates(head_positions: &[Point], head_triangles: &[[u32; 3]], seam: &[Seam
     let body_vn = vertex_normals(&st.positions, &st.triangles, st.positions.len());
     let mut one_sided: Vec<f64> = st.seam_copies.iter().map(|&(s, hv)| angle_deg(head_vn[hv as usize], body_vn[s as usize])).collect();
     let dihedral_max = dihedral.iter().copied().fold(0.0f64, f64::max);
-    if dihedral_max > limits.dihedral_deg || dihedral.len() != seam.len() {
-        failed.push(format!("normal continuity: max seam dihedral {dihedral_max:.1} deg (limit {}), {} of {} seam edges measured", limits.dihedral_deg, dihedral.len(), seam.len()));
-    }
     let in_band: Vec<bool> = st.triangles.iter().zip(&st.fan).map(|(t, f)| *f || t.iter().any(|&v| st.band[v as usize] > 0.0)).collect();
     let mut flips = 0usize;
     let mut degenerate = 0usize;
@@ -1144,6 +1142,12 @@ pub fn gates(head_positions: &[Point], head_triangles: &[[u32; 3]], seam: &[Seam
         .filter(|l| l.len() == 2)
         .map(|l| angle_deg(face_normal(head_positions, head_triangles[l[0]]), face_normal(head_positions, head_triangles[l[1]])))
         .collect();
+    let own_max = band_interior.iter().chain(&head_row).copied().fold(0.0f64, f64::max);
+    let dihedral_limit = if limits.relative_dihedral { limits.dihedral_deg.max(own_max) } else { limits.dihedral_deg };
+    if dihedral_max > dihedral_limit || dihedral.len() != seam.len() {
+        let rule = if limits.relative_dihedral { format!("limit {dihedral_limit:.1}: {} or the sharper side's own {own_max:.1}", limits.dihedral_deg) } else { format!("limit {dihedral_limit}") };
+        failed.push(format!("normal continuity: max seam dihedral {dihedral_max:.1} deg ({rule}), {} of {} seam edges measured", dihedral.len(), seam.len()));
+    }
     let worst_seam = dihedral.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(m, d)| json!({"param": seam[m].param, "deg": d, "position": seam[m].position}));
     let folds = band_edges
         .values()
@@ -1205,7 +1209,7 @@ pub fn gates(head_positions: &[Point], head_triangles: &[[u32; 3]], seam: &[Seam
         "watertight": {"seam_points": seam.len(), "seam_copies": st.seam_copies.len(), "max_gap_m": gap},
         "topology": {"open_seam_edges": open_seam, "nonmanifold_seam_edges": nonmanifold, "orientation_conflicts": orientation,
                      "seam_edges_not_shared_by_two": seam_edges_unmatched, "body_open_edges_elsewhere": body_open_elsewhere},
-        "normals": {"seam_dihedral_deg": stats(&mut dihedral), "one_sided_vertex_normal_deg": stats(&mut one_sided), "worst_seam_edge": worst_seam,
+        "normals": {"seam_dihedral_limit_deg": dihedral_limit, "seam_dihedral_relative": limits.relative_dihedral, "seam_dihedral_deg": stats(&mut dihedral), "one_sided_vertex_normal_deg": stats(&mut one_sided), "worst_seam_edge": worst_seam,
                     "baseline_body_band_dihedral_deg": stats(&mut band_interior), "baseline_head_seam_row_dihedral_deg": stats(&mut head_row),
                     "meaning": "angle between the face normals of the head and body triangles on each seam edge; the baselines are the same angle between neighbouring triangles inside the body band and inside the head's seam row"},
         "band": {"triangles": in_band.iter().filter(|b| **b).count(), "flips": flips, "folded_edges": folds, "degenerate": degenerate, "min_angle_deg": min_angle},
@@ -1667,6 +1671,12 @@ mod tests {
         let (report, failed) = gates(&head_p, &head_t, &seam, &st, &Limits::exact());
         assert!(failed.is_empty(), "{report}");
         assert_eq!(report["topology"]["open_seam_edges"], 0);
+        let strict = Limits { dihedral_deg: -1.0, ..Limits::exact() };
+        let (_, failed) = gates(&head_p, &head_t, &seam, &st, &strict);
+        assert!(failed.iter().any(|f| f.starts_with("normal continuity")), "{failed:?}");
+        let (report, failed) = gates(&head_p, &head_t, &seam, &st, &Limits { relative_dihedral: true, ..strict });
+        assert!(failed.is_empty(), "{failed:?} {}", report["normals"]);
+        assert!(report["normals"]["seam_dihedral_limit_deg"].as_f64().unwrap() > 0.0);
         for kind in ["gap", "crack", "flip"] {
             let mut planted = stitch(&body, &ring, n as f64, &seam, &field, 0, 1.0).unwrap();
             plant(&mut planted, &Plant::parse(kind).unwrap(), [0.0, 0.0, 1.0]).unwrap();
