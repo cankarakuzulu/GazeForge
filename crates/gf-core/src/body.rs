@@ -1331,6 +1331,78 @@ impl Helpers {
     }
 }
 
+pub struct Fine {
+    pub level: usize,
+    pub quads: Vec<[u32; 4]>,
+    pub quad_uvs: Vec<[Uv; 4]>,
+    pub stencil: crate::subdiv::Stencil,
+    pub triangles: Vec<[u32; 3]>,
+    pub uvs: Vec<[Uv; 3]>,
+    pub ring: Vec<RingVertex>,
+    pub ring_targets: Vec<Point>,
+    pub lods: Vec<BodyLod>,
+}
+
+impl Fine {
+    pub fn new(quads: Vec<[u32; 4]>, quad_uvs: Vec<[Uv; 4]>, vertices: usize, level: usize, ring: &[RingVertex], ring_targets: &[Point]) -> Result<Fine, String> {
+        if level == 0 {
+            return Err("a fine body needs a subdivision level of at least 1".into());
+        }
+        let l = crate::subdiv::subdivide(&quads, &quad_uvs, vertices, level)?;
+        let (triangles, uvs) = crate::subdiv::triangles(&l.quads, &l.uvs);
+        let mut count: HashMap<(u32, u32), u32> = HashMap::new();
+        for q in &l.quads {
+            for k in 0..4 {
+                *count.entry((q[k].min(q[(k + 1) % 4]), q[k].max(q[(k + 1) % 4]))).or_default() += 1;
+            }
+        }
+        let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+        for ((a, b), n) in count {
+            if n == 1 {
+                next.entry(a).or_default().push(b);
+                next.entry(b).or_default().push(a);
+            }
+        }
+        let corner_target: HashMap<u32, Point> = ring.iter().zip(ring_targets).map(|(r, t)| (r.vertex, *t)).collect();
+        let step = 1usize << level;
+        let mut fine_ring = Vec::with_capacity(ring.len() * step);
+        let mut fine_targets = Vec::with_capacity(ring.len() * step);
+        for (i, r) in ring.iter().enumerate() {
+            let to = ring[(i + 1) % ring.len()].vertex;
+            let walk = |first: u32| -> Option<Vec<u32>> {
+                let mut path = vec![r.vertex, first];
+                while path.len() < step {
+                    let (prev, at) = (path[path.len() - 2], path[path.len() - 1]);
+                    let onward: Vec<u32> = next.get(&at)?.iter().copied().filter(|&v| v != prev).collect();
+                    match onward.as_slice() {
+                        [v] if !corner_target.contains_key(v) => path.push(*v),
+                        _ => return None,
+                    }
+                }
+                next.get(path.last()?).filter(|n| n.contains(&to)).map(|_| path)
+            };
+            let starts: Vec<u32> = next.get(&r.vertex).into_iter().flatten().copied().filter(|v| !corner_target.contains_key(v)).collect();
+            let found: Vec<Vec<u32>> = starts.into_iter().filter_map(walk).collect();
+            let path = match found.as_slice() {
+                [p] => p.clone(),
+                _ => return Err(format!("the fine boundary from ring vertex {} reaches ring vertex {to} in {step} steps along {} paths, expected one", r.vertex, found.len())),
+            };
+            for (k, &v) in path.iter().enumerate() {
+                fine_ring.push(RingVertex { vertex: v, param: r.param + k as f64 / step as f64 });
+                let mut t = [0.0; 3];
+                for &(c, w) in &l.stencil.rows[v as usize] {
+                    let p = corner_target.get(&c).ok_or_else(|| format!("fine ring vertex {v} depends on cage vertex {c}, which is not on the ring"))?;
+                    for d in 0..3 {
+                        t[d] += w * p[d];
+                    }
+                }
+                fine_targets.push(t);
+            }
+        }
+        Ok(Fine { level, quads, quad_uvs, stencil: l.stencil, triangles, uvs, ring: fine_ring, ring_targets: fine_targets, lods: Vec::new() })
+    }
+}
+
 pub struct BodyPack {
     pub mode: String,
     pub mesh: Mesh,
@@ -1343,6 +1415,7 @@ pub struct BodyPack {
     pub source: Vec<u32>,
     pub helpers: Helpers,
     pub cage_source: Vec<u32>,
+    pub fine: Option<Fine>,
 }
 
 impl BodyPack {
@@ -1373,10 +1446,23 @@ impl BodyPack {
     }
 
     pub fn lod_count(&self) -> usize {
-        1 + self.lods.len()
+        match &self.fine {
+            Some(f) => f.lods.len(),
+            None => 1 + self.lods.len(),
+        }
+    }
+
+    pub fn fine_positions(&self) -> Option<Vec<Point>> {
+        self.fine.as_ref().map(|f| f.stencil.apply(&self.mesh.positions))
     }
 
     pub fn lod_mesh(&self, lod: usize) -> Result<(Mesh, Vec<u32>), String> {
+        if let Some(f) = &self.fine {
+            let l = f.lods.get(lod).ok_or_else(|| format!("the body has {} LODs, LOD{lod} asked", f.lods.len()))?;
+            let all = f.stencil.apply(&self.mesh.positions);
+            let positions = l.kept.iter().map(|&k| all[k as usize]).collect();
+            return Ok((Mesh { positions, triangles: l.triangles.clone(), uvs: l.uvs.clone() }, l.kept.clone()));
+        }
         if lod == 0 {
             return Ok((self.mesh.clone(), (0..self.mesh.positions.len() as u32).collect()));
         }
@@ -1473,15 +1559,21 @@ pub fn stitch_lod(pack: &BodyPack, lod: usize, seam: &[SeamPoint], controls: &Co
     let period = pack.period();
     let (mut mesh, kept) = pack.lod_mesh(lod)?;
     let local: HashMap<u32, u32> = kept.iter().enumerate().map(|(i, &k)| (k, i as u32)).collect();
-    let ring0: Vec<Point> = pack.ring.iter().map(|r| pack.mesh.positions[r.vertex as usize]).collect();
     let control = pack.control(controls);
-    let ring_points: Vec<Point> = ring0.iter().map(|p| control(*p)).collect();
-    let targets: Vec<Point> = pack.ring.iter().zip(&pack.ring_targets).map(|(r, t)| add(*t, seam_delta(seam, r.param, period))).collect();
+    let (ring_all, ring_targets_all, ring_positions) = match &pack.fine {
+        Some(f) => {
+            let all = f.stencil.apply(&pack.mesh.positions);
+            (&f.ring, &f.ring_targets, f.ring.iter().map(|r| all[r.vertex as usize]).collect::<Vec<Point>>())
+        }
+        None => (&pack.ring, &pack.ring_targets, pack.ring.iter().map(|r| pack.mesh.positions[r.vertex as usize]).collect()),
+    };
+    let ring_points: Vec<Point> = ring_positions.iter().map(|p| control(*p)).collect();
+    let targets: Vec<Point> = ring_all.iter().zip(ring_targets_all).map(|(r, t)| add(*t, seam_delta(seam, r.param, period))).collect();
     let field = ring_field(&ring_points, &targets, controls.blend_m);
     for p in mesh.positions.iter_mut() {
         *p = control(*p);
     }
-    let ring: Vec<RingVertex> = pack.ring.iter().filter_map(|r| local.get(&r.vertex).map(|&v| RingVertex { vertex: v, param: r.param })).collect();
+    let ring: Vec<RingVertex> = ring_all.iter().filter_map(|r| local.get(&r.vertex).map(|&v| RingVertex { vertex: v, param: r.param })).collect();
     stitch(&mesh, &ring, period, seam, &field, controls.smooth, controls.tangent)
 }
 

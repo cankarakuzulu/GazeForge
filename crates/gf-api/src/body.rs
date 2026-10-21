@@ -24,18 +24,25 @@ fn number(input: &Value, key: &str, default: f64) -> Result<f64, ApiError> {
     }
 }
 
-fn lods(input: &Value) -> Result<Vec<usize>, ApiError> {
-    match input.get("lods") {
-        None | Some(Value::Null) => Ok(DEFAULT_LODS.to_vec()),
+pub const DEFAULT_FINE_LODS: [usize; 3] = [24000, 8000, 3000];
+pub const DEFAULT_SUBDIVIDE: u64 = 2;
+
+fn lods(input: &Value, key: &str, default: &[usize]) -> Result<Vec<usize>, ApiError> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(default.to_vec()),
         Some(Value::Array(a)) => {
-            let v: Vec<usize> = a.iter().map(|x| x.as_u64().map(|n| n as usize)).collect::<Option<_>>().ok_or_else(|| ApiError::invalid("lods must be vertex counts"))?;
+            let v: Vec<usize> = a.iter().map(|x| x.as_u64().map(|n| n as usize)).collect::<Option<_>>().ok_or_else(|| ApiError::invalid(format!("{key} must be vertex counts")))?;
             if v.windows(2).any(|w| w[1] >= w[0]) || v.iter().any(|&n| n < 100) {
-                return Err(ApiError::invalid("lods must be decreasing vertex counts of at least 100"));
+                return Err(ApiError::invalid(format!("{key} must be decreasing vertex counts of at least 100")));
             }
             Ok(v)
         }
-        _ => Err(ApiError::invalid("lods must be an array")),
+        _ => Err(ApiError::invalid(format!("{key} must be an array"))),
     }
+}
+
+fn lods_fine(input: &Value) -> Result<Vec<usize>, ApiError> {
+    lods(input, "fine_lods", &DEFAULT_FINE_LODS)
 }
 
 pub fn import_input() -> Value {
@@ -50,7 +57,9 @@ pub fn import_input() -> Value {
             "up": {"enum": ["y", "z"], "description": "the OBJ's up axis (default y)"},
             "cut_z_m": {"type": "number", "description": "mesh mode: remove every face above this height (metres, z up, after unit and axis) and join at the cut"},
             "align": {"enum": ["translate", "similarity", "none"], "description": "mesh mode: translate (default) moves the body's neck ring centre onto the head seam's; similarity also scales the body to the seam's size; none keeps the OBJ's placement"},
-            "lods": {"type": "array", "items": {"type": "integer"}, "description": "vertex counts of the coarser body LODs (default [3500, 1400])"},
+            "lods": {"type": "array", "items": {"type": "integer"}, "description": "vertex counts of the coarser body LODs (default [3500, 1400]); makehuman mode with subdivide 0 and mesh mode"},
+            "subdivide": {"type": "integer", "minimum": 0, "maximum": 2, "description": "makehuman mode: Catmull-Clark levels the shaped body is refined by before it is stitched and decimated (default 2; 0 keeps the cage as LOD0); LOD0 is decimated from this level, the coarser LODs from level 1, so each LOD's neck ring stays sparser than the head LOD's seam"},
+            "fine_lods": {"type": "array", "items": {"type": "integer"}, "description": "makehuman mode with subdivide > 0: vertex counts of every body LOD, each a decimation of the refined body with the neck band kept fine (default [24000, 8000, 3000])"},
             "targets": {"type": "string", "description": "makehuman mode: the MakeHuman targets directory, to shape the body with macro sliders"},
             "macro": {"type": "string", "description": "makehuman mode: the macro definition (macro.json) for the sliders"},
             "sliders": {"type": "object", "description": "makehuman mode: macro sliders; missing ones default to 0.5 (races 1/3)"},
@@ -104,12 +113,17 @@ pub fn import(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     if !dense.join("face_sizes.npy").is_file() {
         return Err(ApiError::not_found(format!("{} is not a dense base directory", dense.display())));
     }
-    let lods = lods(input)?;
+    let lods = lods(input, "lods", &DEFAULT_LODS)?;
+    let fine_lods = lods_fine(input)?;
+    let subdivide = input.get("subdivide").and_then(Value::as_u64).unwrap_or(DEFAULT_SUBDIVIDE);
+    if subdivide > 2 {
+        return Err(ApiError::invalid("subdivide is 0 to 2"));
+    }
     let manifest = match text(input, "mode") {
         "makehuman" => {
             let group = input.get("group").and_then(Value::as_str).unwrap_or("body");
             let (shaping, used_sliders) = shaping(input)?;
-            let mh = io::MakeHumanInput { obj: path, group, unit: number(input, "unit_m", 0.1)?, shaping, lods: &lods };
+            let mh = io::MakeHumanInput { obj: path, group, unit: number(input, "unit_m", 0.1)?, shaping, lods: &lods, subdivide: subdivide as usize, fine_lods: &fine_lods };
             let mut m = io::import_makehuman(&mh, dense, out).map_err(ApiError::invalid)?;
             if !used_sliders.is_empty() {
                 m["source"]["sliders"] = json!(used_sliders);
@@ -419,6 +433,30 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weigh
                       "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the 4 strongest, renormalised",
                       "eyes": "rigid on the head bone"});
     Ok(BodyRig { heads: ends.iter().map(|e| control(e.0)).collect(), rig, by_obj, head_joint, meta })
+}
+
+pub fn refined_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1},
+               "body": {"type": "string", "minLength": 1, "description": "a body reference (body.import with store)"},
+               "out": {"type": "string", "minLength": 1, "description": "writes the refined body's positions at the pack's base shape (.npy, n x 3) and, beside it, <out>.quads.npy (the cage quads)"}}),
+        &["store", "body", "out"],
+    )
+}
+
+pub fn refined_output() -> Value {
+    shape(json!({"level": {"type": "integer"}, "cage_vertices": {"type": "integer"}, "vertices": {"type": "integer"}, "lods": {"type": "array"}}))
+}
+
+pub fn refined(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::internal)?;
+    let (_, pack) = store.load_body(text(input, "body")).map_err(ApiError::not_found)?;
+    let fine = pack.fine.as_ref().ok_or_else(|| ApiError::invalid("the body is not refined (imported with subdivide 0, or before refinement existed)"))?;
+    let out = text(input, "out");
+    gf_io::dense::write_points(Path::new(out), &fine.stencil.apply(&pack.mesh.positions)).map_err(ApiError::internal)?;
+    gf_io::write_table_i32(Path::new(&format!("{out}.quads.npy")), fine.quads.len(), 4, fine.quads.iter().flatten().map(|&v| v as i32).collect()).map_err(ApiError::internal)?;
+    Ok(json!({"level": fine.level, "cage_vertices": pack.mesh.positions.len(), "vertices": fine.stencil.rows.len(),
+              "lods": fine.lods.iter().map(|l| json!({"vertices": l.kept.len(), "triangles": l.triangles.len()})).collect::<Vec<_>>()}))
 }
 
 pub fn cage_input() -> Value {

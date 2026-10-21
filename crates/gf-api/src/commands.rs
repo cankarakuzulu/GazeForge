@@ -178,6 +178,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: body::targets,
     },
     CommandDef {
+        name: "body.refined",
+        kind: Kind::Query,
+        summary: "A refined body's Catmull-Clark positions at the pack's base shape, and its cage quads (diagnostic): the body is shaped on its cage and refined by a fixed stencil before it is stitched and decimated.",
+        limits: "Diagnostic; only bodies imported with subdivide > 0.",
+        input: body::refined_input,
+        output: body::refined_output,
+        run: body::refined,
+    },
+    CommandDef {
         name: "body.cage",
         kind: Kind::Query,
         summary: "Every dense vertex's place on the head cage, from topology alone: a cage corner, a point along a cage edge, or a point inside a cage face, as up to four cage corners and bilinear coefficients (how a per-cage-vertex value such as a skin weight reaches the dense head).",

@@ -199,6 +199,18 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     if !pack.cage_source.is_empty() {
         write_npy(dir.join("cage_source.npy"), &Array1::from(pack.cage_source.clone())).map_err(|e| e.to_string())?;
     }
+    if let Some(f) = &pack.fine {
+        let d = dir.join("fine");
+        std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+        let q = Array2::from_shape_vec((f.quads.len(), 4), f.quads.iter().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quads.npy"), &q).map_err(|e| e.to_string())?;
+        let u = Array2::from_shape_vec((f.quad_uvs.len(), 8), f.quad_uvs.iter().flatten().flatten().copied().collect()).map_err(|e| e.to_string())?;
+        write_npy(d.join("quad_uvs.npy"), &u).map_err(|e| e.to_string())?;
+        for (i, lod) in f.lods.iter().enumerate() {
+            let dd = Decimated { kept: lod.kept.clone(), owner: Vec::new(), triangles: lod.triangles.clone(), triangle_uvs: lod.uvs.clone(), stats: Stats::default() };
+            crate::game_base::save(&d.join(format!("lod{i}")), &dd)?;
+        }
+    }
     if !pack.helpers.source.is_empty() {
         let h = dir.join("helpers");
         std::fs::create_dir_all(&h).map_err(|e| format!("{}: {e}", h.display()))?;
@@ -214,6 +226,11 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     m["format"] = json!(FORMAT);
     m["mode"] = json!(pack.mode);
     m["per_span"] = json!(pack.per_span);
+    if let Some(f) = &pack.fine {
+        m["fine"] = json!({"level": f.level, "dir": "fine", "cage_quads": f.quads.len(), "vertices": f.stencil.rows.len(), "triangles": f.triangles.len(),
+                           "lods": f.lods.iter().enumerate().map(|(i, l)| json!({"name": format!("Body_LOD{i}"), "dir": format!("fine/lod{i}"), "vertices": l.kept.len(), "triangles": l.triangles.len()})).collect::<Vec<_>>(),
+                           "meaning": "the body is shaped on its cage (positions.npy, the targets' vertices) and refined by Catmull-Clark (B-spline boundary) to this level; every game LOD is a decimation of the refined body, the neck band kept fine"});
+    }
     if !pack.helpers.source.is_empty() {
         m["helpers"] = json!({"vertices": pack.helpers.source.len(), "groups": pack.helpers.groups.len(), "dir": "helpers",
                               "meaning": "every base.obj vertex the body does not keep (the joint-* helper cubes, the head the dense head replaces, the other helper geometry), in the body's frame at its base shape: a MakeHuman rig's joints are cube means, vertices or vertex means of these, so they are shaped with the body"});
@@ -290,7 +307,29 @@ pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
         source: if dir.join("source.npy").is_file() { read_u32(&dir.join("source.npy"))? } else { Vec::new() },
         helpers: load_helpers(&dir.join("helpers"))?,
         cage_source: if dir.join("cage_source.npy").is_file() { read_u32(&dir.join("cage_source.npy"))? } else { Vec::new() },
+        fine: None,
     };
+    let mut pack = pack;
+    if let Some(level) = m["fine"]["level"].as_u64().filter(|&l| l > 0) {
+        let d = dir.join("fine");
+        let q: Array2<u32> = read_npy(d.join("quads.npy")).map_err(|e| format!("fine/quads.npy: {e}"))?;
+        let u: Array2<f32> = read_npy(d.join("quad_uvs.npy")).map_err(|e| format!("fine/quad_uvs.npy: {e}"))?;
+        let quads = q.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3]]).collect();
+        let quad_uvs = u.rows().into_iter().map(|r| [[r[0], r[1]], [r[2], r[3]], [r[4], r[5]], [r[6], r[7]]]).collect();
+        let mut fine = b::Fine::new(quads, quad_uvs, pack.mesh.positions.len(), level as usize, &pack.ring, &pack.ring_targets)?;
+        for i in 0.. {
+            let dd = d.join(format!("lod{i}"));
+            if !dd.is_dir() {
+                break;
+            }
+            let l = crate::game_base::load(&dd)?;
+            if l.kept.iter().any(|&k| k as usize >= fine.stencil.rows.len()) {
+                return Err(format!("{}: a fine LOD keeps a vertex the refined body does not have", dd.display()));
+            }
+            fine.lods.push(BodyLod { kept: l.kept, triangles: l.triangles, uvs: l.triangle_uvs });
+        }
+        pack.fine = Some(fine);
+    }
     if !pack.source.is_empty() && pack.source.len() != pack.mesh.positions.len() {
         return Err(format!("{}: source.npy has {} entries for {} vertices", dir.display(), pack.source.len(), pack.mesh.positions.len()));
     }
@@ -355,9 +394,10 @@ fn compact(positions: &[Point], triangles: &[[u32; 3]]) -> (Vec<Point>, Vec<[u32
 }
 
 pub const COLLAR_RINGS: usize = 2;
+pub const FINE_COLLAR_ROWS: usize = 2;
 const COLLAR_WEIGHT: f64 = 1e9;
 
-fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32]) -> Vec<BodyLod> {
+fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32], collar_rings: usize) -> Vec<BodyLod> {
     let wanted: Vec<usize> = lods.iter().copied().filter(|&t| t < mesh.positions.len()).collect();
     if wanted.is_empty() {
         return Vec::new();
@@ -374,7 +414,7 @@ fn make_lods(mesh: &Mesh, lods: &[usize], ring: &[u32]) -> Vec<BodyLod> {
     for &v in ring {
         weights[v as usize] = COLLAR_WEIGHT;
     }
-    for _ in 0..COLLAR_RINGS {
+    for _ in 0..collar_rings {
         let mut next = Vec::new();
         for &v in &front {
             for &u in &neighbours[v as usize] {
@@ -402,6 +442,8 @@ pub struct MakeHumanInput<'a> {
     pub unit: f64,
     pub shaping: Vec<Shaping>,
     pub lods: &'a [usize],
+    pub subdivide: usize,
+    pub fine_lods: &'a [usize],
 }
 
 pub type Shaping = (String, f64, Vec<(u32, Point)>);
@@ -454,13 +496,38 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
     let local: HashMap<u32, u32> = used.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_obj.iter().enumerate().map(|(i, v)| RingVertex { vertex: local[v], param: i as f64 }).collect();
-    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
+    let quads: Vec<[u32; 4]> = polys.faces.iter().enumerate().filter(|(f, _)| !head_faces.contains(f)).map(|(_, face)| [0, 1, 2, 3].map(|k| local[&face[k].0])).collect();
+    let quad_uvs: Vec<[gf_geom::Uv; 4]> = polys.faces.iter().enumerate().filter(|(f, _)| !head_faces.contains(f)).map(|(_, face)| [0, 1, 2, 3].map(|k| corner_uv(&polys, face[k].1))).collect();
+    let (lods, fine) = if input.subdivide == 0 {
+        (make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>(), COLLAR_RINGS), None)
+    } else {
+        let mut fine = b::Fine::new(quads, quad_uvs, mesh.positions.len(), input.subdivide, &ring, &controls)?;
+        let all = fine.stencil.apply(&mesh.positions);
+        for (i, &target) in input.fine_lods.iter().enumerate() {
+            let level = if i == 0 { input.subdivide } else { input.subdivide.min(1) };
+            let (triangles, uvs) = if level == input.subdivide {
+                (fine.triangles.clone(), fine.uvs.clone())
+            } else {
+                let l = gf_core::subdiv::subdivide(&fine.quads, &fine.quad_uvs, mesh.positions.len(), level)?;
+                gf_core::subdiv::triangles(&l.quads, &l.uvs)
+            };
+            let n = triangles.iter().flatten().map(|&v| v as usize + 1).max().unwrap_or(0);
+            let source = Mesh { positions: all[..n].to_vec(), triangles, uvs };
+            let ring: Vec<u32> = fine.ring.iter().map(|r| r.vertex).filter(|&v| (v as usize) < n).collect();
+            let mut made = make_lods(&source, &[target], &ring, FINE_COLLAR_ROWS << level);
+            if made.len() != 1 {
+                return Err(format!("fine LOD{i}: {target} vertices is not below the {n} vertices of subdivision level {level}"));
+            }
+            fine.lods.push(made.remove(0));
+        }
+        (Vec::new(), Some(fine))
+    };
     let kept: HashSet<u32> = used.iter().copied().collect();
     let cut: Vec<u32> = (0..moved.len() as u32).filter(|v| !kept.contains(v)).collect();
     let helpers = helpers_of(&read_obj_groups(input.obj, "joint-")?, &cut, &moved)?;
     let cage_count = embedding.vertices.len();
     let cage_source: Vec<u32> = (0..cage_count as u32).map(|d| embedding.vertices.get(&d).copied().ok_or_else(|| format!("cage vertex {d} has no base.obj vertex: the cage is not the dense base's first {cage_count} vertices"))).collect::<Result<_, _>>()?;
-    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone(), helpers, cage_source };
+    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone(), helpers, cage_source, fine };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({
@@ -591,11 +658,11 @@ pub fn import_mesh(input: &MeshInput, dense_dir: &Path, out: &Path) -> Result<Va
     let local: HashMap<u32, u32> = used.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_ids.iter().zip(&params).map(|(v, &p)| RingVertex { vertex: local[v], param: p }).collect();
-    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
+    let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>(), COLLAR_RINGS);
     if ring.windows(2).any(|w| w[1].param < w[0].param) {
         return Err("the neck ring's parameters are not monotone".into());
     }
-    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new(), helpers: b::Helpers::default(), cage_source: Vec::new() };
+    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new(), helpers: b::Helpers::default(), cage_source: Vec::new(), fine: None };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({

@@ -1241,9 +1241,16 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     for &v in &surface.source {
                         let x = match (st.source[v as usize], copies.get(&v)) {
                             (Some(u), _) => {
-                                let lod0 = *kept.get(u as usize).ok_or_else(|| format!("{name}: body vertex {u} is outside its LOD"))?;
-                                let o = pack.source[lod0 as usize];
-                                gf_core::body_rig::strongest(br.by_obj.get(&o).map(Vec::as_slice).unwrap_or(&[]), 4)
+                                let k = *kept.get(u as usize).ok_or_else(|| format!("{name}: body vertex {u} is outside its LOD"))?;
+                                let none: Vec<(usize, f64)> = Vec::new();
+                                let of_cage = |c: u32| br.by_obj.get(&pack.source[c as usize]).map(Vec::as_slice).unwrap_or(&none);
+                                match &pack.fine {
+                                    Some(f) => {
+                                        let parts: Vec<(f64, &[(usize, f64)])> = f.stencil.rows[k as usize].iter().map(|&(c, w)| (w, of_cage(c))).collect();
+                                        gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4)
+                                    }
+                                    None => gf_core::body_rig::strongest(of_cage(k), 4),
+                                }
                             }
                             (None, Some(&h)) => hi[level.map[h as usize] as usize].clone(),
                             (None, None) => return Err(format!("{name}: body vertex {v} is neither the body's nor a seam copy")),
