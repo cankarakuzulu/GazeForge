@@ -75,7 +75,11 @@ pub struct WearableRef {
     pub layer: Option<f64>,
     #[serde(default = "opening_default", skip_serializing_if = "is_opening_default")]
     pub opening_m: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coarse_power: Option<f64>,
 }
+
+pub const COARSE_POWER_CARDS: f64 = 0.5;
 
 pub const OPENING_DEFAULT_M: f64 = 0.06;
 
@@ -142,6 +146,11 @@ impl BodySpec {
             }
             if !(w.opening_m.is_finite() && (0.0..=0.2).contains(&w.opening_m)) {
                 out.push(format!("body.wearables[{i}].opening_m {} is not a distance from 0 to 0.2 m", w.opening_m));
+            }
+            if let Some(p) = w.coarse_power
+                && !(p.is_finite() && (0.25..=1.0).contains(&p))
+            {
+                out.push(format!("body.wearables[{i}].coarse_power {p} is not from 0.25 to 1"));
             }
             if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
                 out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
@@ -303,7 +312,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -328,6 +337,11 @@ mod tests {
         assert!(serde_json::to_string(&WearableRef { opening_m: 0.0, ..worn(&r) }).unwrap().contains("\"opening_m\":0.0"));
         for bad in [-0.01, 0.21, f64::INFINITY] {
             assert!(BodySpec { wearables: vec![WearableRef { opening_m: bad, ..worn(&r) }], ..ok.clone() }.problems().iter().any(|x| x.contains("opening_m")), "{bad}");
+        }
+        assert!(read.wearables[0].coarse_power.is_none(), "no coarse_power means the item's kind decides");
+        assert!(BodySpec { wearables: vec![WearableRef { coarse_power: Some(0.75), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
+        for bad in [0.2, 1.01, f64::NAN] {
+            assert!(BodySpec { wearables: vec![WearableRef { coarse_power: Some(bad), ..worn(&r) }], ..ok.clone() }.problems().iter().any(|x| x.contains("coarse_power")), "{bad}");
         }
     }
 

@@ -13,6 +13,13 @@ pub struct Pair {
     pub decr: Option<String>,
 }
 
+pub struct StoreWear {
+    pub reference: String,
+    pub name: String,
+    pub z_depth: f64,
+    pub transparent: bool,
+}
+
 #[derive(Default)]
 pub struct BodyUi {
     pub key: String,
@@ -21,7 +28,7 @@ pub struct BodyUi {
     pub genitals: Vec<String>,
     pub physics: Vec<String>,
     pub wear_key: String,
-    pub store_wear: Vec<(String, String, f64)>,
+    pub store_wear: Vec<StoreWear>,
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
@@ -137,7 +144,14 @@ impl World {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|w| Some((w["wearable"].as_str()?.to_string(), w["name"].as_str().unwrap_or("").to_string(), w["z_depth"].as_f64().unwrap_or(50.0))))
+            .filter_map(|w| {
+                Some(StoreWear {
+                    reference: w["wearable"].as_str()?.to_string(),
+                    name: w["name"].as_str().unwrap_or("").to_string(),
+                    z_depth: w["z_depth"].as_f64().unwrap_or(50.0),
+                    transparent: w["transparent"].as_bool().unwrap_or(false),
+                })
+            })
             .collect();
     }
 
@@ -216,6 +230,26 @@ impl World {
                     } else {
                         o.insert("opening_m".into(), json!(metres));
                     }
+                }
+            }
+        }))
+    }
+
+    pub fn body_wear_coarse(&mut self, asset: &str, power: Option<f64>) -> Result<bool, String> {
+        if let Some(p) = power
+            && !(p.is_finite() && (0.25..=1.0).contains(&p))
+        {
+            return Err(format!("coarse detail {p} is not from 0.25 to 1"));
+        }
+        Ok(self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    match power {
+                        Some(p) => o.insert("coarse_power".into(), json!(p)),
+                        None => o.remove("coarse_power"),
+                    };
                 }
             }
         }))
@@ -346,8 +380,10 @@ impl crate::studio::Studio<'_> {
                 body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["opening_m"].as_f64()).unwrap_or(gf_core::body_shape::OPENING_DEFAULT_M)
             };
             let mut opening_commit: Option<(String, f64)> = None;
+            let coarse_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["coarse_power"].as_f64());
+            let mut coarse_commit: Option<(String, Option<f64>)> = None;
             let label = |asset: &str| {
-                let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
+                let name = ui_state.store_wear.iter().find(|w| w.reference == asset).map_or("?", |w| w.name.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
             };
             if worn.is_empty() {
@@ -374,7 +410,7 @@ impl crate::studio::Studio<'_> {
                         .response
                         .on_hover_text(tr("body.wear_physics_tip"));
                     let own = layer_of(asset);
-                    let z = ui_state.store_wear.iter().find(|w| w.0 == *asset).map_or(50.0, |w| w.2);
+                    let z = ui_state.store_wear.iter().find(|w| w.reference == *asset).map_or(50.0, |w| w.z_depth);
                     let mut on = own.is_some();
                     if ui.checkbox(&mut on, tr("body.wear_layer")).on_hover_text(tr("body.wear_layer_tip")).changed() {
                         layer_commit = Some((asset.clone(), on.then_some(z)));
@@ -406,19 +442,31 @@ impl crate::studio::Studio<'_> {
                     if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus())) && ui_state.live.remove(&key).is_some() {
                         opening_commit = Some((asset.clone(), (cm * 10.0).round() / 1000.0));
                     }
+                    let kind_default = if ui_state.store_wear.iter().find(|w| w.reference == *asset).is_some_and(|w| w.transparent) { gf_core::body_shape::COARSE_POWER_CARDS } else { 1.0 };
+                    let key = format!("k:{asset}");
+                    let mut p = ui_state.live.get(&key).copied().unwrap_or(coarse_of(asset).unwrap_or(kind_default));
+                    ui.label(tr("body.wear_coarse")).on_hover_text(tr("body.wear_coarse_tip"));
+                    let r = ui.add(egui::DragValue::new(&mut p).range(0.25..=1.0).speed(0.01).max_decimals(2)).on_hover_text(tr("body.wear_coarse_tip"));
+                    if r.changed() {
+                        ui_state.live.insert(key.clone(), p);
+                    }
+                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus())) && ui_state.live.remove(&key).is_some() {
+                        let p = (p * 100.0).round() / 100.0;
+                        coarse_commit = Some((asset.clone(), (p != kind_default).then_some(p)));
+                    }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
                     }
                 });
             }
-            let free: Vec<&(String, String, f64)> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.0)).collect();
+            let free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
             if free.is_empty() {
                 ui.label(egui::RichText::new(tr("body.wear_store_empty")).weak());
             } else {
                 egui::ComboBox::from_id_salt("body_wear_add").selected_text(tr("body.wear_add")).show_ui(ui, |ui| {
                     for w in free {
-                        if ui.selectable_label(false, label(&w.0)).clicked() {
-                            wear_commit = Some((w.0.clone(), Some(true)));
+                        if ui.selectable_label(false, label(&w.reference)).clicked() {
+                            wear_commit = Some((w.reference.clone(), Some(true)));
                         }
                     }
                 });
@@ -444,6 +492,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((asset, metres)) = opening_commit
                 && let Err(e) = self.world.body_wear_opening(&asset, metres)
+            {
+                self.world.body_ui.error = Some(e);
+            }
+            if let Some((asset, power)) = coarse_commit
+                && let Err(e) = self.world.body_wear_coarse(&asset, power)
             {
                 self.world.body_ui.error = Some(e);
             }

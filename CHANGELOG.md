@@ -89,6 +89,11 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **Hair keeps more of itself at middle distance.** On LOD1 to LOD3 a wearable now thins by the body's vertex ratio
+  raised to its `coarse_power` (`body.wearables[].coarse_power`, 0.25 to 1; default 0.5 for hair, beards and other
+  alpha-card items, 1 for everything else, so opaque clothes are unchanged); LOD4 and LOD5 thin with the body again.
+  A ponytail keeps 2629 / 1859 / 1315 vertices at LOD1-3 (1859 / 930 / 465 before) and its scalp is covered at LOD3;
+  long hair keeps 2290 / 1620 / 1145. Both clients have a "Coarse detail" number on each worn item's row.
 - **Cuffs and collars follow the hand and head.** An opaque wearable fitted to the body now blends its skin weights,
   within `opening_m` (default 6 cm, 0 to 20 cm, 0 turns it off; `body.wearables[].opening_m`) of each open edge,
   toward the weights of the nearest body vertex: fully at the edge, fading to the binding's own weights at the reach.

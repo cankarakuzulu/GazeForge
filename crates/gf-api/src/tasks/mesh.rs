@@ -216,7 +216,15 @@ const WEARABLE_MIN_VERTICES: usize = 32;
 type GarmentLevel = (Vec<u32>, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
 type Worn = (gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value);
 
-fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize]) -> Vec<GarmentLevel> {
+pub const GENTLE_LEVELS: usize = 3;
+
+fn level_target(n: usize, body: usize, body0: usize, level: usize, power: f64) -> usize {
+    let ratio = body as f64 / body0.max(1) as f64;
+    let p = if level <= GENTLE_LEVELS { power } else { 1.0 };
+    (n as f64 * ratio.powf(p)).round() as usize
+}
+
+fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize], power: f64) -> Vec<GarmentLevel> {
     let mut triangles = Vec::new();
     let mut uvs: Vec<[gf_geom::Uv; 3]> = Vec::new();
     let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
@@ -234,14 +242,14 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
     }
     let n = garment.len();
     let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
-    let cards = if item.manifest.transparent { card_levels(garment, &triangles, &uvs, body_counts) } else { None };
+    let cards = if item.manifest.transparent { card_levels(garment, &triangles, &uvs, body_counts, power) } else { None };
     if let Some(levels) = cards {
         out.extend(levels);
     } else if body_counts.len() > 1 && body_counts[0] > 0 {
         let mut targets = Vec::new();
         let mut above = n;
-        for &b in &body_counts[1..] {
-            let t = ((n as f64 * b as f64 / body_counts[0] as f64).round() as usize).max(WEARABLE_MIN_VERTICES).min(above.saturating_sub(1));
+        for (level, &b) in body_counts.iter().enumerate().skip(1) {
+            let t = level_target(n, b, body_counts[0], level, power).max(WEARABLE_MIN_VERTICES).min(above.saturating_sub(1));
             if t < WEARABLE_MIN_VERTICES {
                 break;
             }
@@ -273,7 +281,7 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
 
 const CARD_LARGEST_SHARE: f64 = 0.25;
 
-fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], body_counts: &[usize]) -> Option<Vec<GarmentLevel>> {
+fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], body_counts: &[usize], power: f64) -> Option<Vec<GarmentLevel>> {
     let n = garment.len();
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn root(parent: &mut [u32], mut v: u32) -> u32 {
@@ -323,8 +331,8 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
     let order: Vec<(f64, Vec<usize>, std::collections::BTreeSet<u32>)> = spread.into_iter().map(|i| order[i].clone()).collect();
     let mut out = Vec::new();
     let mut above = n;
-    for &b in body_counts.iter().skip(1) {
-        let target = ((n as f64 * b as f64 / body_counts[0].max(1) as f64).round() as usize).max(WEARABLE_MIN_VERTICES).min(above);
+    for (level, &b) in body_counts.iter().enumerate().skip(1) {
+        let target = level_target(n, b, body_counts[0], level, power).max(WEARABLE_MIN_VERTICES).min(above);
         let mut keep: std::collections::BTreeSet<u32> = Default::default();
         let mut tris: Vec<usize> = Vec::new();
         for card in &order {
@@ -1622,7 +1630,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             if w.physics == "springbone" && item.manifest.attach.is_some() {
                 return Err(format!("wearable {} is a rigid item: it cannot hang in spring-bone chains", item.manifest.name));
             }
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m,
+            let coarse_power = w.coarse_power.unwrap_or(if item.manifest.transparent { gf_core::body_shape::COARSE_POWER_CARDS } else { 1.0 });
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power,
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
@@ -1657,7 +1666,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 };
                 for ((item, garment, slot, mut row), layered) in dressed.into_iter().zip(reports) {
                     row["layered"] = layered;
-                    let ladder = wearable_ladder(&item, &garment, &body_counts);
+                    let ladder = wearable_ladder(&item, &garment, &body_counts, row["coarse_power"].as_f64().unwrap_or(1.0));
                     row["lod_vertices"] = json!(ladder.iter().map(|l| l.0.len()).collect::<Vec<_>>());
                     row["lod_pushed"] = json!([]);
                     worn.push((item, garment, slot, ladder, row));
@@ -2178,4 +2187,19 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         result["skin"] = skin;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coarse_power_keeps_more_only_on_the_gentle_levels() {
+        let (n, b0) = (3718, 25075);
+        assert_eq!(level_target(n, 6498, b0, 2, 1.0), (n as f64 * 6498.0 / b0 as f64).round() as usize);
+        let gentle = level_target(n, 3309, b0, 3, 0.5);
+        assert_eq!(gentle, (n as f64 * (3309.0 / b0 as f64).sqrt()).round() as usize);
+        assert!(gentle > level_target(n, 3309, b0, 3, 1.0));
+        assert_eq!(level_target(n, 1735, b0, GENTLE_LEVELS + 1, 0.5), level_target(n, 1735, b0, GENTLE_LEVELS + 1, 1.0), "past LOD3 the body ratio again");
+    }
 }
