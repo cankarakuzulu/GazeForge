@@ -12,7 +12,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   build-base  --dense DIR --out DIR [--target 20000] [--shapes all|none|a,b] [--extra A.npy,B.npy] [--min-angle 4] [--max-angle 170]
               [--max-turn 45] [--boundary-weight 100] [--improve-below 20] [--flip-flat 15]
               [--weights W.npy (per dense vertex, > 0, multiplies the collapse cost)] [--lods 8000,3000 (nested, into OUT/lod_N)]
-  derive-lods --store DIR --game REF --dense DIR --out DIR --lods 10000,5000,2500 [--shapes all|none|a,b] [--weights W.npy]
+  derive-lods --store DIR --game REF --dense DIR --out DIR --lods 10000,5000,2500 [--shapes all|none|a,b] [--weights W.npy] [--seam-weight F]
               (a new game base: REF's finest level unchanged, these coarser levels decimated from it; put into the store)
   export-obj  --dense DIR --base DIR --positions base|shape:NAME|FILE.npy --out FILE.obj [--placement f5|f6|subset|optimal|fit|f2|f3|f4|NAME/VERSION]
               [--tip-vertex 185894] [--quads on|off (clean triangle pairs written as quads; off by default)]

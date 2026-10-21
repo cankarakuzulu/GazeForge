@@ -178,7 +178,7 @@ pub fn build_base(opts: &Options) -> Result<Value, String> {
               "settings": settings, "weights": weight_summary, "stats": result.stats, "lods": coarser}))
 }
 
-pub const DERIVE_KEYS: &[&str] = &["store", "game", "dense", "out", "lods", "shapes", "weights", "min-angle", "max-angle", "max-turn", "boundary-weight", "improve-below", "flip-flat"];
+pub const DERIVE_KEYS: &[&str] = &["store", "game", "dense", "out", "lods", "shapes", "weights", "min-angle", "max-angle", "max-turn", "boundary-weight", "improve-below", "flip-flat", "seam-weight"];
 
 pub fn derive_lods(opts: &Options) -> Result<Value, String> {
     only(opts, "derive-lods", &[DERIVE_KEYS])?;
@@ -213,13 +213,24 @@ pub fn derive_lods(opts: &Options) -> Result<Value, String> {
     for name in &names {
         shapes.push(pick(&dense.shape(name)?));
     }
-    let weights = match opts.get("weights") {
+    let mut weights = match opts.get("weights") {
         Some(path) => {
             let all = dense.vertex_weights(path)?;
             Some(base.kept.iter().map(|&d| all[d as usize]).collect::<Vec<f64>>())
         }
         None => None,
     };
+    let seam_weight = number(opts, "seam-weight", 1.0)?;
+    if seam_weight <= 0.0 {
+        return Err(format!("--seam-weight multiplies the open boundary's collapse cost and must be > 0, got {seam_weight}"));
+    }
+    let boundary: Vec<u32> = gf_core::rig::boundary_loops(&base.triangles).into_iter().flatten().collect();
+    if seam_weight != 1.0 {
+        let w = weights.get_or_insert_with(|| vec![1.0; base.kept.len()]);
+        for &v in &boundary {
+            w[v as usize] *= seam_weight;
+        }
+    }
     crate::jobs::progress("decimate", 0, 1, "");
     let started = std::time::Instant::now();
     let clock = || started.elapsed().as_secs_f64();
@@ -237,11 +248,13 @@ pub fn derive_lods(opts: &Options) -> Result<Value, String> {
         let mut stored = serde_json::to_value(&derived.stats).map_err(|e| e.to_string())?;
         stored.as_object_mut().map(|m| m.remove("seconds"));
         std::fs::write(dir.join("report.json"), serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?).map_err(|e| format!("{}: {e}", dir.display()))?;
-        rows.push(json!({"target": target, "vertices": derived.kept.len(), "triangles": derived.triangles.len(), "stats": derived.stats}));
+        let seam_points = gf_core::rig::boundary_loops(&derived.triangles).iter().map(Vec::len).sum::<usize>();
+        rows.push(json!({"target": target, "vertices": derived.kept.len(), "triangles": derived.triangles.len(), "seam_points": seam_points, "stats": derived.stats}));
     }
     let (game, _) = store.import_game(out, &manifest.pack)?;
-    Ok(json!({"ok": true, "command": "derive-lods", "from": reference, "game": game, "out": out.display().to_string(), "lod0": {"vertices": base.kept.len(), "triangles": base.triangles.len(), "same_as": reference},
-              "lods": rows, "shapes": names,
+    Ok(json!({"ok": true, "command": "derive-lods", "from": reference, "game": game, "out": out.display().to_string(),
+              "lod0": {"vertices": base.kept.len(), "triangles": base.triangles.len(), "seam_points": boundary.len(), "same_as": reference},
+              "lods": rows, "shapes": names, "seam_weight": seam_weight,
               "method": "the finest level is the given base's, unchanged; every coarser level decimates it (its vertices, triangles and UVs, carried through the dense shapes), so each is a subset of the finest and a new level can be added at any time; the stored level reports leave out the decimation time (it is in lods[].stats here), so the same inputs give the same reference"}))
 }
 
