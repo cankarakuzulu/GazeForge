@@ -213,15 +213,16 @@ impl Loaded {
             Some(t) => Some((t, self.frame()?)),
             None => None,
         };
-        let (placed, report) = er::place_eyes(eb, rig.as_deref(), &spec.weights, pin, &eyes).map_err(ApiError::invalid)?;
+        let weights = spec.head_weights(|n| self.catalog.targets.contains_key(n));
+        let (placed, report) = er::place_eyes(eb, rig.as_deref(), &weights, pin, &eyes).map_err(ApiError::invalid)?;
         Ok((placed, Some(report.iter().map(|p| serde_json::to_value(p).unwrap_or(Value::Null)).collect())))
     }
 
     fn evaluate_traced(&self, spec: &Spec, source: Option<&MacroSource>) -> Result<(Vec<[f64; 3]>, Option<MacroTrace>), ApiError> {
         let spec = spec.canonical();
         let mut loaded = Vec::new();
-        for (id, &w) in &spec.weights {
-            loaded.push((w, self.target(id)?));
+        for (id, w) in spec.head_weights(|n| self.catalog.targets.contains_key(n)) {
+            loaded.push((w, self.target(&id)?));
         }
         let terms: Vec<(f64, &SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t.as_ref())).collect();
         let mut layers: Vec<Vec<[f64; 3]>> = Vec::new();

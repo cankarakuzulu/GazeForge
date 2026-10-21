@@ -178,6 +178,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: body::targets,
     },
     CommandDef {
+        name: "body.sliders",
+        kind: Kind::Query,
+        summary: "The body's regional sliders and compound parameters: every decrease/increase pair of a body targets set (arms, legs, torso, hips, stomach, buttocks, pelvis, hands, feet, ...) grouped by family, leaving out targets the head catalog also has (the head's sliders drive those on both sides), and the compound parameters with any target they need that is missing.",
+        limits: "Names are MakeHuman's target ids; a pair is a slider from -1 (decrease) to +1 (increase).",
+        input: body::sliders_input,
+        output: body::sliders_output,
+        run: body::sliders,
+    },
+    CommandDef {
         name: "skin.models",
         kind: Kind::Query,
         summary: "The procedural skin presets: tone (melanin, haemoglobin, undertone), regional redness, lips, under-eyes, freckles, moles, pores, age, stubble and its hair colour, T-zone oil.",

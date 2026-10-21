@@ -169,6 +169,56 @@ pub fn targets(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(json!({"targets": reference, "summary": gf_io::body_store::summary(&m)}))
 }
 
+pub fn sliders_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1},
+               "targets": {"type": "string", "minLength": 1, "description": "a body targets reference (body.targets)"},
+               "catalog": {"type": "string", "minLength": 1, "description": "the head catalog: targets it also has are left to the head's sliders, which drive both"}}),
+        &["store", "targets"],
+    )
+}
+
+pub fn sliders_output() -> Value {
+    shape(json!({"pairs": {"type": "array"}, "compounds": {"type": "array"}, "shared_with_head": {"type": "integer"}}))
+}
+
+pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::internal)?;
+    let targets = store.load_body_targets(text(input, "targets")).map_err(ApiError::not_found)?;
+    let head: std::collections::BTreeSet<String> = match input.get("catalog").and_then(Value::as_str) {
+        Some(c) => store.load_catalog(c).map_err(ApiError::not_found)?.targets.into_keys().collect(),
+        None => Default::default(),
+    };
+    let mut pairs: BTreeMap<String, Value> = BTreeMap::new();
+    let mut shared = 0;
+    for (id, e) in &targets.targets {
+        if e.family == "macrodetails" || e.family == "breast" {
+            continue;
+        }
+        if head.contains(id) {
+            shared += 1;
+            continue;
+        }
+        let (base, dir) = if let Some(b) = id.strip_suffix("-incr") {
+            (b.to_string(), "incr")
+        } else if let Some(b) = id.strip_suffix("-decr") {
+            (b.to_string(), "decr")
+        } else {
+            (id.clone(), "incr")
+        };
+        let row = pairs.entry(base.clone()).or_insert_with(|| json!({"id": base, "family": e.family}));
+        row[dir] = json!(id);
+    }
+    let compounds: Vec<Value> = bs::compounds()
+        .iter()
+        .map(|c| {
+            let missing: Vec<&String> = c.plus.iter().chain(&c.minus).map(|(t, _)| t).filter(|t| !targets.targets.contains_key(*t)).collect();
+            json!({"name": c.name, "missing": missing})
+        })
+        .collect();
+    Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared}))
+}
+
 pub struct Shaped {
     pub pack: b::BodyPack,
     pub manifest: Value,
@@ -185,7 +235,15 @@ pub fn spec_body(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>, p
         return Err(format!("body.targets {} belong to body {}, not {}", body.targets, targets.body, body.pack));
     }
     let mut loaded = Vec::new();
-    for (id, &w) in &body.weights {
+    let mut weights = body.target_weights();
+    let mut shared = 0;
+    for (id, &w) in &spec.canonical().weights {
+        if targets.targets.contains_key(id) {
+            *weights.entry(id.clone()).or_insert(0.0) += w;
+            shared += 1;
+        }
+    }
+    for (id, &w) in &weights {
         loaded.push((w, store.load_body_target(&targets, id)?));
     }
     let mut macro_changes = 0;
@@ -206,7 +264,7 @@ pub fn spec_body(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>, p
         None => Similarity::identity(),
     };
     pack.mesh.positions = full.iter().map(|&p| similarity.invert(p)).collect();
-    let report = json!({"pack": body.pack, "targets": body.targets, "regional": body.weights.len(), "macro_targets_changed": macro_changes,
+    let report = json!({"pack": body.pack, "targets": body.targets, "regional": body.weights.len(), "compounds": body.compounds, "shared_with_head": shared, "macro_targets_changed": macro_changes,
                         "base_sliders": targets.base_sliders,
                         "similarity": {"scale": similarity.scale, "translation_m": similarity.translation, "centre_m": similarity.centre, "rotation_quaternion": similarity.quaternion(),
                                        "meaning": "the head follows the body: the head is built in its canonical frame (the macros' similarity stripped) and the whole character is mapped to the world by this similarity; the body was mapped into the canonical frame by its inverse"}});

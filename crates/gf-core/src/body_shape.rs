@@ -9,6 +9,23 @@ use crate::hash;
 type Point = [f64; 3];
 
 pub const TARGETS_FORMAT: &str = "gazeforge.bodytargets/1";
+pub const COMPOUNDS_JSON: &str = include_str!("body_compounds.json");
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Compound {
+    pub name: String,
+    pub plus: Vec<(String, f64)>,
+    pub minus: Vec<(String, f64)>,
+}
+
+#[derive(Deserialize)]
+struct CompoundFile {
+    compounds: Vec<Compound>,
+}
+
+pub fn compounds() -> Vec<Compound> {
+    serde_json::from_str::<CompoundFile>(COMPOUNDS_JSON).map(|f| f.compounds).unwrap_or_default()
+}
 
 fn blend() -> f64 {
     60.0
@@ -29,6 +46,8 @@ pub struct BodySpec {
     pub targets: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weights: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub compounds: BTreeMap<String, f64>,
     #[serde(default = "blend")]
     pub blend_mm: f64,
     #[serde(default)]
@@ -50,6 +69,7 @@ impl BodySpec {
     pub fn canonical(&self) -> BodySpec {
         BodySpec {
             weights: self.weights.iter().map(|(k, &w)| (k.clone(), round(w, 1e-6))).filter(|(_, w)| *w != 0.0).collect(),
+            compounds: self.compounds.iter().map(|(k, &w)| (k.clone(), round(w, 1e-6))).filter(|(_, w)| *w != 0.0).collect(),
             blend_mm: round(self.blend_mm, 1e-3),
             neck_offset_mm: round(self.neck_offset_mm, 1e-3),
             body_scale: round(self.body_scale, 1e-6),
@@ -73,10 +93,33 @@ impl BodySpec {
             out.push(format!("body: {e}"));
         }
         for (id, &w) in &self.weights {
-            if !(w.is_finite() && (-1.0..=1.0).contains(&w)) {
-                out.push(format!("body.weights {id} = {w} is outside [-1, 1]"));
+            if !(w.is_finite() && (0.0..=1.0).contains(&w)) {
+                out.push(format!("body.weights {id} = {w} is outside [0, 1]"));
             }
         }
+        let known = compounds();
+        for (name, &v) in &self.compounds {
+            if !known.iter().any(|c| &c.name == name) {
+                out.push(format!("body.compounds {name} is not a compound parameter"));
+            }
+            if !(v.is_finite() && (-1.0..=1.0).contains(&v)) {
+                out.push(format!("body.compounds {name} = {v} is outside [-1, 1]"));
+            }
+        }
+        out
+    }
+
+    pub fn target_weights(&self) -> BTreeMap<String, f64> {
+        let mut out = self.weights.clone();
+        let known = compounds();
+        for (name, &v) in &self.compounds {
+            let Some(c) = known.iter().find(|c| &c.name == name) else { continue };
+            let side = if v >= 0.0 { &c.plus } else { &c.minus };
+            for (id, w) in side {
+                *out.entry(id.clone()).or_insert(0.0) += w * v.abs();
+            }
+        }
+        out.retain(|_, w| *w != 0.0);
         out
     }
 }
@@ -193,12 +236,36 @@ mod tests {
     #[test]
     fn a_body_spec_checks_its_references_and_ranges() {
         let r = hash::reference(&"c".repeat(64));
-        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
+        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
         assert!(ok.problems().is_empty(), "{:?}", ok.problems());
-        let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), ..ok };
+        let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), compounds: [("wings".to_string(), 0.5), ("athletic".to_string(), 2.0)].into(), ..ok };
         let p = bad.problems().join(" | ");
-        for needle in ["body.pack", "blend", "arms/x"] {
+        for needle in ["body.pack", "blend", "arms/x", "wings", "athletic = 2"] {
             assert!(p.contains(needle), "{needle} not in {p}");
         }
+    }
+
+    #[test]
+    fn compounds_parse_pair_up_and_expand_linearly() {
+        let all = compounds();
+        assert!(all.len() >= 10);
+        for c in &all {
+            assert_eq!(c.plus.len(), c.minus.len(), "{}", c.name);
+            for ((p, wp), (m, wm)) in c.plus.iter().zip(&c.minus) {
+                assert_eq!(wp, wm, "{}", c.name);
+                let flip = |s: &str| s.replace("-incr", "-#").replace("-decr", "-incr").replace("-#", "-decr");
+                assert_eq!(&flip(p), m, "{}: {p} pairs with {m}", c.name);
+            }
+        }
+        let r = hash::reference(&"c".repeat(64));
+        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
+        b.compounds.insert("leg_length".into(), 0.5);
+        let w = b.target_weights();
+        assert_eq!(w["legs/upperlegs-height-incr"], 0.75);
+        assert_eq!(w["legs/lowerlegs-height-incr"], 0.5);
+        b.compounds.insert("leg_length".into(), -0.4);
+        let w = b.target_weights();
+        assert_eq!(w["legs/upperlegs-height-decr"], 0.4);
+        assert!(!w.contains_key("legs/lowerlegs-height-incr"));
     }
 }

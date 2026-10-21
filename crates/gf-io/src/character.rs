@@ -117,8 +117,8 @@ pub fn parametric_traced(store: &Store, resolved: &Resolved, spec: &Spec, macro_
     let spec = spec.canonical();
     let mut pin = None;
     let mut loaded = Vec::new();
-    for (id, &w) in &spec.weights {
-        loaded.push((w, store.load_target(&resolved.catalog, id)?));
+    for (id, w) in spec.head_weights(|n| resolved.catalog.targets.contains_key(n)) {
+        loaded.push((w, store.load_target(&resolved.catalog, &id)?));
     }
     let terms: Vec<(f64, &gf_core::catalog::SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t)).collect();
     let mut layers: Vec<Vec<[f64; 3]>> = Vec::new();
@@ -204,7 +204,8 @@ pub fn place_eyes(store: &Store, spec: &Spec, pin: Option<&Pin>, eyes: Vec<Eye>)
         }
         _ => None,
     };
-    let weights = spec.canonical().weights;
+    let catalog = store.load_catalog(&spec.base.catalog)?;
+    let weights = spec.head_weights(|n| catalog.targets.contains_key(n));
     let (placed, report) = eyerig::place_eyes(eb, rig.as_ref(), &weights, pin.map(|(t, h)| (t, h)), &eyes)?;
     Ok((placed, Some(report)))
 }

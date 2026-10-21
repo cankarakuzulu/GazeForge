@@ -82,6 +82,20 @@ impl Spec {
         out
     }
 
+    pub fn head_weights(&self, on_head: impl Fn(&str) -> bool) -> BTreeMap<String, f64> {
+        let spec = self.canonical();
+        let mut out = spec.weights;
+        if let Some(body) = &spec.body {
+            for (id, w) in body.target_weights() {
+                if on_head(&id) {
+                    *out.entry(id).or_insert(0.0) += w;
+                }
+            }
+        }
+        out.retain(|_, w| *w != 0.0);
+        out
+    }
+
     pub fn canonical_bytes(&self) -> Vec<u8> {
         hash::canonical_bytes(&serde_json::to_value(self.canonical()).expect("a spec always serialises"))
     }
@@ -213,6 +227,22 @@ mod tests {
         for needle in ["base.placement", "nose/z", "base.pack", "macros.mode", "macros.sliders", "head_scale"] {
             assert!(p.contains(needle), "{needle} not in {p}");
         }
+    }
+
+    #[test]
+    fn head_weights_add_the_body_targets_the_head_also_has() {
+        assert_eq!(spec().head_weights(|_| true), spec().canonical().weights);
+        let r = hash::reference(&"b".repeat(64));
+        let mut s = spec();
+        let mut body = crate::body_shape::BodySpec { pack: r.clone(), targets: r, weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
+        body.compounds.insert("shoulder_width".into(), 0.5);
+        body.weights.insert("legs/l-upperleg-fat-incr".into(), 0.3);
+        body.weights.insert("nose/x".into(), 0.2);
+        s.body = Some(body);
+        let w = s.head_weights(|n| n.starts_with("torso/") || n.starts_with("nose/"));
+        assert_eq!(w["torso/measure-shoulder-dist-incr"], 0.5);
+        assert!((w["nose/x"] - 0.323457).abs() < 1e-9);
+        assert!(!w.contains_key("legs/l-upperleg-fat-incr"));
     }
 
     #[test]
