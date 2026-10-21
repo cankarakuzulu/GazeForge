@@ -48,6 +48,9 @@ is restored afterwards, so a read at any other time sees the pose without the sp
   resets its own transform to keep its points in world space, so its place under the skeleton is kept in
   `mesh_transform`.
 - Soft-body point *i* is glTF vertex *i*: no welding, no reordering.
+- A `SoftBody3D` ignores the scale in its transform: under a GazeForge `Character` root (scaled to the character's
+  size) a cloth started 9% small and the pins stretched it. The cloth's mesh is therefore baked into world space at the
+  character's place and size when it starts, and the soft body sits at the identity (`top_level`).
 - A pin attached to a node with `set_point_pinned(i, true, path)` did not follow that node in our tests; the cloth
   drives its pins with `PhysicsServer3D.soft_body_move_point` instead. That costs a few bone transforms per pinned
   vertex per frame in GDScript; cloth that lies on the body almost everywhere (a suit) is better left skinned.

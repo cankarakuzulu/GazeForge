@@ -21,7 +21,7 @@ func _ready() -> void:
 		push_error("GazeForgeCloth %s: no skeleton, skin or mesh; the cloth is not driven" % name)
 		return
 	if mesh == null:
-		mesh = cloth_mesh
+		mesh = world_mesh(_skeleton.global_transform * mesh_transform)
 		linear_stiffness = 1.0
 		simulation_precision = 10
 		for s in cloth_mesh.get_surface_count():
@@ -77,9 +77,35 @@ func _reenter() -> void:
 	var parent := get_parent()
 	var at := get_index()
 	parent.remove_child(self)
-	transform = mesh_transform
+	top_level = true
+	transform = Transform3D.IDENTITY
 	parent.add_child(self)
 	parent.move_child(self, at)
+
+
+# A soft body ignores the scale in its transform (measured: every edge started at 1 / 1.1019 of its rest length under a
+# Character root scaled 1.1019), so its mesh is baked into world space at the character's place and size, and the body
+# itself sits at the identity.
+func world_mesh(to_world: Transform3D) -> ArrayMesh:
+	var out := ArrayMesh.new()
+	var turn := to_world.basis.orthonormalized()
+	for s in cloth_mesh.get_surface_count():
+		var arrays := cloth_mesh.surface_get_arrays(s)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in verts.size():
+			verts[i] = to_world * verts[i]
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		if arrays[Mesh.ARRAY_NORMAL] != null:
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			for i in normals.size():
+				normals[i] = (turn * normals[i]).normalized()
+			arrays[Mesh.ARRAY_NORMAL] = normals
+		arrays[Mesh.ARRAY_TANGENT] = null
+		arrays[Mesh.ARRAY_BONES] = null
+		arrays[Mesh.ARRAY_WEIGHTS] = null
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		out.surface_set_material(s, cloth_mesh.surface_get_material(s))
+	return out
 
 
 func _physics_process(_delta: float) -> void:
