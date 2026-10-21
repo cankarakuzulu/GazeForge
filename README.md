@@ -410,6 +410,18 @@ fixed linear mix of regional targets from -1 to +1: leg and arm length, shoulder
 chest, athletic, curvy, belly, hand and foot size, arm and leg muscle. A target the head's catalog also has drives both
 sides, whichever slider sets it, so the neck stays matched.
 
+**A rig on the body.** `export-glb --body-rig rig.<name>.json --body-weights weights.<name>.json` takes one of
+MakeHuman's standard rigs (game_engine, default, mixamo, cmu_mb, openpose, ...) and its weights and skins the whole
+character: the joints are evaluated on this body as MakeHuman places them (the mean of a helper cube, a vertex or a
+mean of vertices of the base mesh), so they follow the macros, regional sliders and compounds; the body takes
+MakeHuman's weights per vertex, the head the bilinear mix of the weights of the head cage's corners around each vertex,
+and the seam vertices of both meshes share theirs, so the neck stays closed in any pose; the eyes ride the head bone.
+`body.joints` returns the joints alone. Bodies need their helper vertices: import them (`body.import`, `body.targets`)
+with this version. Measured: every joint equals an independent evaluation of MakeHuman's rule to 0.001 mm on all
+eight standard rigs; in Godot 4.7 the rest pose reproduces to 0.07 mm and the seam stays shut (gap 0) with the spine,
+neck and head rotated. Not yet: the face rig together with a body rig, head-region joints that follow the head's own
+sliders and sculpt, humanoid retargeting presets.
+
 In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
 layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
 of both meshes share position, normal (the two sides' average) and skin weights (1.0 on the neck joint), so they stay
