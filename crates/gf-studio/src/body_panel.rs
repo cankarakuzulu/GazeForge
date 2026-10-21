@@ -19,6 +19,7 @@ pub struct BodyUi {
     pub pairs: Vec<Pair>,
     pub compounds: Vec<String>,
     pub genitals: Vec<String>,
+    pub physics: Vec<String>,
     pub wear_key: String,
     pub store_wear: Vec<(String, String)>,
     pub error: Option<String>,
@@ -68,6 +69,7 @@ impl World {
             .collect();
         self.body_ui.compounds = r["compounds"].as_array().into_iter().flatten().filter(|c| c["missing"].as_array().is_none_or(Vec::is_empty)).filter_map(|c| text(&c["name"])).collect();
         self.body_ui.genitals = r["genitals"].as_array().into_iter().flatten().filter_map(text).collect();
+        self.body_ui.physics = r["physics"].as_array().into_iter().flatten().filter_map(text).collect();
         self.body_ui.error = None;
     }
 
@@ -161,20 +163,23 @@ impl World {
         })
     }
 
-    pub fn body_wear_cloth(&mut self, asset: &str, on: bool) -> bool {
-        self.body_edit(|b| {
+    pub fn body_wear_physics(&mut self, asset: &str, kind: &str) -> Result<bool, String> {
+        if !(kind == "none" || gf_core::body_shape::WEARABLE_PHYSICS.contains(&kind)) {
+            return Err(format!("{kind} is not none or one of {:?}", gf_core::body_shape::WEARABLE_PHYSICS));
+        }
+        Ok(self.body_edit(|b| {
             for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
                 if w["asset"] == asset
                     && let Some(o) = w.as_object_mut()
                 {
-                    if on {
-                        o.insert("physics".into(), json!("cloth"));
-                    } else {
+                    if kind == "none" {
                         o.remove("physics");
+                    } else {
+                        o.insert("physics".into(), json!(kind));
                     }
                 }
             }
-        })
+        }))
     }
 
     pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
@@ -244,7 +249,7 @@ impl crate::studio::Studio<'_> {
             let mut compound_commit = None;
             let mut genitals_commit = None;
             let mut wear_commit: Option<(String, Option<bool>)> = None;
-            let mut cloth_commit: Option<(String, bool)> = None;
+            let mut physics_commit: Option<(String, String)> = None;
             if !ui_state.genitals.is_empty() {
                 let current = body["genitals"].as_str().unwrap_or("none").to_string();
                 let label = |k: &str| tr(&format!("body.genitals.{k}")).to_string();
@@ -295,7 +300,7 @@ impl crate::studio::Studio<'_> {
             ui.separator();
             ui.label(egui::RichText::new(tr("body.wearables")).strong());
             let worn: Vec<(String, bool)> = body["wearables"].as_array().into_iter().flatten().filter_map(|w| Some((w["asset"].as_str()?.to_string(), w["hide_body"].as_bool().unwrap_or(true)))).collect();
-            let cloth: Vec<String> = body["wearables"].as_array().into_iter().flatten().filter(|w| w["physics"] == "cloth").filter_map(|w| w["asset"].as_str().map(str::to_string)).collect();
+            let physics_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["physics"].as_str()).unwrap_or("none").to_string();
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -310,10 +315,19 @@ impl crate::studio::Studio<'_> {
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
                         wear_commit = Some((asset.clone(), Some(h)));
                     }
-                    let mut c = cloth.contains(asset);
-                    if ui.checkbox(&mut c, tr("body.wear_cloth")).on_hover_text(tr("body.wear_cloth_tip")).changed() {
-                        cloth_commit = Some((asset.clone(), c));
-                    }
+                    let current = physics_of(asset);
+                    let kind_label = |k: &str| tr(&format!("body.physics.{k}")).to_string();
+                    egui::ComboBox::from_id_salt(("body_wear_physics", asset.as_str()))
+                        .selected_text(kind_label(&current))
+                        .show_ui(ui, |ui| {
+                            for kind in std::iter::once("none").chain(ui_state.physics.iter().map(String::as_str)) {
+                                if ui.selectable_label(current == kind, kind_label(kind)).clicked() && current != kind {
+                                    physics_commit = Some((asset.clone(), kind.to_string()));
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(tr("body.wear_physics_tip"));
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
                     }
@@ -340,8 +354,10 @@ impl crate::studio::Studio<'_> {
             if let Some((name, v)) = compound_commit {
                 let _ = self.world.body_set_compound(&name, v);
             }
-            if let Some((asset, on)) = cloth_commit {
-                self.world.body_wear_cloth(&asset, on);
+            if let Some((asset, kind)) = physics_commit
+                && let Err(e) = self.world.body_wear_physics(&asset, &kind)
+            {
+                self.world.body_ui.error = Some(e);
             }
             if let Some((asset, hide)) = wear_commit {
                 let worn_now = worn.iter().any(|w| w.0 == asset);

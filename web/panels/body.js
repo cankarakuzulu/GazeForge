@@ -48,6 +48,7 @@ function mount(root, api) {
   let pairs = [];
   let compounds = [];
   let genitals = [];
+  let physics = [];
   let storeWear = [];
   let wearKey = '';
   const rows = new Map();
@@ -149,18 +150,19 @@ function mount(root, api) {
         const b = api.body.get();
         if (b) apply(withWear(b, (list) => list.map((x) => (x.asset === w.asset ? { ...x, hide_body: hide.checked } : x))), tr('body.wear_hide_line', { name: wearName(w.asset), state: hide.checked ? '✓' : '✗' }));
       });
-      const cloth = el('input', { type: 'checkbox', 'data-wear-cloth': w.asset, title: tr('body.wear_cloth_tip') });
-      cloth.checked = w.physics === 'cloth';
-      cloth.addEventListener('change', () => {
+      const kind = el('select', { 'data-wear-physics': w.asset, title: tr('body.wear_physics_tip') });
+      kind.replaceChildren(...['none', ...physics].map((k) => el('option', { value: k, text: tr(`body.physics.${k}`) })));
+      kind.value = w.physics || 'none';
+      kind.addEventListener('change', () => {
         const b = api.body.get();
         if (b) {
           apply(withWear(b, (list) => list.map((x) => {
             if (x.asset !== w.asset) return x;
             const next = { ...x };
-            if (cloth.checked) next.physics = 'cloth';
-            else delete next.physics;
+            if (kind.value === 'none') delete next.physics;
+            else next.physics = kind.value;
             return next;
-          })), tr('body.wear_cloth_line', { name: wearName(w.asset), state: cloth.checked ? '✓' : '✗' }));
+          })), tr('body.wear_physics_line', { name: wearName(w.asset), kind: tr(`body.physics.${kind.value}`) }));
         }
       });
       const remove = el('button', { type: 'button', class: 'small', 'data-wear-remove': w.asset, text: tr('body.wear_remove') });
@@ -168,7 +170,10 @@ function mount(root, api) {
         const b = api.body.get();
         if (b) apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), tr('body.wear_remove_line', { name: wearName(w.asset) }));
       });
-      return el('div', { class: 'gf-stitch-row', 'data-wear': w.asset }, [el('span', { text: wearName(w.asset) }), el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [cloth, el('span', { text: tr('body.wear_cloth') })]), remove]);
+      return el('div', { class: 'gf-wear-item', 'data-wear': w.asset }, [
+        el('div', { class: 'gf-wear-name', text: wearName(w.asset), title: wearName(w.asset) }),
+        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), remove]),
+      ]);
     }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
     const free = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable));
     wearAdd.replaceChildren(el('option', { value: '', text: free.length ? tr('body.wear_add') : tr('body.wear_store_empty') }), ...free.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));
@@ -218,6 +223,7 @@ function mount(root, api) {
         pairs = r.pairs || [];
         compounds = (r.compounds || []).filter((c) => !(c.missing && c.missing.length)).map((c) => c.name);
         genitals = r.genitals || [];
+        physics = r.physics || [];
         if (character.store !== wearKey) {
           wearKey = character.store;
           storeWear = ((await api.call('wearable.list', { store: character.store })).wearables) || [];
