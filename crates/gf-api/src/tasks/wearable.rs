@@ -12,6 +12,91 @@ use super::{Options, need, only};
 
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
 pub const IMPORT_KEYS: &[&str] = &["store", "mhclo"];
+pub const ATTACH_KEYS: &[&str] = &["store", "spec", "macro", "obj", "bone", "rig", "name", "diffuse", "frame", "scale"];
+
+pub struct BoneFrame {
+    pub origin: Point,
+    pub axes: [Point; 3],
+    pub length: f64,
+}
+
+pub fn bone_frame(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, rig: &str, bone: &str) -> Result<BoneFrame, String> {
+    let (rig_json, _, _) = crate::body::rig_source(rig, None)?;
+    let def = gf_core::body_rig::RigDef::parse(&rig_json)?;
+    let i = def.bones.iter().position(|b| b.name == bone).ok_or_else(|| format!("{rig} has no bone {bone}"))?;
+    let at = gf_core::body_rig::Resolver::new(&pack.mesh.positions, &pack.source, &pack.helpers);
+    let ends = def.evaluate(&at)?;
+    let control = pack.control_joint(controls);
+    let (h, t) = (control(ends[i].0), control(ends[i].1));
+    let along = sub(t, h);
+    let length = dot(along, along).sqrt();
+    if length < 1e-9 {
+        return Err(format!("bone {bone} has no length on this character"));
+    }
+    let y = along.map(|x| x / length);
+    let forward = [0.0, -1.0, 0.0];
+    let mut x = cross(y, forward);
+    if dot(x, x) < 1e-12 {
+        x = cross(y, [0.0, 0.0, 1.0]);
+    }
+    let x = normalized(x);
+    let z = cross(x, y);
+    Ok(BoneFrame { origin: h, axes: [x, y, z], length })
+}
+
+impl BoneFrame {
+    pub fn to_local(&self, p: Point) -> Point {
+        let d = sub(p, self.origin);
+        self.axes.map(|a| dot(d, a) / self.length)
+    }
+
+    pub fn from_local(&self, l: Point) -> Point {
+        [0, 1, 2].map(|k| self.origin[k] + self.length * (l[0] * self.axes[0][k] + l[1] * self.axes[1][k] + l[2] * self.axes[2][k]))
+    }
+}
+
+pub fn place(item: &gf_io::wearable_store::Wearable, frame: &BaseFrame, pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls) -> Result<Vec<Point>, String> {
+    match &item.manifest.attach {
+        Some(a) => {
+            let mut bf = bone_frame(pack, controls, &a.rig, &a.bone)?;
+            if !a.scale_with_bone {
+                bf.length = a.length_m;
+            }
+            Ok(item.positions.iter().map(|&l| bf.from_local(l)).collect())
+        }
+        None => frame.evaluate(&item.binding),
+    }
+}
+
+pub fn attach(opts: &Options) -> Result<Value, String> {
+    only(opts, "wearable attach", &[ATTACH_KEYS])?;
+    let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
+    let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
+    let source = opts.get("macro").map(|p| ch::read_macro_definition(Path::new(p))).transpose()?;
+    let (_, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref())?;
+    let shaped = crate::body::spec_body(&store, &spec, source.as_ref(), pin.as_ref())?;
+    let rig = opts.get("rig").map(String::as_str).unwrap_or("game_engine");
+    let bone = need(opts, "bone")?;
+    let bf = bone_frame(&shaped.pack, &shaped.controls, rig, bone)?;
+    let obj_path = Path::new(need(opts, "obj")?);
+    let mesh = gf_io::body::read_obj(obj_path, None)?;
+    let world = match opts.get("frame").map(String::as_str).unwrap_or("world") {
+        "world" => true,
+        "canonical" => false,
+        other => return Err(format!("--frame takes world or canonical, got {other}")),
+    };
+    let local: Vec<Point> = mesh.positions.iter().map(|&p| bf.to_local(if world { shaped.similarity.invert(p) } else { p })).collect();
+    let name = opts.get("name").cloned().unwrap_or_else(|| obj_path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "solid".into()));
+    let scale_with_bone = match opts.get("scale").map(String::as_str).unwrap_or("none") {
+        "none" => false,
+        "bone" => true,
+        other => return Err(format!("--scale takes none (the item keeps its size) or bone (it scales with the bone's length), got {other}")),
+    };
+    let a = gf_io::wearable_store::Attach { bone: bone.to_string(), rig: rig.to_string(), length_m: bf.length, scale_with_bone };
+    let (reference, m) = store.import_attached(&name, a, &local, obj_path, opts.get("diffuse").map(Path::new), vec![format!("attached to {bone} ({rig}) of {}", spec.name)])?;
+    Ok(json!({"ok": true, "command": "wearable attach", "wearable": reference, "name": m.name, "vertices": m.vertices, "bone": bone, "rig": rig, "bone_length_m": bf.length,
+              "meaning": "a rigid item: its vertices are kept in the bone's frame on the character it was modelled on (origin at the bone's head, y along the bone, x from the character's forward) and placed by the same frame on any character - at its modelled size, or scaled with the bone's length with --scale bone; skinned wholly to that bone", "scale": if scale_with_bone { "bone" } else { "none" }}))
+}
 pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo", "hide-under", "compare-hidden"];
 const HIDE_REACH_M: f64 = 0.15;
 

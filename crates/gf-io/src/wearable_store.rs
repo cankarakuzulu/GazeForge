@@ -28,6 +28,17 @@ pub struct WearableManifest {
     pub double_sided: bool,
     pub source: BTreeMap<String, String>,
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<Attach>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attach {
+    pub bone: String,
+    pub rig: String,
+    pub length_m: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scale_with_bone: bool,
 }
 
 pub struct Wearable {
@@ -96,6 +107,52 @@ impl Store {
             double_sided,
             source,
             notes,
+            attach: None,
+        };
+        Ok((self.put_manifest("wearables", &manifest)?, manifest))
+    }
+
+    pub fn import_attached(&self, name: &str, attach: Attach, local: &[[f64; 3]], obj_path: &Path, diffuse: Option<&Path>, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
+        let text = std::fs::read_to_string(obj_path).map_err(|e| format!("{}: {e}", obj_path.display()))?;
+        let mut out = String::with_capacity(text.len());
+        let mut k = 0;
+        for line in text.lines() {
+            if line.starts_with("v ") {
+                let p = local.get(k).ok_or_else(|| format!("{} has more vertices than were placed", obj_path.display()))?;
+                out.push_str(&format!("v {} {} {}\n", p[0], p[1], p[2]));
+                k += 1;
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        if k != local.len() {
+            return Err(format!("{} has {k} vertices, {} were placed", obj_path.display(), local.len()));
+        }
+        let mut material = BTreeMap::new();
+        let mut transparent = false;
+        let mut source = BTreeMap::from([("obj".to_string(), obj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())]);
+        if let Some(d) = diffuse {
+            let r = hash::reference(&self.put_file(d)?);
+            let (_, _, rgba) = crate::png::decode_rgba(&self.get_ref(&r)?)?;
+            transparent = rgba.chunks_exact(4).filter(|p| p[3] < 250).count() as f64 > ALPHA_TEXELS * (rgba.len() / 4) as f64;
+            material.insert("diffuse".to_string(), r);
+            source.insert("diffuse".into(), d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+        }
+        let manifest = WearableManifest {
+            format: WEARABLE_FORMAT.into(),
+            name: name.into(),
+            kind: "attach".into(),
+            binding: hash::reference(&self.put(b"")?),
+            mesh: hash::reference(&self.put(out.as_bytes())?),
+            vertices: local.len(),
+            hidden: 0,
+            material,
+            transparent,
+            double_sided: false,
+            source,
+            notes,
+            attach: Some(attach),
         };
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
@@ -128,6 +185,7 @@ impl Store {
             double_sided: false,
             source,
             notes,
+            attach: None,
         };
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
@@ -137,9 +195,13 @@ impl Store {
         if manifest.format != WEARABLE_FORMAT {
             return Err(format!("wearable {reference} has format {:?}", manifest.format));
         }
-        let binding = Binding::parse(&String::from_utf8_lossy(&self.get_ref(&manifest.binding)?)).map_err(|e| format!("wearable {reference}: {e}"))?;
+        let binding = if manifest.attach.is_some() {
+            Binding::default()
+        } else {
+            Binding::parse(&String::from_utf8_lossy(&self.get_ref(&manifest.binding)?)).map_err(|e| format!("wearable {reference}: {e}"))?
+        };
         let mesh = crate::body::parse_obj(&String::from_utf8_lossy(&self.get_ref(&manifest.mesh)?), None).map_err(|e| format!("wearable {reference}: {e}"))?;
-        if mesh.positions.len() != binding.bound.len() {
+        if manifest.attach.is_none() && mesh.positions.len() != binding.bound.len() {
             return Err(format!("wearable {reference}: binding and mesh disagree on the vertex count"));
         }
         Ok(Wearable { manifest, binding, positions: mesh.positions, uvs: mesh.uvs, faces: mesh.faces })

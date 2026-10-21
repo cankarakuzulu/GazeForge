@@ -49,6 +49,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   wearable check --base BASE_OBJ --mhclo A.mhclo,B.mhclo [--macro MACRO_JSON --targets TARGETS_ROOT --sliders JSON|@FILE]
   wearable fit --store DIR --spec FILE [--macro MACRO_JSON] --mhclo A.mhclo,B.mhclo --out LOOKDEV.obj [--hide on|off]
   wearable import --store DIR --mhclo A.mhclo,B.mhclo
+  wearable attach --store DIR --spec FILE [--macro MACRO_JSON] --obj SOLID.obj --bone NAME [--rig game_engine] [--scale none|bone] [--name N] [--diffuse PNG] [--frame world|canonical]
   wearable bind --store DIR --spec FILE [--macro MACRO_JSON] --obj GARMENT.obj --base BASE_OBJ [--name N] [--diffuse PNG] [--frame world|canonical]
   export-glb  --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json] [--sparse auto|always|never]
               [--lod-screen 0.25,0.1] [the options of the spec's placement, e.g. --eyes EYES.json]
@@ -113,6 +114,7 @@ fn run(args: &[String]) -> Result<Value, String> {
             Some("fit") => options(&args[2..]).and_then(|o| wearable::fit(&o)),
             Some("import") => options(&args[2..]).and_then(|o| wearable::import(&o)),
             Some("bind") => options(&args[2..]).and_then(|o| wearable::bind(&o)),
+            Some("attach") => options(&args[2..]).and_then(|o| wearable::attach(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some(group @ ("store" | "character" | "macro")) => match args.get(1) {

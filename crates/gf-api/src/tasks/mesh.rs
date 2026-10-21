@@ -228,11 +228,10 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
     }
     let n = garment.len();
     let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
-    if item.manifest.transparent && let Some(levels) = card_levels(garment, &triangles, &uvs, body_counts) {
+    let cards = if item.manifest.transparent { card_levels(garment, &triangles, &uvs, body_counts) } else { None };
+    if let Some(levels) = cards {
         out.extend(levels);
-        return out;
-    }
-    if body_counts.len() > 1 && body_counts[0] > 0 {
+    } else if body_counts.len() > 1 && body_counts[0] > 0 {
         let mut targets = Vec::new();
         let mut above = n;
         for &b in &body_counts[1..] {
@@ -256,6 +255,11 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
             for level in gf_geom::decimate::decimate_levels(vec![garment.to_vec()], &triangles, &uvs, &settings, None, &targets[1..], None) {
                 out.push((level.kept, level.triangles, level.triangle_uvs));
             }
+        }
+    }
+    if !textured {
+        for level in &mut out {
+            level.2 = vec![[[0.0f32, 0.0]; 3]; level.1.len()];
         }
     }
     out
@@ -333,10 +337,14 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
     Some(out)
 }
 
-fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, material: usize) -> Lod {
+#[allow(clippy::too_many_arguments)]
+fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize) -> Lod {
     let normals = super::wearable::vertex_normals(&positions, triangles);
     let surface = gm::split_seams(triangles, uvs);
     let skin = by_obj.map(|w| {
+        if let Some(j) = joint {
+            return skin_data(&vec![[(j, 1.0)].as_slice(); surface.source.len()]);
+        }
         let none: Vec<(usize, f64)> = Vec::new();
         let infl: Vec<gf_core::body_rig::Influences> = surface
             .source
@@ -1544,7 +1552,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for w in &worn_refs {
             let item = store.load_wearable(&w.asset)?;
-            let garment = frame.evaluate(&item.binding).map_err(|e| format!("wearable {}: {e}", w.asset))?;
+            let garment = super::wearable::place(&item, &frame, pack, controls).map_err(|e| format!("wearable {}: {e}", w.asset))?;
             if w.hide_body {
                 covered.extend(item.binding.hidden.iter().copied());
             }
@@ -1573,12 +1581,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let surface = super::wearable::Surface::new(points, &tris);
                 let mut dressed = std::mem::take(&mut pending);
                 for (item, garment, _, row) in dressed.iter_mut() {
-                    row["pushed"] = if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
+                    row["pushed"] = if item.manifest.attach.is_some() { json!("no: a rigid item rides its bone") } else if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
                 }
                 let reports = {
                     let mut layers: Vec<super::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(item, garment, _, _)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: super::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent, positions: garment })
+                        .map(|(item, garment, _, _)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: super::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: garment })
                         .collect();
                     super::wearable::layer(&mut layers)
                 };
@@ -1659,7 +1667,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 for (item, garment, _, ladder, row) in worn.iter_mut() {
                     let (kept, tris, _) = &ladder[i.min(ladder.len() - 1)];
                     let mut positions: Vec<Point> = kept.iter().map(|&k| garment[k as usize]).collect();
-                    if i > 0 && !item.manifest.transparent {
+                    if i > 0 && !item.manifest.transparent && item.manifest.attach.is_none() {
                         let pushed = super::wearable::push_out(&mut positions, tris, &surface, super::wearable::CLEARANCE_M);
                         if let Some(list) = row["lod_pushed"].as_array_mut() {
                             list.push(pushed["moved"].clone());
@@ -1674,7 +1682,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         .map(|((item, _, _, ladder, _), positions)| super::wearable::Layered {
                             triangles: ladder[i.min(ladder.len() - 1)].1.clone(),
                             depth: super::wearable::depth_of(&item.binding),
-                            opaque: !item.manifest.transparent,
+                            opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
                             positions,
                         })
                         .collect();
@@ -1682,7 +1690,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
                 for ((item, _, slot, ladder, _), positions) in worn.iter().zip(&placed) {
                     let (kept, tris, uvs) = &ladder[i.min(ladder.len() - 1)];
-                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), *slot);
+                    let joint = item.manifest.attach.as_ref().and_then(|a| body_rig.as_ref().and_then(|br| br.rig.bones.iter().position(|b| b.name == a.bone)));
+                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot);
                     wear_slots.push((body_lods.len(), *slot));
                     body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod });
                 }

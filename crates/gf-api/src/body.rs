@@ -629,12 +629,12 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 let mut dressed = Vec::new();
                 for w in &b.wearables {
                     let item = store.load_wearable(&w.asset).map_err(ApiError::not_found)?;
-                    let mut p = frame.evaluate(&item.binding).map_err(ApiError::invalid)?;
+                    let mut p = crate::tasks::wearable::place(&item, &frame, &pack, &controls).map_err(ApiError::invalid)?;
                     if w.hide_body {
                         covered.extend(item.binding.hidden.iter().copied());
                     }
                     let tris = crate::tasks::wearable::triangles_of(&item.faces);
-                    if !item.manifest.transparent {
+                    if !item.manifest.transparent && item.manifest.attach.is_none() {
                         crate::tasks::wearable::push_out(&mut p, &tris, &surface, crate::tasks::wearable::CLEARANCE_M);
                     }
                     dressed.push((w, item, p, tris));
@@ -642,7 +642,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 {
                     let mut layers: Vec<crate::tasks::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(_, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent, positions: p })
+                        .map(|(_, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: p })
                         .collect();
                     crate::tasks::wearable::layer(&mut layers);
                 }
