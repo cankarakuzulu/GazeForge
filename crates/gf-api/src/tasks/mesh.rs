@@ -1352,7 +1352,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             let seam = gb::head_seam(pack, &game, &level.triangles, &dense_of)?;
             let body_lod = i.min(pack.lod_count() - 1);
             let st = gb::stitch_lod(pack, body_lod, &seam, controls)?;
-            let (report, failed) = gb::gates(&game, &level.triangles, &seam, &st, &limits);
+            let (report, failed) = gb::gates(&game, &level.triangles, &seam, &st, &gb::Limits { relative_dihedral: i > 0, ..limits });
             failures.extend(failed.into_iter().map(|f| format!("{}: {f}", level.name)));
             let (shared, normals) = gb::two_sided_normals(&game, &level.triangles, &st);
             seam_normals.push(shared.into_iter().collect());

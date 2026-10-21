@@ -82,7 +82,7 @@ fn lods() -> Value {
         "summary": "More or different coarser levels of detail for a game base already in the store: the finest level stays exactly as it is, so characters made on it keep their head.",
         "steps": [
             {"id": "derive", "title": "Levels", "command": "base.derive_lods",
-             "help": "List the coarser levels as vertex counts, strictly decreasing and below the finest level (for example 10000,5000,2500,1200,500). Each is decimated from the finest, carrying the dense shapes; give the importance weights the base was built with, or the coarse levels are decimated without them. The new game base goes into the store beside the old one. Point a character's base.game_base at it, then import a body with as many levels of detail.",
+             "help": "List the coarser levels as vertex counts, strictly decreasing and below the finest level (for example 10000,5000,2500,1200,800; 800 is the recommended floor, below it the neck seam has too few points for a body). Each is decimated from the finest, carrying the dense shapes; give the importance weights the base was built with, or the coarse levels are decimated without them. The new game base goes into the store beside the old one. Point a character's base.game_base at it, then import a body with as many levels of detail.",
              "fields": [
                  {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "game", "label": "Game base", "bind": "$run.game", "common": true},
