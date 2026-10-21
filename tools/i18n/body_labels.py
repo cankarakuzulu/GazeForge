@@ -21,7 +21,12 @@ COMPOUND = {"leg_length": "Leg length", "arm_length": "Arm length", "shoulder_wi
             "hand_size": "Hand size", "foot_size": "Foot size", "arm_muscle": "Arm muscle", "leg_muscle": "Leg muscle"}
 
 
+LABELS = {"genitals/penis-testicles": "Testicle size", "genitals/penis-circ": "Penis girth"}
+
+
 def label(slider_id):
+    if slider_id in LABELS:
+        return LABELS[slider_id]
     name = slider_id.split("/", 1)[1]
     words = [WORDS.get(w, w) for w in re.split(r"-", name)]
     text = " ".join(w for w in words if w).strip()
