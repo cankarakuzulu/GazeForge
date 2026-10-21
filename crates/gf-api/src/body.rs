@@ -206,7 +206,8 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let mut pairs: BTreeMap<String, Value> = BTreeMap::new();
     let mut shared = 0;
     for (id, e) in &targets.targets {
-        if e.family == "macrodetails" || e.family == "breast" || (e.moved == 0 && e.family != "genitals") {
+        let macro_breast = e.family == "breast" && (id.starts_with("breast/female-") || id.starts_with("breast/male-"));
+        if e.family == "macrodetails" || macro_breast || (e.moved == 0 && e.family != "genitals") {
             continue;
         }
         if head.contains(id) {

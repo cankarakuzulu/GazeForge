@@ -21,7 +21,8 @@ COMPOUND = {"leg_length": "Leg length", "arm_length": "Arm length", "shoulder_wi
             "hand_size": "Hand size", "foot_size": "Foot size", "arm_muscle": "Arm muscle", "leg_muscle": "Leg muscle"}
 
 
-LABELS = {"genitals/penis-testicles": "Testicle size", "genitals/penis-circ": "Penis girth"}
+LABELS = {"genitals/penis-testicles": "Testicle size", "genitals/penis-circ": "Penis girth", "breast/breast-dist": "Breast spacing",
+          "breast/breast-point": "Breast pointedness", "breast/breast-volume-vert-up": "Breast volume upper", "breast/breast-volume-vert-down": "Breast volume lower"}
 
 
 def label(slider_id):
