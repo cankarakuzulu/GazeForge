@@ -1621,7 +1621,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             if w.physics == "springbone" && item.manifest.attach.is_some() {
                 return Err(format!("wearable {} is a rigid item: it cannot hang in spring-bone chains", item.manifest.name));
             }
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer,
+                             "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
         let mut rows = Vec::new();
@@ -1649,7 +1650,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let reports = {
                     let mut layers: Vec<super::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(item, garment, _, _)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: super::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: garment })
+                        .map(|(item, garment, _, row)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: row["depth"].as_f64().unwrap_or(50.0), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: garment })
                         .collect();
                     super::wearable::layer(&mut layers)
                 };
@@ -1758,9 +1759,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     let mut layers: Vec<super::wearable::Layered> = worn
                         .iter()
                         .zip(placed.iter_mut())
-                        .map(|((item, _, _, ladder, _), positions)| super::wearable::Layered {
+                        .map(|((item, _, _, ladder, row), positions)| super::wearable::Layered {
                             triangles: ladder[i.min(ladder.len() - 1)].1.clone(),
-                            depth: super::wearable::depth_of(&item.binding),
+                            depth: row["depth"].as_f64().unwrap_or(50.0),
                             opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
                             positions,
                         })

@@ -731,7 +731,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 {
                     let mut layers: Vec<crate::tasks::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(_, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: p })
+                        .map(|(w, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::layer_depth(&item.binding, w.layer), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: p })
                         .collect();
                     crate::tasks::wearable::layer(&mut layers);
                 }

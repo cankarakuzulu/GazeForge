@@ -71,6 +71,8 @@ pub struct WearableRef {
     pub hide_body: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub physics: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<f64>,
 }
 
 pub const WEARABLE_PHYSICS: &[&str] = &["cloth", "springbone"];
@@ -120,6 +122,11 @@ impl BodySpec {
             }
             if !(w.physics.is_empty() || w.physics == "none" || WEARABLE_PHYSICS.contains(&w.physics.as_str())) {
                 out.push(format!("body.wearables[{i}].physics {:?} is not none or one of {WEARABLE_PHYSICS:?}", w.physics));
+            }
+            if let Some(l) = w.layer
+                && !(l.is_finite() && (0.0..=1000.0).contains(&l))
+            {
+                out.push(format!("body.wearables[{i}].layer {l} is not a number from 0 to 1000"));
             }
             if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
                 out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
@@ -281,7 +288,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new() };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -294,6 +301,13 @@ mod tests {
         let shaken = BodySpec { wearables: vec![WearableRef { physics: "jelly".into(), ..worn(&r) }], ..ok.clone() };
         assert!(shaken.problems().iter().any(|x| x.contains("physics")));
         assert!(BodySpec { wearables: vec![WearableRef { physics: "cloth".into(), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
+        assert!(read.wearables[0].layer.is_none(), "no layer means the item's own z_depth");
+        assert!(BodySpec { wearables: vec![WearableRef { layer: Some(7.5), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
+        for bad in [-1.0, 1000.5, f64::NAN] {
+            assert!(BodySpec { wearables: vec![WearableRef { layer: Some(bad), ..worn(&r) }], ..ok.clone() }.problems().iter().any(|x| x.contains("layer")), "{bad}");
+        }
+        let layered = serde_json::to_string(&WearableRef { layer: Some(7.5), ..worn(&r) }).unwrap();
+        assert!(layered.contains("\"layer\":7.5") && !serde_json::to_string(&worn(&r)).unwrap().contains("layer"));
     }
 
     #[test]

@@ -809,9 +809,10 @@ impl Offscreen {
                     "unwear" => w.body_unwear(text("asset").ok_or("body unwear needs asset")?),
                     "hide" => w.body_wear_hide(text("asset").ok_or("body hide needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "physics" => w.body_wear_physics(text("asset").ok_or("body physics needs asset")?, text("kind").ok_or("body physics needs kind (none, cloth or springbone)")?)?,
+                    "layer" => w.body_wear_layer(text("asset").ok_or("body layer needs asset")?, num("value"))?,
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
@@ -820,7 +821,7 @@ impl Offscreen {
                 let body = w.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
                 let values: serde_json::Map<String, Value> =
                     w.body_ui.pairs.iter().map(|p| (p.id.clone(), json!(crate::body_panel::pair_value(&body, p)))).filter(|(_, v)| v.as_f64() != Some(0.0)).collect();
-                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "genitals": w.body_ui.genitals, "store_wearables": w.body_ui.store_wear.iter().map(|x| json!({"wearable": x.0, "name": x.1})).collect::<Vec<_>>(), "values": values,
+                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "genitals": w.body_ui.genitals, "store_wearables": w.body_ui.store_wear.iter().map(|x| json!({"wearable": x.0, "name": x.1, "z_depth": x.2})).collect::<Vec<_>>(), "values": values,
                        "settle_error": w.settle_error})
             }
             "stitch" => {

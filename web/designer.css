@@ -86,6 +86,7 @@ input[type=range] { accent-color: var(--accent); }
 .gf-wear-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gf-wear-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .gf-wear-controls label { display: flex; align-items: center; gap: 4px; }
+.gf-wear-layer { width: 4.5em; }
 #macro-list .note { color: var(--muted); padding: 4px 0; }
 h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin: 16px 0 6px; }
 label.line { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; margin: 3px 0; }

@@ -89,6 +89,13 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **A per-character layer order for wearables.** A worn item's `layer` (in the spec's `body.wearables[]`, 0 to 1000)
+  replaces MakeHuman's `z_depth` for that item: lower sits closer to the skin, and each opaque item is pushed out over
+  every opaque item with a lower layer. Without it the item's own `z_depth` decides as before. Both clients have an
+  "Own layer" box and a number on each worn item's row (the studio and the browser, in the one undo history);
+  `wearable.list` reports each item's `z_depth`, and the sidecar each worn item's layer and the depth used. A layer can
+  ask for what the meshes cannot do: low shoes ordered over a trouser leg swell by up to 83 mm and the hem shows
+  through, so check the look after reordering.
 - **Stitch gates on coarse levels of detail.** On LOD1 and coarser, the seam's normal-continuity limit is the larger of
   40 degrees and the sharpest angle inside either side at that level (the body's blend band, the head's seam row),
   capped at 60 degrees so that one sharp edge cannot open the gate; LOD0 and the stitch preview keep 40 degrees. The

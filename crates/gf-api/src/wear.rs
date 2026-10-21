@@ -13,7 +13,7 @@ pub fn list_input() -> Value {
 }
 
 pub fn list_output() -> Value {
-    shape(json!({"wearables": {"type": "array", "description": "per wearable: reference, name, kind, vertices, the base vertices it hides, transparent, its material maps"}}))
+    shape(json!({"wearables": {"type": "array", "description": "per wearable: reference, name, kind, vertices, the base vertices it hides, transparent, its material maps, z_depth (the layer it takes unless the spec's wearables[].layer sets one: lower is closer to the skin)"}}))
 }
 
 pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -28,8 +28,9 @@ pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         for hex in names {
             let reference = format!("sha256:{hex}");
             let m: WearableManifest = store.get_manifest("wearables", &reference).map_err(ApiError::internal)?;
+            let z_depth = store.load_wearable(&reference).map(|w| crate::tasks::wearable::depth_of(&w.binding)).map_err(ApiError::internal)?;
             rows.push(json!({"wearable": reference, "name": m.name, "kind": m.kind, "vertices": m.vertices, "hides_base_vertices": m.hidden,
-                             "transparent": m.transparent, "material": m.material.keys().collect::<Vec<_>>()}));
+                             "transparent": m.transparent, "material": m.material.keys().collect::<Vec<_>>(), "z_depth": z_depth}));
         }
         rows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     }

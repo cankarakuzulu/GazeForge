@@ -728,6 +728,10 @@ pub fn depth_of(binding: &Binding) -> f64 {
     binding.keys.get("z_depth").and_then(|z| z.parse().ok()).unwrap_or(50.0)
 }
 
+pub fn layer_depth(binding: &Binding, layer: Option<f64>) -> f64 {
+    layer.unwrap_or_else(|| depth_of(binding))
+}
+
 pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
     let mut order: Vec<usize> = (0..garments.len()).collect();
     order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));

@@ -21,7 +21,7 @@ pub struct BodyUi {
     pub genitals: Vec<String>,
     pub physics: Vec<String>,
     pub wear_key: String,
-    pub store_wear: Vec<(String, String)>,
+    pub store_wear: Vec<(String, String, f64)>,
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
@@ -137,7 +137,7 @@ impl World {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|w| Some((w["wearable"].as_str()?.to_string(), w["name"].as_str().unwrap_or("").to_string())))
+            .filter_map(|w| Some((w["wearable"].as_str()?.to_string(), w["name"].as_str().unwrap_or("").to_string(), w["z_depth"].as_f64().unwrap_or(50.0))))
             .collect();
     }
 
@@ -177,6 +177,26 @@ impl World {
                     } else {
                         o.insert("physics".into(), json!(kind));
                     }
+                }
+            }
+        }))
+    }
+
+    pub fn body_wear_layer(&mut self, asset: &str, layer: Option<f64>) -> Result<bool, String> {
+        if let Some(l) = layer
+            && !(l.is_finite() && (0.0..=1000.0).contains(&l))
+        {
+            return Err(format!("layer {l} is not a number from 0 to 1000"));
+        }
+        Ok(self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    match layer {
+                        Some(l) => o.insert("layer".into(), json!(l)),
+                        None => o.remove("layer"),
+                    };
                 }
             }
         }))
@@ -301,6 +321,8 @@ impl crate::studio::Studio<'_> {
             ui.label(egui::RichText::new(tr("body.wearables")).strong());
             let worn: Vec<(String, bool)> = body["wearables"].as_array().into_iter().flatten().filter_map(|w| Some((w["asset"].as_str()?.to_string(), w["hide_body"].as_bool().unwrap_or(true)))).collect();
             let physics_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["physics"].as_str()).unwrap_or("none").to_string();
+            let layer_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["layer"].as_f64());
+            let mut layer_commit: Option<(String, Option<f64>)> = None;
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -310,7 +332,7 @@ impl crate::studio::Studio<'_> {
             }
             for (asset, hide) in &worn {
                 ui.label(label(asset));
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let mut h = *hide;
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
                         wear_commit = Some((asset.clone(), Some(h)));
@@ -328,12 +350,35 @@ impl crate::studio::Studio<'_> {
                         })
                         .response
                         .on_hover_text(tr("body.wear_physics_tip"));
+                    let own = layer_of(asset);
+                    let z = ui_state.store_wear.iter().find(|w| w.0 == *asset).map_or(50.0, |w| w.2);
+                    let mut on = own.is_some();
+                    if ui.checkbox(&mut on, tr("body.wear_layer")).on_hover_text(tr("body.wear_layer_tip")).changed() {
+                        layer_commit = Some((asset.clone(), on.then_some(z)));
+                    }
+                    match own {
+                        Some(l) => {
+                            let key = format!("l:{asset}");
+                            let mut v = ui_state.live.get(&key).copied().unwrap_or(l);
+                            let r = ui.add(egui::DragValue::new(&mut v).range(0.0..=1000.0).speed(0.5)).on_hover_text(tr("body.wear_layer_value_tip"));
+                            if r.changed() {
+                                ui_state.live.insert(key.clone(), v);
+                            }
+                            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus())) && ui_state.live.remove(&key).is_some() {
+                                layer_commit = Some((asset.clone(), Some(v)));
+                            }
+                        }
+                        None => {
+                            ui.add(egui::Label::new(egui::RichText::new(trf("body.wear_layer_auto", &[("z", &z)])).weak()).wrap_mode(egui::TextWrapMode::Extend))
+                                .on_hover_text(tr("body.wear_layer_value_tip"));
+                        }
+                    }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
                     }
                 });
             }
-            let free: Vec<&(String, String)> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.0)).collect();
+            let free: Vec<&(String, String, f64)> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.0)).collect();
             if free.is_empty() {
                 ui.label(egui::RichText::new(tr("body.wear_store_empty")).weak());
             } else {
@@ -356,6 +401,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((asset, kind)) = physics_commit
                 && let Err(e) = self.world.body_wear_physics(&asset, &kind)
+            {
+                self.world.body_ui.error = Some(e);
+            }
+            if let Some((asset, layer)) = layer_commit
+                && let Err(e) = self.world.body_wear_layer(&asset, layer)
             {
                 self.world.body_ui.error = Some(e);
             }
