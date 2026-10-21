@@ -88,6 +88,207 @@ pub fn capsules(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Contro
     Ok(out)
 }
 
+pub const CHAIN_SEGMENTS: usize = 4;
+const CHAIN_VERTICES: usize = 300;
+const CHAIN_MAX: usize = 12;
+const CHAIN_MIN_REACH_M: f64 = 0.03;
+const CHAIN_MIN_SEGMENT_M: f64 = 0.002;
+const CHAIN_MERGE_M: f64 = 0.03;
+const PINNED: f32 = 0.99;
+const SEED_PIN: f32 = 0.5;
+
+pub struct Chain {
+    pub root_vertices: Vec<u32>,
+    pub joints: Vec<Point>,
+}
+
+pub struct Chains {
+    pub chains: Vec<Chain>,
+    pub along: Vec<Option<(usize, f64)>>,
+}
+
+pub fn spring_seeds(garment: &[Point], pin: &[f32], dominant: &[usize]) -> (Vec<bool>, Option<usize>) {
+    let mut pinned: Vec<usize> = (0..garment.len()).filter(|&v| pin[v] >= PINNED).collect();
+    pinned.sort_by(|&a, &b| garment[b][2].total_cmp(&garment[a][2]).then(a.cmp(&b)));
+    let mut votes: HashMap<usize, usize> = HashMap::new();
+    for &v in &pinned[..pinned.len().div_ceil(10)] {
+        *votes.entry(dominant[v]).or_insert(0) += 1;
+    }
+    let anchor = votes.into_iter().max_by_key(|&(bone, n)| (n, std::cmp::Reverse(bone))).map(|(bone, _)| bone);
+    ((0..garment.len()).map(|v| pin[v] >= SEED_PIN && Some(dominant[v]) == anchor).collect(), anchor)
+}
+
+pub fn build_chains(garment: &[Point], triangles: &[[u32; 3]], seed: &[bool]) -> Chains {
+    let n = garment.len();
+    let mut adj: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n];
+    for t in triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            let d = dot(sub(garment[a as usize], garment[b as usize]), sub(garment[a as usize], garment[b as usize])).sqrt();
+            adj[a as usize].push((b, d));
+            adj[b as usize].push((a, d));
+        }
+    }
+    let mut dist = vec![f64::INFINITY; n];
+    let mut root = vec![u32::MAX; n];
+    let mut heap = std::collections::BinaryHeap::new();
+    for v in 0..n {
+        if seed[v] {
+            dist[v] = 0.0;
+            root[v] = v as u32;
+            heap.push((std::cmp::Reverse(0u64), v as u32));
+        }
+    }
+    for bridge in [false, true] {
+        if bridge {
+            let reached: Vec<usize> = (0..n).filter(|&v| dist[v].is_finite()).collect();
+            if reached.is_empty() {
+                break;
+            }
+            let unreached: Vec<usize> = (0..n).filter(|&v| !dist[v].is_finite()).collect();
+            for v in unreached {
+                let gap = |u: usize| dot(sub(garment[v], garment[u]), sub(garment[v], garment[u])).sqrt();
+                if let Some(u) = reached.iter().copied().min_by(|&a, &b| gap(a).total_cmp(&gap(b))) {
+                    dist[v] = dist[u] + gap(u);
+                    root[v] = root[u];
+                    heap.push((std::cmp::Reverse(dist[v].to_bits()), v as u32));
+                }
+            }
+        }
+        while let Some((std::cmp::Reverse(dk), v)) = heap.pop() {
+            let d = f64::from_bits(dk);
+            if d > dist[v as usize] {
+                continue;
+            }
+            for &(u, w) in &adj[v as usize] {
+                let nd = d + w;
+                if nd < dist[u as usize] {
+                    dist[u as usize] = nd;
+                    root[u as usize] = root[v as usize];
+                    heap.push((std::cmp::Reverse(nd.to_bits()), u));
+                }
+            }
+        }
+    }
+    let free: Vec<usize> = (0..n).filter(|&v| !seed[v] && dist[v].is_finite()).collect();
+    let mut along = vec![None; n];
+    if free.is_empty() {
+        return Chains { chains: Vec::new(), along };
+    }
+    let k = (free.len() / CHAIN_VERTICES).clamp(1, CHAIN_MAX);
+    let anchor = |v: usize| garment[root[v] as usize];
+    let mut centres: Vec<Point> = vec![anchor(free[0])];
+    while centres.len() < k {
+        let far = free.iter().copied().max_by(|&a, &b| {
+            let da = centres.iter().map(|c| dot(sub(anchor(a), *c), sub(anchor(a), *c))).fold(f64::INFINITY, f64::min);
+            let db = centres.iter().map(|c| dot(sub(anchor(b), *c), sub(anchor(b), *c))).fold(f64::INFINITY, f64::min);
+            da.total_cmp(&db)
+        });
+        centres.push(anchor(far.unwrap_or(free[0])));
+    }
+    let mut label = vec![0usize; n];
+    for _ in 0..12 {
+        for &v in &free {
+            label[v] = (0..k).min_by(|&a, &b| dot(sub(anchor(v), centres[a]), sub(anchor(v), centres[a])).total_cmp(&dot(sub(anchor(v), centres[b]), sub(anchor(v), centres[b])))).unwrap_or(0);
+        }
+        let mut sum = vec![([0.0; 3], 0usize); k];
+        for &v in &free {
+            let (acc, count) = &mut sum[label[v]];
+            for (s, a) in acc.iter_mut().zip(anchor(v)) {
+                *s += a;
+            }
+            *count += 1;
+        }
+        for c in 0..k {
+            if sum[c].1 > 0 {
+                centres[c] = sum[c].0.map(|x| x / sum[c].1 as f64);
+            }
+        }
+    }
+    let mut chains = Vec::new();
+    let mut tracks: Vec<Option<Vec<Point>>> = vec![None; k];
+    for (pass, c) in (0..2).flat_map(|pass| (0..k).map(move |c| (pass, c))) {
+        if pass == 1 && c == 0 {
+            let mut parent: Vec<usize> = (0..k).collect();
+            fn find(parent: &mut [usize], x: usize) -> usize {
+                let mut r = x;
+                while parent[r] != r {
+                    r = parent[r];
+                }
+                parent[x] = r;
+                r
+            }
+            for a in 0..k {
+                for b in a + 1..k {
+                    if let (Some(ta), Some(tb)) = (&tracks[a], &tracks[b]) {
+                        let to_line = |p: Point, line: &[Point]| {
+                            line.windows(2)
+                                .map(|w| {
+                                    let (d, e) = (sub(w[1], w[0]), sub(p, w[0]));
+                                    let s = (dot(e, d) / dot(d, d).max(1e-12)).clamp(0.0, 1.0);
+                                    let r = sub(e, d.map(|x| x * s));
+                                    dot(r, r).sqrt()
+                                })
+                                .fold(f64::INFINITY, f64::min)
+                        };
+                        let along = |x: &[Point], y: &[Point]| x.iter().map(|&p| to_line(p, y)).sum::<f64>() / x.len() as f64;
+                        if along(ta, tb).min(along(tb, ta)) < CHAIN_MERGE_M {
+                            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                            parent[ra.max(rb)] = ra.min(rb);
+                        }
+                    }
+                }
+            }
+            for &v in &free {
+                label[v] = find(&mut parent, label[v]);
+            }
+        }
+        let mut members: Vec<usize> = free.iter().copied().filter(|&v| label[v] == c).collect();
+        let reach = members.iter().map(|&v| dist[v]).fold(0.0f64, f64::max);
+        if reach < CHAIN_MIN_REACH_M || members.len() < CHAIN_SEGMENTS {
+            continue;
+        }
+        members.sort_by(|&a, &b| dist[a].total_cmp(&dist[b]).then(a.cmp(&b)));
+        let mut roots: Vec<u32> = members.iter().map(|&v| root[v]).collect();
+        roots.sort_unstable();
+        roots.dedup();
+        let mean = |vs: &mut dyn Iterator<Item = Point>| -> Option<Point> {
+            let (mut acc, mut cnt) = ([0.0; 3], 0usize);
+            for p in vs {
+                for i in 0..3 {
+                    acc[i] += p[i];
+                }
+                cnt += 1;
+            }
+            (cnt > 0).then(|| acc.map(|x| x / cnt as f64))
+        };
+        let base = mean(&mut roots.iter().map(|&r| garment[r as usize])).unwrap_or(garment[members[0]]);
+        let mut joints = vec![base];
+        let mut station = vec![0.0];
+        for seg in 1..=CHAIN_SEGMENTS {
+            let ring = &members[(seg - 1) * members.len() / CHAIN_SEGMENTS..seg * members.len() / CHAIN_SEGMENTS];
+            joints.push(mean(&mut ring.iter().map(|&v| garment[v])).unwrap_or(base));
+            station.push(ring.iter().map(|&v| dist[v]).sum::<f64>() / ring.len() as f64);
+        }
+        let short = joints.windows(2).any(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt() < CHAIN_MIN_SEGMENT_M);
+        if short || station.windows(2).any(|w| w[1] <= w[0]) {
+            continue;
+        }
+        if pass == 0 {
+            tracks[c] = Some(joints);
+            continue;
+        }
+        let index = chains.len();
+        for &v in &members {
+            let seg = (1..=CHAIN_SEGMENTS).find(|&s| dist[v] < station[s]).unwrap_or(CHAIN_SEGMENTS);
+            let f = ((dist[v] - station[seg - 1]) / (station[seg] - station[seg - 1])).clamp(0.0, 1.0);
+            along[v] = Some((index, (seg - 1) as f64 + f));
+        }
+        chains.push(Chain { root_vertices: roots, joints });
+    }
+    Chains { chains, along }
+}
+
 pub struct BoneFrame {
     pub origin: Point,
     pub axes: [Point; 3],
@@ -786,6 +987,100 @@ mod tests {
             assert!(w <= last + 1e-7, "falls monotonically");
             last = w;
         }
+    }
+
+    #[test]
+    fn a_hanging_strip_becomes_one_chain_from_its_pinned_top() {
+        let mut garment = Vec::new();
+        for row in 0..21 {
+            for col in 0..3 {
+                garment.push([col as f64 * 0.01, 0.0, -(row as f64) * 0.01]);
+            }
+        }
+        let mut tris = Vec::new();
+        for row in 0..20u32 {
+            for col in 0..2u32 {
+                let a = row * 3 + col;
+                tris.push([a, a + 1, a + 3]);
+                tris.push([a + 1, a + 4, a + 3]);
+            }
+        }
+        let top: Vec<bool> = (0..garment.len()).map(|v| v < 3).collect();
+        let c = build_chains(&garment, &tris, &top);
+        assert_eq!(c.chains.len(), 1);
+        assert_eq!(c.chains[0].joints.len(), CHAIN_SEGMENTS + 1);
+        let z: Vec<f64> = c.chains[0].joints.iter().map(|j| j[2]).collect();
+        assert!(z.windows(2).all(|w| w[1] < w[0]), "joints run down the strip: {z:?}");
+        assert!(c.along[..3].iter().all(Option::is_none), "pinned vertices are not on the chain");
+        let (chain, t) = c.along[60].unwrap();
+        assert_eq!(chain, 0);
+        assert!((t - CHAIN_SEGMENTS as f64).abs() < 1e-9, "the bottom row is at the chain's tip");
+        assert!(build_chains(&garment, &tris, &vec![true; garment.len()]).chains.is_empty(), "nothing free, no chains");
+        let stub: Vec<bool> = (0..garment.len()).map(|v| v < 60).collect();
+        let s = build_chains(&garment, &tris, &stub);
+        assert!(s.chains.is_empty() && s.along.iter().all(Option::is_none), "a 1 cm flap is too short to swing");
+    }
+
+    #[test]
+    fn only_the_anchor_bone_roots_a_chain_not_what_the_hair_rests_on() {
+        let garment: Vec<Point> = (0..40).map(|v| [0.0, 0.0, -(v as f64) * 0.01]).collect();
+        let pin: Vec<f32> = (0..40).map(|v| if v < 4 || v >= 30 { 1.0 } else { 0.0 }).collect();
+        let dominant: Vec<usize> = (0..40).map(|v| if v < 10 { 7 } else { 3 }).collect();
+        let (seed, anchor) = spring_seeds(&garment, &pin, &dominant);
+        assert_eq!(anchor, Some(7));
+        assert!(seed[..4].iter().all(|&s| s), "the scalp roots the chain");
+        assert!(seed[4..].iter().all(|&s| !s), "the hair lying on the back is free, not a root");
+        let (none, no_anchor) = spring_seeds(&garment, &[0.0; 40], &dominant);
+        assert!(none.iter().all(|&s| !s) && no_anchor.is_none(), "nothing pinned, nothing rooted");
+    }
+
+    #[test]
+    fn strands_hanging_side_by_side_become_one_chain_not_interleaved_ones() {
+        let mut garment = Vec::new();
+        for row in 0..401 {
+            for col in 0..3 {
+                garment.push([col as f64 * 0.01, 0.0, -(row as f64) * 0.001]);
+            }
+        }
+        let mut tris = Vec::new();
+        for row in 0..400u32 {
+            for col in 0..2u32 {
+                let a = row * 3 + col;
+                tris.push([a, a + 1, a + 3]);
+                tris.push([a + 1, a + 4, a + 3]);
+            }
+        }
+        let top: Vec<bool> = (0..garment.len()).map(|v| v < 3).collect();
+        let c = build_chains(&garment, &tris, &top);
+        assert_eq!(c.chains.len(), 1, "one tail, one chain");
+        assert!(c.along[3..].iter().all(|a| a.is_some_and(|(chain, _)| chain == 0)));
+    }
+
+    #[test]
+    fn a_detached_card_joins_the_chain_it_hangs_beside() {
+        let mut garment = Vec::new();
+        for strip in 0..2 {
+            for row in 0..21 {
+                for col in 0..3 {
+                    garment.push([col as f64 * 0.01 + strip as f64 * 0.005, 0.002 * strip as f64, -(row as f64) * 0.01]);
+                }
+            }
+        }
+        let mut tris = Vec::new();
+        for strip in 0..2u32 {
+            for row in 0..20u32 {
+                for col in 0..2u32 {
+                    let a = strip * 63 + row * 3 + col;
+                    tris.push([a, a + 1, a + 3]);
+                    tris.push([a + 1, a + 4, a + 3]);
+                }
+            }
+        }
+        let top: Vec<bool> = (0..garment.len()).map(|v| v < 3).collect();
+        let c = build_chains(&garment, &tris, &top);
+        assert_eq!(c.chains.len(), 1);
+        let t: Vec<f64> = (63..126).step_by(3).map(|v| c.along[v].expect("the detached card is on the chain").1).collect();
+        assert!(t.windows(2).all(|w| w[1] >= w[0]) && t[t.len() - 1] > t[0] + 2.0, "it bends further down the chain the lower it hangs: {t:?}");
     }
 
     #[test]

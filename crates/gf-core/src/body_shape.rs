@@ -73,7 +73,7 @@ pub struct WearableRef {
     pub physics: String,
 }
 
-pub const WEARABLE_PHYSICS: &[&str] = &["cloth"];
+pub const WEARABLE_PHYSICS: &[&str] = &["cloth", "springbone"];
 
 fn yes() -> bool {
     true

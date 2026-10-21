@@ -210,6 +210,7 @@ fn wearable_material(store: &Store, item: &gf_io::wearable_store::Wearable) -> R
 const WEARABLE_MIN_VERTICES: usize = 32;
 
 type GarmentLevel = (Vec<u32>, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
+type Worn = (gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value);
 
 fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize]) -> Vec<GarmentLevel> {
     let mut triangles = Vec::new();
@@ -339,12 +340,30 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize, pin: Option<&[f32]>) -> Lod {
-    let normals = super::wearable::vertex_normals(&positions, triangles);
+fn binding_influences(item: &gf_io::wearable_store::Wearable, by_obj: &HashMap<u32, gf_core::body_rig::Influences>) -> Vec<gf_core::body_rig::Influences> {
+    let none: Vec<(usize, f64)> = Vec::new();
+    item.binding
+        .bound
+        .iter()
+        .map(|b| {
+            let parts: Vec<(f64, &[(usize, f64)])> = (0..3).map(|k| (b.weights[k], by_obj.get(&b.vertices[k]).map(Vec::as_slice).unwrap_or(&none))).collect();
+            let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+            if x.is_empty() { vec![(0, 1.0)] } else { x }
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize, pin: Option<&[f32]>, override_skin: Option<&[gf_core::body_rig::Influences]>) -> Lod {
+    let normals = super::wearable::vertex_normals(positions, triangles);
     let surface = gm::split_seams(triangles, uvs);
     let skin = by_obj.map(|w| {
         if let Some(j) = joint {
             return skin_data(&vec![[(j, 1.0)].as_slice(); surface.source.len()]);
+        }
+        if let Some(o) = override_skin {
+            let infl: Vec<&[(usize, f64)]> = surface.source.iter().map(|&v| o[kept[v as usize] as usize].as_slice()).collect();
+            return skin_data(&infl);
         }
         let none: Vec<(usize, f64)> = Vec::new();
         let infl: Vec<gf_core::body_rig::Influences> = surface
@@ -1130,7 +1149,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         _ => None,
     };
-    let body_gltf_rig = body_rig.as_ref().map(|br| gltf::Rig {
+    let mut body_gltf_rig = body_rig.as_ref().map(|br| gltf::Rig {
         names: br.rig.bones.iter().map(|b| b.name.clone()).collect(),
         parents: br.rig.bones.iter().map(|b| b.parent.as_ref().and_then(|p| br.rig.bones.iter().position(|q| &q.name == p))).collect(),
         global: br.heads.iter().map(|h| gm::to_gltf(*h)).collect(),
@@ -1550,8 +1569,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         let frame = super::wearable::BaseFrame::new(pack, controls, pack_manifest, &positions);
         let mut pending: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Value)> = Vec::new();
-        let mut worn: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value)> = Vec::new();
+        let mut worn: Vec<Worn> = Vec::new();
         let mut cloth_nodes: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        let mut spring_skin: Vec<Option<Vec<gf_core::body_rig::Influences>>> = Vec::new();
+        let mut springs: Vec<Value> = Vec::new();
         let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
         let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for w in &worn_refs {
@@ -1562,8 +1583,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             let slot = wear_materials.len();
             wear_materials.push(wearable_material(&store, &item)?);
-            if w.physics == "cloth" && body_rig.is_none() {
-                return Err(format!("wearable {} asks for cloth physics: export it with --body-rig (the colliders and the pinning ride the skeleton)", item.manifest.name));
+            if !w.physics.is_empty() && w.physics != "none" && body_rig.is_none() {
+                return Err(format!("wearable {} asks for {} physics: export it with --body-rig (the colliders, pins and chains ride the skeleton)", item.manifest.name, w.physics));
+            }
+            if w.physics == "springbone" && item.manifest.attach.is_some() {
+                return Err(format!("wearable {} is a rigid item: it cannot hang in spring-bone chains", item.manifest.name));
             }
             let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
@@ -1696,16 +1720,71 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         .collect();
                     super::wearable::layer(&mut layers);
                 }
-                for ((item, _, slot, ladder, row), positions) in worn.iter().zip(&placed) {
+                if i == 0
+                    && let (Some(br), Some(rig)) = (&body_rig, body_gltf_rig.as_mut())
+                {
+                    for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
+                        if row["physics"] != "springbone" {
+                            spring_skin.push(None);
+                            continue;
+                        }
+                        let tris = &ladder[0].1;
+                        let pin: Vec<f32> = positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect();
+                        let body = binding_influences(item, &br.by_obj);
+                        let dominant: Vec<usize> = body.iter().map(|b| b.iter().copied().max_by(|x, y| x.1.total_cmp(&y.1)).map_or(0, |x| x.0)).collect();
+                        let (seed, anchor) = super::wearable::spring_seeds(positions, &pin, &dominant);
+                        let chains = super::wearable::build_chains(positions, tris, &seed);
+                        let mut first = Vec::new();
+                        for (c, chain) in chains.chains.iter().enumerate() {
+                            let mut score = vec![0.0; rig.names.len()];
+                            for &v in &chain.root_vertices {
+                                for &(j, w) in &body[v as usize] {
+                                    score[j] += w;
+                                }
+                            }
+                            let parent = (0..score.len()).max_by(|&a, &b| score[a].total_cmp(&score[b])).unwrap_or(br.head_joint);
+                            let start = rig.names.len();
+                            first.push(start);
+                            let safe: String = item.manifest.name.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' }).collect();
+                            let mut joints = Vec::new();
+                            for (s_, p) in chain.joints.iter().enumerate() {
+                                rig.names.push(format!("{safe}_chain{c}_{s_}"));
+                                rig.parents.push(Some(if s_ == 0 { parent } else { start + s_ - 1 }));
+                                rig.global.push(gm::to_gltf(*p));
+                                joints.push(start + s_);
+                            }
+                            springs.push(json!({"wearable": item.manifest.name, "chain": c, "joints": joints, "parent_bone": rig.names[parent], "root_vertices": chain.root_vertices.len()}));
+                        }
+                        if rig.names.len() > 256 {
+                            return Err(format!("{} chain joints take the skin past 256 joints", item.manifest.name));
+                        }
+                        let blended: Vec<gf_core::body_rig::Influences> = (0..positions.len())
+                            .map(|v| match chains.along[v] {
+                                Some((c, t)) => {
+                                    let lo = (t.floor() as usize).min(super::wearable::CHAIN_SEGMENTS);
+                                    let hi = (lo + 1).min(super::wearable::CHAIN_SEGMENTS);
+                                    let f = (t - lo as f64).clamp(0.0, 1.0);
+                                    let chain_w = vec![(first[c] + lo, 1.0 - f), (first[c] + hi, f)];
+                                    let p = if Some(dominant[v]) == anchor { pin[v] as f64 } else { 0.0 };
+                                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&[(p, body[v].as_slice()), (1.0 - p, chain_w.as_slice())]), 4);
+                                    if x.is_empty() { vec![(0, 1.0)] } else { x }
+                                }
+                                None => body[v].clone(),
+                            })
+                            .collect();
+                        spring_skin.push(Some(blended));
+                    }
+                }
+                for (((item, _, slot, ladder, row), positions), override_skin) in worn.iter().zip(&placed).zip(spring_skin.iter().chain(std::iter::repeat(&None))) {
                     let (kept, tris, uvs) = &ladder[i.min(ladder.len() - 1)];
                     let joint = item.manifest.attach.as_ref().and_then(|a| body_rig.as_ref().and_then(|br| br.rig.bones.iter().position(|b| b.name == a.bone)));
                     let pin: Option<Vec<f32>> = (row["physics"] == "cloth").then(|| {
                         positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect()
                     });
-                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref());
+                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref(), override_skin.as_deref());
                     wear_slots.push((body_lods.len(), *slot));
                     if pin.is_some() {
-                        cloth_nodes.entry(item.manifest.name.clone()).or_insert_with(Vec::new).push(format!("{}_LOD{i}", lod.name));
+                        cloth_nodes.entry(item.manifest.name.clone()).or_default().push(format!("{}_LOD{i}", lod.name));
                     }
                     body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod });
                 }
@@ -1725,7 +1804,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         if !failures.is_empty() {
             body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
         }
-        if !cloth_nodes.is_empty()
+        if (!cloth_nodes.is_empty() || !springs.is_empty())
             && let Some(br) = &body_rig
         {
             let caps = super::wearable::capsules(pack, controls, &br.rig, &br.by_obj, &frame)?;
@@ -1734,10 +1813,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 .map(|c| json!({"joint": c.joint, "bone": c.name, "head": gm::to_gltf(c.head), "tail": gm::to_gltf(c.tail), "radius": c.radius as f32, "from_vertices": c.vertices}))
                 .collect();
             let cloth: Vec<Value> = cloth_nodes.iter().map(|(name, nodes)| json!({"wearable": name, "nodes": nodes, "pin": "_PIN"})).collect();
-            physics_ext = Some(json!({"version": 1, "colliders": colliders, "cloth": cloth,
+            physics_ext = Some(json!({"version": 1, "colliders": colliders, "cloth": cloth, "springs": springs,
+                                      "spring_defaults": {"stiffness": 1.0, "drag": 0.4, "gravity": 1.0, "hit_radius_m": 0.02},
                                       "pin": {"near_m": super::wearable::PIN_NEAR_M, "far_m": super::wearable::PIN_FAR_M},
                                       "frame": "glTF: metres, y up, in the Character root's space (the root's transform applies, like the meshes')"}));
-            body_meta["physics"] = json!({"colliders": colliders.len(), "cloth": cloth_nodes.len(), "extension": "GAZEFORGE_physics"});
+            body_meta["physics"] = json!({"colliders": colliders.len(), "cloth": cloth_nodes.len(), "springs": springs.len(), "extension": "GAZEFORGE_physics"});
         }
         if !worn.is_empty() {
             body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),

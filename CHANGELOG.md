@@ -55,6 +55,12 @@ open, with its last measurement, rather than left out.
   body (Jaccard 0.92; shoes 0.98). `wearable attach` / `wearable.attach` (the "Attach a solid to a bone" task) keeps a
   rigid item - a sword, a helmet - in one bone's frame and places it on any character, at its modelled size, weighted
   wholly to that bone.
+- **Physics data for wearables.** A worn item can ask for `"physics": "cloth"` or `"physics": "springbone"`;
+  `export-glb --body-rig` then writes engine-agnostic data under the root extension `GAZEFORGE_physics`
+  (`extensions/GAZEFORGE_physics/README.md`): capsule colliders per bone measured on the character, a `_PIN` weight per
+  cloth vertex, and for spring bones chains of extra joints built from the item's own mesh (rooted where it rests on the
+  anchor bone, the head for hair) with the item skinned along them. Measured: MakeHuman's ponytail becomes one chain
+  that bends as one piece, its long hair five strands that bend as a sheet. No engine reader ships yet.
 
 ### Changed
 
