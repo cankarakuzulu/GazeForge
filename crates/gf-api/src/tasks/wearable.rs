@@ -26,7 +26,7 @@ pub fn import(opts: &Options) -> Result<Value, String> {
               "meaning": "each MakeHuman clothes binding with its mesh and material maps, content-addressed in the store; wear one with body.wearables: [{\"asset\": REF, \"hide_body\": true}] in a character spec"}))
 }
 
-pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out", "hide"];
+pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out", "hide", "push"];
 const INSIDE_TOLERANCE_M: f64 = 0.001;
 const COVER_REACH_M: f64 = 0.15;
 const COVER_BEHIND_M: f64 = 0.005;
@@ -74,6 +74,121 @@ impl BaseFrame {
         }
         Ok(binding.evaluate(&mh)?.into_iter().map(|q| [q[0] * self.unit, -q[2] * self.unit, q[1] * self.unit]).collect())
     }
+}
+
+pub const CLEARANCE_M: f64 = 0.002;
+const PUSH_REACH_M: f64 = 0.1;
+const PUSH_SPREAD_PASSES: usize = 2;
+
+pub struct Surface {
+    pub points: Vec<Point>,
+    pub normals: Vec<Point>,
+    cell: f64,
+    grid: HashMap<(i64, i64, i64), Vec<u32>>,
+}
+
+impl Surface {
+    pub fn new(points: Vec<Point>, triangles: &[[u32; 3]]) -> Surface {
+        let normals = vertex_normals(&points, triangles);
+        let cell = 0.02;
+        let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+        for (i, p) in points.iter().enumerate() {
+            grid.entry(key(*p, cell)).or_default().push(i as u32);
+        }
+        Surface { points, normals, cell, grid }
+    }
+
+    pub fn nearest(&self, p: Point, reach: f64) -> Option<usize> {
+        let c = key(p, self.cell);
+        let mut best: Option<(f64, usize)> = None;
+        let rings = (reach / self.cell).ceil() as i64;
+        for r in 0..=rings {
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    for dz in -r..=r {
+                        if dx.abs().max(dy.abs()).max(dz.abs()) != r {
+                            continue;
+                        }
+                        for &i in self.grid.get(&(c.0 + dx, c.1 + dy, c.2 + dz)).into_iter().flatten() {
+                            let q = self.points[i as usize];
+                            let d = (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
+                            if best.is_none_or(|b| d < b.0) {
+                                best = Some((d, i as usize));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((d, i)) = best
+                && d.sqrt() <= r as f64 * self.cell
+            {
+                return Some(i);
+            }
+        }
+        best.filter(|b| b.0.sqrt() <= reach).map(|b| b.1)
+    }
+
+    pub fn signed(&self, p: Point, j: usize) -> f64 {
+        let (q, n) = (self.points[j], self.normals[j]);
+        (p[0] - q[0]) * n[0] + (p[1] - q[1]) * n[1] + (p[2] - q[2]) * n[2]
+    }
+}
+
+fn key(p: Point, cell: f64) -> (i64, i64, i64) {
+    ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64)
+}
+
+pub fn push_out(garment: &mut [Point], triangles: &[[u32; 3]], surface: &Surface, clearance: f64) -> Value {
+    let normals = vertex_normals(garment, triangles);
+    let mut push = vec![0.0f64; garment.len()];
+    let mut dir = vec![[0.0f64; 3]; garment.len()];
+    let mut inner = 0usize;
+    for (i, p) in garment.iter().enumerate() {
+        let Some(j) = surface.nearest(*p, PUSH_REACH_M) else { continue };
+        let s = surface.signed(*p, j);
+        if s >= clearance {
+            continue;
+        }
+        let n = surface.normals[j];
+        if normals[i][0] * n[0] + normals[i][1] * n[1] + normals[i][2] * n[2] <= 0.0 {
+            inner += 1;
+            continue;
+        }
+        push[i] = clearance - s;
+        dir[i] = n;
+    }
+    let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); garment.len()];
+    for t in triangles {
+        for k in 0..3 {
+            neighbours[t[k] as usize].push(t[(k + 1) % 3]);
+            neighbours[t[k] as usize].push(t[(k + 2) % 3]);
+        }
+    }
+    for _ in 0..PUSH_SPREAD_PASSES {
+        let before = push.clone();
+        for i in 0..garment.len() {
+            if before[i] > 0.0 || neighbours[i].is_empty() {
+                continue;
+            }
+            let (sum, from) = neighbours[i].iter().fold((0.0, None::<usize>), |(s, f), &k| (s + before[k as usize], if before[k as usize] > 0.0 { Some(k as usize) } else { f }));
+            if let Some(f) = from {
+                push[i] = 0.5 * sum / neighbours[i].len() as f64;
+                dir[i] = dir[f];
+            }
+        }
+    }
+    let moved = push.iter().filter(|&&d| d > 0.0).count();
+    let max = push.iter().copied().fold(0.0f64, f64::max);
+    for (p, (d, n)) in garment.iter_mut().zip(push.iter().zip(&dir)) {
+        for k in 0..3 {
+            p[k] += d * n[k];
+        }
+    }
+    json!({"moved": moved, "max_mm": max * 1000.0, "inner_faces_left": inner, "clearance_mm": clearance * 1000.0})
+}
+
+pub fn triangles_of(faces: &[Vec<(u32, Option<u32>)>]) -> Vec<[u32; 3]> {
+    faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0].0, f[k].0, f[k + 1].0])).collect()
 }
 
 pub fn hidden_body(pack: &gf_core::body::BodyPack, lod: usize, st: &gf_core::body::Stitched, covered: &HashSet<u32>) -> Result<Vec<bool>, String> {
@@ -147,10 +262,6 @@ fn ray_hits(origin: Point, dir: Point, t: &[Point; 3]) -> Option<f64> {
     Some(dot(e2, q) / det)
 }
 
-fn nearest(points: &[Point], p: Point) -> usize {
-    let d = |q: &Point| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
-    (0..points.len()).min_by(|&a, &b| d(&points[a]).total_cmp(&d(&points[b]))).unwrap_or(0)
-}
 
 pub fn fit(opts: &Options) -> Result<Value, String> {
     only(opts, "wearable fit", &[FIT_KEYS])?;
@@ -171,7 +282,12 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     surface.extend_from_slice(&st.positions);
     let h = head.len() as u32;
     let surface_triangles: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
-    let normals = vertex_normals(&surface, &surface_triangles);
+    let surf = Surface::new(surface.clone(), &surface_triangles);
+    let push = match opts.get("push").map(String::as_str).unwrap_or("on") {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("--push takes on or off, got {other}")),
+    };
     let frame = BaseFrame::new(pack, &shaped.controls, &shaped.manifest, &dense);
     let world = |p: Point| shaped.similarity.apply(p);
     let out = Path::new(need(opts, "out")?);
@@ -197,16 +313,22 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
         let path = Path::new(file);
         let text = std::fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
         let binding = Binding::parse(&text).map_err(|e| format!("{file}: {e}"))?;
-        let positions = frame.evaluate(&binding).map_err(|e| format!("{file}: {e}"))?;
+        let mut positions = frame.evaluate(&binding).map_err(|e| format!("{file}: {e}"))?;
         let mesh_path = path.parent().unwrap_or(Path::new(".")).join(binding.keys.get("obj_file").ok_or_else(|| format!("{file}: no obj_file line"))?);
         let faces = gf_io::body::read_obj(&mesh_path, None)?.faces;
+        let pushed = push.then(|| push_out(&mut positions, &triangles_of(&faces), &surf, CLEARANCE_M));
         let mut depths = Vec::new();
         let mut deepest = (0.0, [0.0; 3]);
-        for p in &positions {
-            let j = nearest(&surface, *p);
-            let (q, n) = (surface[j], normals[j]);
-            let signed = (p[0] - q[0]) * n[0] + (p[1] - q[1]) * n[1] + (p[2] - q[2]) * n[2];
+        let garment_normals = vertex_normals(&positions, &triangles_of(&faces));
+        let mut facing_out = 0usize;
+        for (i, p) in positions.iter().enumerate() {
+            let Some(j) = surf.nearest(*p, 0.1) else { continue };
+            let signed = surf.signed(*p, j);
             if signed < -INSIDE_TOLERANCE_M {
+                let n = surf.normals[j];
+                if garment_normals[i][0] * n[0] + garment_normals[i][1] * n[1] + garment_normals[i][2] * n[2] > 0.0 {
+                    facing_out += 1;
+                }
                 depths.push(-signed * 1000.0);
                 if -signed > deepest.0 {
                     deepest = (-signed, world(*p));
@@ -231,8 +353,8 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
             }
         }
         offset += positions.len();
-        rows.push(json!({"name": name, "file": file, "vertices": positions.len(), "faces": faces.len(), "hides_base_vertices": binding.hidden.len(),
-                         "inside_body": {"vertices": depths.len(), "share": depths.len() as f64 / positions.len() as f64,
+        rows.push(json!({"name": name, "file": file, "vertices": positions.len(), "faces": faces.len(), "hides_base_vertices": binding.hidden.len(), "pushed": pushed,
+                         "inside_body": {"vertices": depths.len(), "facing_out": facing_out, "share": depths.len() as f64 / positions.len() as f64,
                                          "max_mm": depths.last().copied().unwrap_or(0.0), "p95_mm": depths.get((depths.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0),
                                          "deepest_world": deepest.1}}));
     }

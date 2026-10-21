@@ -620,15 +620,23 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let worn = match (&shaped_report, spec.body.as_ref()) {
             (Some((_, manifest)), Some(b)) if !b.wearables.is_empty() => {
                 let frame = crate::tasks::wearable::BaseFrame::new(&pack, &controls, manifest, &dense);
+                let mut points = head.clone();
+                points.extend_from_slice(&st.positions);
+                let h = head.len() as u32;
+                let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+                let surface = crate::tasks::wearable::Surface::new(points, &tris);
                 let mut covered = std::collections::HashSet::new();
                 let mut meshes = Vec::new();
                 for w in &b.wearables {
                     let item = store.load_wearable(&w.asset).map_err(ApiError::not_found)?;
-                    let p = frame.evaluate(&item.binding).map_err(ApiError::invalid)?;
+                    let mut p = frame.evaluate(&item.binding).map_err(ApiError::invalid)?;
                     if w.hide_body {
                         covered.extend(item.binding.hidden.iter().copied());
                     }
-                    let tris: Vec<[u32; 3]> = item.faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0].0, f[k].0, f[k + 1].0])).collect();
+                    let tris = crate::tasks::wearable::triangles_of(&item.faces);
+                    if !item.manifest.transparent {
+                        crate::tasks::wearable::push_out(&mut p, &tris, &surface, crate::tasks::wearable::CLEARANCE_M);
+                    }
                     let n = crate::tasks::wearable::vertex_normals(&p, &tris);
                     let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
                     meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": item.manifest.transparent,
