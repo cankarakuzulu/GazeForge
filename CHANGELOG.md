@@ -36,6 +36,18 @@ open, with its last measurement, rather than left out.
   targets, the macro definition, the subdivision and the body levels of detail, with a Targets step; the export task
   takes the body skeleton and the gates choice.
 
+- **Wearables (MakeHuman clothes, shoes, hats, hair, beards).** `gazeforge wearable import` / `wearable.import` (and the
+  "Import a garment" task) puts a MakeHuman clothes file with its mesh and maps into the store; a spec wears it with
+  `body.wearables: [{asset, hide_body}]`. Each garment's binding fits it to the shaped character (head items on the
+  head, the rest on the body, through every macro, slider and compound), it is pushed out of the body (opaque items),
+  layered over lower garments (MakeHuman's `z_depth`), the body it covers is left out (per garment, `hide_body`), and
+  `export-glb` writes it textured (alpha cards as a mask) on every level of detail - decimated per level to the body's
+  ratio, cards kept whole - and skinned with the body rig. The Body shape panel (studio and browser) wears, hides and
+  takes off wearables, with undo; the stitch preview draws them. `wearable fit` writes a lookdev OBJ with fit and
+  cover measures; `wearable check` compares a binding with its own mesh. Measured: the binding reading is exact (to
+  0.00015 MakeHuman units) for the items authored on a known body; most shipped garment meshes were authored on other
+  bodies, so the binding, not the mesh, is the asset.
+
 ### Changed
 
 - **Stitch gates on coarse levels of detail.** On LOD1 and coarser, the seam's normal-continuity limit is the larger of
@@ -54,6 +66,11 @@ open, with its last measurement, rather than left out.
   folds or flips and 5 on the seam angle (one character at two levels). The relative limit can rise far above 40
   degrees where a side has one sharp edge (up to 117 at LOD5 in the grid) - the seams that pass stay at or under 53
   degrees.
+- Wearables: inward-facing layers (a collar's underside, cuffs) stay where the binding puts them and can sit inside a
+  heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
+  a few cards at the coarsest level; the occlusion map is not exported yet; only MakeHuman clothes files can be imported.
+- Body and genital UVs reach glTF in the OBJ convention (V up), so a body texture would map upside down; garments are
+  flipped to glTF's convention.
 - Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.
 - With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
   (MakeHuman ships no geometry for one).
