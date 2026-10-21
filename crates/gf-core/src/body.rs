@@ -1346,6 +1346,24 @@ pub struct BodyPack {
 }
 
 impl BodyPack {
+    pub fn control(&self, controls: &Controls) -> impl Fn(Point) -> Point + use<> {
+        let ring: Vec<Point> = self.ring.iter().map(|r| self.mesh.positions[r.vertex as usize]).collect();
+        let c = centroid(&ring);
+        let (s, dz) = (controls.body_scale, controls.neck_offset_m);
+        move |p: Point| {
+            let mut q = add(c, mul(sub(p, c), s));
+            q[2] += dz;
+            q
+        }
+    }
+
+    pub fn control_joint(&self, controls: &Controls) -> impl Fn(Point) -> Point + use<> {
+        let ring: Vec<Point> = self.ring.iter().map(|r| self.mesh.positions[r.vertex as usize]).collect();
+        let top = centroid(&ring)[2];
+        let control = self.control(controls);
+        move |p: Point| if p[2] >= top { p } else { control(p) }
+    }
+
     pub fn period(&self) -> f64 {
         self.seam_loop.len() as f64 / self.per_span as f64
     }
@@ -1456,12 +1474,7 @@ pub fn stitch_lod(pack: &BodyPack, lod: usize, seam: &[SeamPoint], controls: &Co
     let (mut mesh, kept) = pack.lod_mesh(lod)?;
     let local: HashMap<u32, u32> = kept.iter().enumerate().map(|(i, &k)| (k, i as u32)).collect();
     let ring0: Vec<Point> = pack.ring.iter().map(|r| pack.mesh.positions[r.vertex as usize]).collect();
-    let c = centroid(&ring0);
-    let control = |p: Point| -> Point {
-        let mut q = add(c, mul(sub(p, c), controls.body_scale));
-        q[2] += controls.neck_offset_m;
-        q
-    };
+    let control = pack.control(controls);
     let ring_points: Vec<Point> = ring0.iter().map(|p| control(*p)).collect();
     let targets: Vec<Point> = pack.ring.iter().zip(&pack.ring_targets).map(|(r, t)| add(*t, seam_delta(seam, r.param, period))).collect();
     let field = ring_field(&ring_points, &targets, controls.blend_m);

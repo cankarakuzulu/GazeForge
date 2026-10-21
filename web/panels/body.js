@@ -61,14 +61,17 @@ function mount(root, api) {
 
   function apply(next, label) {
     const prev = api.body.get();
-    if (JSON.stringify(prev) === JSON.stringify(next)) return;
+    if (JSON.stringify(prev) === JSON.stringify(next)) {
+      sync();
+      return;
+    }
     api.body.set(next);
     api.pushUndo({ label, undo: () => { api.body.set(prev); sync(); }, redo: () => { api.body.set(next); sync(); } });
     sync();
   }
 
-  function slider(rowKey, label, lo, commit) {
-    const input = el('input', { type: 'range', min: lo, max: 1, step: 0.01, value: 0 });
+  function slider(rowKey, label, lo, hi, commit) {
+    const input = el('input', { type: 'range', min: lo, max: hi, step: 0.01, value: 0 });
     const out = el('span', { text: '0' });
     input.addEventListener('input', () => { out.textContent = Number(input.value).toFixed(2); });
     input.addEventListener('change', () => commit(Number(input.value)));
@@ -81,7 +84,7 @@ function mount(root, api) {
     rows.clear();
     compoundBox.replaceChildren(...compounds.map((name) => {
       const label = tr(`body.compound.${name}`);
-      return slider(`c:${name}`, label, -1, (v) => {
+      return slider(`c:${name}`, label, -1, 1, (v) => {
         const b = api.body.get();
         if (b) apply(withCompound(b, name, v), `${label} ${v.toFixed(2)}`);
       });
@@ -91,7 +94,7 @@ function mount(root, api) {
       const details = el('details', { 'data-family': family }, [el('summary', { text: tr(`body.family.${family}`) })]);
       for (const p of pairs.filter((q) => q.family === family)) {
         const label = tr(`body.slider.${p.id}`);
-        details.appendChild(slider(`p:${p.id}`, label, p.decr ? -1 : 0, (v) => {
+        details.appendChild(slider(`p:${p.id}`, label, p.decr ? -1 : 0, p.incr ? 1 : 0, (v) => {
           const b = api.body.get();
           if (b) apply(withPair(b, p, v), `${label} ${v.toFixed(2)}`);
         }));

@@ -190,7 +190,7 @@ pub static REGISTRY: &[CommandDef] = &[
         name: "body.joints",
         kind: Kind::Query,
         summary: "A MakeHuman rig's joints on a spec's shaped body: every bone's head and tail evaluated on the body and its joint helper cubes as the macros, regional weights and compounds shape them, in the world frame and the canonical frame.",
-        limits: "Needs a body imported with its helper vertices and targets carrying their deltas (re-import older ones). Root bones whose head is the ground cube sit on the floor, not at MPFB's armature origin.",
+        limits: "Needs a body imported with its helper vertices and targets carrying their deltas (re-import older ones). Root bones whose head is the ground cube sit on the floor, not at MPFB's armature origin. Known gaps: head-region joints (head, jaw, eyes) follow the body targets, not the head's own sliders or sculpt; the stitch's blend band near the neck is not applied to joints.",
         input: body::joints_input,
         output: body::joints_output,
         run: body::joints,

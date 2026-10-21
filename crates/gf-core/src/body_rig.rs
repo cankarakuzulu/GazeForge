@@ -97,6 +97,56 @@ impl RigDef {
     }
 }
 
+pub type Influences = Vec<(usize, f64)>;
+
+pub fn rig_weights(v: &Value, rig: &RigDef) -> Result<(HashMap<u32, Influences>, Vec<String>), String> {
+    let w = v.get("weights").and_then(Value::as_object).ok_or("a weights file has a \"weights\" object of bones")?;
+    let index: HashMap<&str, usize> = rig.bones.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let mut out: HashMap<u32, Influences> = HashMap::new();
+    let mut unknown = Vec::new();
+    for (bone, list) in w {
+        let Some(&j) = index.get(bone.as_str()) else {
+            if list.as_array().is_some_and(|a| !a.is_empty()) {
+                unknown.push(bone.clone());
+            }
+            continue;
+        };
+        for e in list.as_array().ok_or_else(|| format!("weights of {bone}: not a list"))? {
+            let (Some(vertex), Some(weight)) = (e.get(0).and_then(Value::as_u64), e.get(1).and_then(Value::as_f64)) else {
+                return Err(format!("weights of {bone}: an entry is not [vertex, weight]"));
+            };
+            if weight.is_finite() && weight > 0.0 {
+                out.entry(vertex as u32).or_default().push((j, weight));
+            }
+        }
+    }
+    unknown.sort();
+    Ok((out, unknown))
+}
+
+pub fn mix(parts: &[(f64, &[(usize, f64)])]) -> Influences {
+    let mut sum: BTreeMap<usize, f64> = BTreeMap::new();
+    for (k, list) in parts {
+        for &(j, w) in list.iter() {
+            *sum.entry(j).or_default() += k * w;
+        }
+    }
+    sum.into_iter().filter(|(_, w)| *w > 0.0).collect()
+}
+
+pub fn strongest(influences: &[(usize, f64)], keep: usize) -> Influences {
+    let mut v: Influences = influences.iter().copied().filter(|(_, w)| *w > 0.0).collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    v.truncate(keep);
+    let total: f64 = v.iter().map(|x| x.1).sum();
+    if total > 0.0 {
+        for x in v.iter_mut() {
+            x.1 /= total;
+        }
+    }
+    v
+}
+
 pub struct Resolver<'a> {
     body: &'a [Point],
     body_index: HashMap<u32, u32>,
@@ -169,5 +219,16 @@ mod tests {
         assert!(at.vertex(9).unwrap_err().contains("neither"));
         let nested = json!({"version": 100, "scale_factor": 0.1, "bones": {"root": rig["root"], "spine": rig["spine"]}});
         assert_eq!(RigDef::parse(&nested).unwrap(), r);
+        let (w, unknown) = rig_weights(&json!({"weights": {"spine": [[7, 0.25], [9, 1.0]], "root": [[7, 0.75]], "tail": [[1, 1.0]], "empty": []}}), &r).unwrap();
+        assert_eq!(unknown, ["tail"]);
+        let mut w7 = w[&7].clone();
+        w7.sort_by_key(|e| e.0);
+        assert_eq!(w7, vec![(0, 0.75), (1, 0.25)]);
+        assert_eq!(w[&9], vec![(1, 1.0)]);
+        let m = mix(&[(0.5, &[(0, 1.0)]), (0.5, &[(0, 0.5), (1, 0.5)])]);
+        assert_eq!(m, vec![(0, 0.75), (1, 0.25)]);
+        let s = strongest(&[(0, 0.1), (1, 0.4), (2, 0.3), (3, 0.15), (4, 0.05)], 4);
+        assert_eq!(s.iter().map(|x| x.0).collect::<Vec<_>>(), [1, 2, 3, 0]);
+        assert!((s.iter().map(|x| x.1).sum::<f64>() - 1.0).abs() < 1e-12);
     }
 }

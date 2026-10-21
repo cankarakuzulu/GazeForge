@@ -27,6 +27,8 @@ pub struct BodyTargetEntry {
     pub blob: String,
     pub family: String,
     pub moved: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub helpers_moved: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,6 +41,10 @@ pub struct BodyTargets {
     pub unit_m: f64,
     pub base_sliders: BTreeMap<String, f64>,
     pub targets: BTreeMap<String, BodyTargetEntry>,
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -134,7 +140,8 @@ impl Store {
                 }
                 let t = SparseTarget { indices: entries.iter().map(|e| e.0).collect(), deltas: entries.iter().map(|e| e.1.map(|x| x as f32)).collect() };
                 let blob = hash::reference(&self.put(&sparse_npz(&t)?)?);
-                targets.insert(name.to_string(), BodyTargetEntry { blob, family: family.clone(), moved: t.indices.len() as u64 });
+                let on_body = t.indices.iter().filter(|&&i| (i as usize) < pack.mesh.positions.len()).count() as u64;
+                targets.insert(name.to_string(), BodyTargetEntry { blob, family: family.clone(), moved: on_body, helpers_moved: t.indices.len() as u64 - on_body });
             }
         }
         let m = BodyTargets { format: TARGETS_FORMAT.into(), body: body.to_string(), vertices: pack.mesh.positions.len(), helpers: pack.helpers.source.len(), unit_m, base_sliders, targets };

@@ -91,7 +91,7 @@ impl World {
         let p = self.body_ui.pairs.iter().find(|p| p.id == id).ok_or_else(|| format!("{id} is not a body slider"))?;
         let (incr, decr) = (p.incr.clone(), p.decr.clone());
         let lo = if decr.is_some() { -1.0 } else { 0.0 };
-        let v = v.clamp(lo, 1.0);
+        let v = v.clamp(lo, if incr.is_some() { 1.0 } else { 0.0 });
         Ok(self.body_edit(|b| {
             let w = b.entry("weights").or_insert_with(|| json!({}));
             let Some(w) = w.as_object_mut() else { return };
@@ -125,9 +125,9 @@ impl World {
     }
 }
 
-fn slider(ui: &mut egui::Ui, live: &mut BTreeMap<String, f64>, key: String, value: f64, lo: f64, text: String) -> Option<f64> {
+fn slider(ui: &mut egui::Ui, live: &mut BTreeMap<String, f64>, key: String, value: f64, lo: f64, hi: f64, text: String) -> Option<f64> {
     let mut v = live.get(&key).copied().unwrap_or(value);
-    let r = ui.add(egui::Slider::new(&mut v, lo..=1.0).step_by(0.01).text(text));
+    let r = ui.add(egui::Slider::new(&mut v, lo..=hi).step_by(0.01).text(text));
     if r.changed() {
         live.insert(key.clone(), v);
     }
@@ -161,7 +161,7 @@ impl crate::studio::Studio<'_> {
             ui.label(egui::RichText::new(tr("body.compounds")).strong());
             for name in &ui_state.compounds {
                 let value = body["compounds"][name].as_f64().unwrap_or(0.0);
-                if let Some(v) = slider(ui, &mut ui_state.live, format!("c:{name}"), value, -1.0, tr(&format!("body.compound.{name}")).to_string()) {
+                if let Some(v) = slider(ui, &mut ui_state.live, format!("c:{name}"), value, -1.0, 1.0, tr(&format!("body.compound.{name}")).to_string()) {
                     compound_commit = Some((name.clone(), v));
                 }
             }
@@ -187,7 +187,7 @@ impl crate::studio::Studio<'_> {
                 egui::CollapsingHeader::new(title).id_salt(("body_family", family)).open((!needle.is_empty()).then_some(true)).show(ui, |ui| {
                     for (p, label) in rows {
                         let lo = if p.decr.is_some() { -1.0 } else { 0.0 };
-                        if let Some(v) = slider(ui, &mut ui_state.live, format!("p:{}", p.id), pair_value(&body, p), lo, label) {
+                        if let Some(v) = slider(ui, &mut ui_state.live, format!("p:{}", p.id), pair_value(&body, p), lo, if p.incr.is_some() { 1.0 } else { 0.0 }, label) {
                             pair_commit = Some((p.id.clone(), v));
                         }
                     }

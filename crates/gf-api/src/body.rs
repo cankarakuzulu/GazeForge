@@ -192,7 +192,7 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let mut pairs: BTreeMap<String, Value> = BTreeMap::new();
     let mut shared = 0;
     for (id, e) in &targets.targets {
-        if e.family == "macrodetails" || e.family == "breast" {
+        if e.family == "macrodetails" || e.family == "breast" || e.moved == 0 {
             continue;
         }
         if head.contains(id) {
@@ -371,6 +371,43 @@ fn spec_input(input: &Value, root: &str) -> Result<Spec, ApiError> {
     })
 }
 
+pub struct BodyRig {
+    pub rig: gf_core::body_rig::RigDef,
+    pub heads: Vec<Point>,
+    pub by_obj: std::collections::HashMap<u32, gf_core::body_rig::Influences>,
+    pub head_joint: usize,
+    pub meta: Value,
+}
+
+pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_path: &Path, weights_path: &Path) -> Result<BodyRig, String> {
+    let read = |p: &Path| -> Result<Value, String> { serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?).map_err(|e| format!("{}: {e}", p.display())) };
+    let rig = gf_core::body_rig::RigDef::parse(&read(rig_path)?)?;
+    if rig.bones.len() > 256 {
+        return Err(format!("the rig has {} bones; a glTF skin here holds at most 256", rig.bones.len()));
+    }
+    if pack.helpers.positions.is_empty() || pack.cage_source.is_empty() {
+        return Err("the body carries no helper vertices or cage map: re-import it (body.import, then body.targets) to rig it".into());
+    }
+    let at = gf_core::body_rig::Resolver::new(&pack.mesh.positions, &pack.source, &pack.helpers);
+    let ends = rig.evaluate(&at)?;
+    let control = pack.control_joint(controls);
+    let (by_obj, unknown) = gf_core::body_rig::rig_weights(&read(weights_path)?, &rig)?;
+    let mut score = vec![0.0; rig.bones.len()];
+    for o in &pack.cage_source {
+        for &(j, w) in by_obj.get(o).map(Vec::as_slice).unwrap_or(&[]) {
+            score[j] += w;
+        }
+    }
+    let head_joint = (0..score.len()).max_by(|&a, &b| score[a].total_cmp(&score[b])).ok_or("the rig has no bones")?;
+    let unweighted = pack.source.iter().chain(&pack.cage_source).filter(|o| by_obj.get(o).is_none_or(Vec::is_empty)).count();
+    let meta = json!({"rig": rig_path.file_name().map(|n| n.to_string_lossy().to_string()), "weights": weights_path.file_name().map(|n| n.to_string_lossy().to_string()),
+                      "bones": rig.bones.len(), "head_bone": rig.bones[head_joint].name, "weights_for_bones_not_in_the_rig": unknown, "unweighted_vertices": unweighted,
+                      "joints": "one glTF joint per bone at the bone's head, evaluated on this body (MakeHuman's rule: a helper cube's mean, a vertex or a mean of vertices); translation-only rest, so each inverse bind is the joint's negated position; tails and rolls are not used",
+                      "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the 4 strongest, renormalised",
+                      "eyes": "rigid on the head bone"});
+    Ok(BodyRig { heads: ends.iter().map(|e| control(e.0)).collect(), rig, by_obj, head_joint, meta })
+}
+
 pub fn cage_input() -> Value {
     obj(
         json!({"dense": {"type": "string", "minLength": 1, "description": "the dense base directory (face_sizes, corner_vertices, positions)"},
@@ -443,7 +480,8 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         return Err(ApiError::invalid("the body carries no shaped helper vertices: re-import the body (body.import) and its targets (body.targets) so the joints follow it"));
     }
     let at = gf_core::body_rig::Resolver::new(&s.pack.mesh.positions, &s.pack.source, &s.pack.helpers);
-    let ends = rig.evaluate(&at).map_err(ApiError::invalid)?;
+    let control = s.pack.control_joint(&s.controls);
+    let ends: Vec<(Point, Point)> = rig.evaluate(&at).map_err(ApiError::invalid)?.into_iter().map(|(h, t)| (control(h), control(t))).collect();
     let r6 = |p: Point| p.map(|x| (x * 1e6).round() / 1e6);
     let bones: Vec<Value> = rig
         .bones
@@ -452,7 +490,7 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         .map(|(b, (h, t))| json!({"name": b.name, "parent": b.parent, "head": r6(s.similarity.apply(*h)), "tail": r6(s.similarity.apply(*t)), "roll": b.roll,
                                   "head_canonical": r6(*h), "tail_canonical": r6(*t)}))
         .collect();
-    Ok(json!({"bones": bones, "frame": "metres, z up: head/tail in the world (the character's root similarity applied), *_canonical in the head's canonical frame as the body is stored",
+    Ok(json!({"bones": bones, "frame": "metres, z up: head/tail in the world (the character's root similarity applied), *_canonical in the head's canonical frame as the body is stored, with the body controls (body_scale, neck_offset_mm) applied as the stitch applies them to joints below the neck ring (the head, which the controls do not move, keeps the joints above it)",
               "body": s.report}))
 }
 
