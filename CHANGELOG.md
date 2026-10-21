@@ -101,6 +101,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- A glb wearable whose colour texture is a JPEG (generated items usually are) came in untextured; the JPEG is now
+  decoded and kept as a PNG (one new dependency: `jpeg-decoder`, MIT or Apache-2.0, pure Rust, no dependencies of its
+  own; the browser build does not include it).
 - The eye model choice showed the eye inventory's names and raw family ids ("brown", "amber") in both clients, and its
   undo step showed the model's id; all of them are UI text now (`eyes.model.<id>`, `eyes.family.<family>`), and a test
   fails when an inventory row has no text.
@@ -120,7 +123,7 @@ open, with its last measurement, rather than left out.
   heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
   a few cards at the coarsest level; a bound garment follows the body's local shape more closely than MakeHuman's
   hand-chosen bindings (loose cloth can hug muscles); a rigid hat does not follow a head's shape (bind hats instead);
-  a glb's JPEG colour texture, or one kept outside the glb, is not read yet (give a PNG; the binding's report names
+  a glb's colour texture kept outside the glb, or a CMYK JPEG, is not read (give a PNG; the binding's report names
   which).
 - Head joints follow the head by a local fit (above): on an unchanged head they sit 0.4 mm further from the eyeball
   centres than before.

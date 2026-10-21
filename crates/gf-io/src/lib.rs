@@ -4,6 +4,7 @@ pub mod character;
 pub mod dense;
 pub mod game_base;
 pub mod gltf;
+pub mod jpeg;
 pub mod obj;
 pub mod png;
 pub mod store;

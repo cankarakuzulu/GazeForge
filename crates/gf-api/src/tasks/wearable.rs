@@ -33,6 +33,12 @@ fn source_mesh(store: &gf_io::store::Store, path: &Path, diffuse: Option<&String
             std::fs::write(&png, data).map_err(|e| format!("{}: {e}", png.display()))?;
             (Some(png), "the glb's PNG colour texture".to_string())
         }
+        (None, Some((mime, data))) if mime == "image/jpeg" => {
+            let (w, h, rgba) = gf_io::jpeg::decode_rgba(data).map_err(|e| format!("{}: the colour texture: {e}", path.display()))?;
+            let png = dir.join(format!("{stem}_color.png"));
+            std::fs::write(&png, gf_io::png::rgba(w, h, &rgba)?).map_err(|e| format!("{}: {e}", png.display()))?;
+            (Some(png), "the glb's JPEG colour texture, converted to PNG".to_string())
+        }
         (None, Some((mime, _))) => (None, format!("the glb's colour texture is {mime}, which is not read yet: give a PNG with diffuse")),
         (None, None) => match &scene.base_color_uri {
             Some(uri) => (None, format!("the glb's colour texture is outside the glb ({uri}), which is not read: give it with diffuse")),
