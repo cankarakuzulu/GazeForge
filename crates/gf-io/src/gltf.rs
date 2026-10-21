@@ -319,6 +319,13 @@ fn relink(value: &mut Value, slots: &[usize]) -> Result<(), String> {
     }
 }
 
+pub struct Root {
+    pub name: String,
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+    pub scale: f64,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn glb_with_parts(
     lods: &[Lod],
@@ -330,6 +337,22 @@ pub fn glb_with_parts(
     rig: Option<&Rig>,
     part_meshes: &[PartMesh],
     materials: &[Material],
+) -> Result<(Vec<u8>, Value), String> {
+    glb_with_root(lods, extra, morph_names, mode, extras, generator, rig, part_meshes, materials, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn glb_with_root(
+    lods: &[Lod],
+    extra: &[Lod],
+    morph_names: &[String],
+    mode: Sparse,
+    extras: Value,
+    generator: &str,
+    rig: Option<&Rig>,
+    part_meshes: &[PartMesh],
+    materials: &[Material],
+    root: Option<&Root>,
 ) -> Result<(Vec<u8>, Value), String> {
     for p in part_meshes {
         let n = p.positions.len();
@@ -535,6 +558,10 @@ pub fn glb_with_parts(
             roots.push(part_first + k);
         }
         report.push(json!({"node": p.name, "vertices": p.positions.len(), "primitives": p.parts.len(), "joint": p.joint}));
+    }
+    if let Some(r) = root {
+        nodes.push(json!({"name": r.name, "children": roots, "translation": r.translation, "rotation": r.rotation, "scale": [r.scale, r.scale, r.scale]}));
+        roots = vec![nodes.len() - 1];
     }
     let (mut material_values, mut textures, mut images, mut used) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for m in materials {

@@ -709,7 +709,20 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let catalog = store.load_catalog(&spec.base.catalog)?;
     let game_ref = spec.base.game_base.clone().ok_or("export-glb needs a spec with base.game_base")?;
     let (manifest, base) = store.load_game(&game_ref)?;
-    let body = body_options(opts)?;
+    let mut world: Option<gf_core::body_shape::Similarity> = None;
+    let mut shaped_report = Value::Null;
+    let body = match body_options(opts)? {
+        Some(b) => Some(b),
+        None => match &spec.body {
+            Some(_) => {
+                let s = crate::body::spec_body(&store, &spec, source.as_ref(), pin.as_ref())?;
+                world = Some(s.similarity);
+                shaped_report = s.report;
+                Some((s.pack, s.manifest, s.controls))
+            }
+            None => None,
+        },
+    };
     let head_scale = body.as_ref().map(|(p, _, c)| (p.pivot(), c.head_scale)).filter(|(_, s)| *s != 1.0);
     let facing = opts.get("facing").map(String::as_str).unwrap_or("keep");
     if !matches!(facing, "keep" | "repair" | "repair-states") {
@@ -1349,7 +1362,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         None => None,
     };
     crate::jobs::progress("write", 0, 1, "glb");
-    let (bytes, report) = gltf::glb_with_parts(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &materials)?;
+    let root = world.map(|w| {
+        let t = w.translation_for_origin();
+        let q = w.quaternion();
+        gltf::Root { name: "Character".into(), translation: [t[0], t[2], -t[1]], rotation: [q[0], q[2], -q[1], q[3]], scale: w.scale }
+    });
+    let (bytes, report) = gltf::glb_with_root(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r), &eye_parts, &materials, root.as_ref())?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -1396,6 +1414,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if !body_meta.is_null() {
         sidecar["body"] = body_meta.clone();
+        if !shaped_report.is_null() {
+            sidecar["body"]["shaped"] = shaped_report.clone();
+            sidecar["body"]["root"] = json!(root.as_ref().map(|r| json!({"node": r.name, "translation_gltf": r.translation, "rotation_gltf": r.rotation, "scale": r.scale})));
+        }
     }
     if let Some(skin) = &skin_report {
         sidecar["skin"] = skin.clone();
