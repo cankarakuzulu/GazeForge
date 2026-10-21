@@ -573,7 +573,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 let world: Vec<Point> = s.pack.mesh.positions.iter().map(|&p| s.similarity.apply(p)).collect();
                 gf_io::dense::write_points(Path::new(path), &world).map_err(ApiError::internal)?;
             }
-            (s.pack, s.controls, Some(s.report), s.similarity)
+            (s.pack, s.controls, Some((s.report, s.manifest)), s.similarity)
         }
         ("", None) => return Err(ApiError::invalid("pass body (a pack directory) or a spec with a body")),
         (dir, _) => (io::load(Path::new(dir)).map_err(ApiError::not_found)?.1, controls(input)?, None, Similarity::identity()),
@@ -609,14 +609,39 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let mut result = json!({"gates": gates, "controls": controls, "body": {"mode": pack.mode, "vertices": st.positions.len(), "triangles": st.triangles.len(),
                             "seam_points": seam.len(), "seam_copies": st.seam_copies.len()}});
-    if let Some(r) = shaped_report {
-        result["body"]["shaped"] = r;
+    if let Some((r, _)) = &shaped_report {
+        result["body"]["shaped"] = r.clone();
     }
     result["body"]["world"] = json!({"scale": similarity.scale, "rotation_quaternion": similarity.quaternion(), "origin_m": similarity.translation_for_origin()});
     if input.get("return_mesh").and_then(Value::as_bool).unwrap_or(false) {
         let (_, mut normals) = b::two_sided_normals(&head, &base.triangles, &st);
         let mut positions = st.positions.clone();
         let mut triangles = st.triangles.clone();
+        let worn = match (&shaped_report, spec.body.as_ref()) {
+            (Some((_, manifest)), Some(b)) if !b.wearables.is_empty() => {
+                let frame = crate::tasks::wearable::BaseFrame::new(&pack, &controls, manifest, &dense);
+                let mut covered = std::collections::HashSet::new();
+                let mut meshes = Vec::new();
+                for w in &b.wearables {
+                    let item = store.load_wearable(&w.asset).map_err(ApiError::not_found)?;
+                    let p = frame.evaluate(&item.binding).map_err(ApiError::invalid)?;
+                    if w.hide_body {
+                        covered.extend(item.binding.hidden.iter().copied());
+                    }
+                    let tris: Vec<[u32; 3]> = item.faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0].0, f[k].0, f[k + 1].0])).collect();
+                    let n = crate::tasks::wearable::vertex_normals(&p, &tris);
+                    let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+                    meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": item.manifest.transparent,
+                                       "positions": f32s(&p), "normals": f32s(&n), "indices": b64(&idx), "vertices": p.len(), "triangles": tris.len()}));
+                }
+                if !covered.is_empty() {
+                    let hidden = crate::tasks::wearable::hidden_body(&pack, 0, &st, &covered).map_err(ApiError::invalid)?;
+                    triangles.retain(|t| !t.iter().all(|&v| hidden[v as usize]));
+                }
+                meshes
+            }
+            _ => Vec::new(),
+        };
         if spec.body.as_ref().is_some_and(|s| !s.genitals.is_empty()) && text(input, "body").is_empty() {
             let level = pack.fine.as_ref().map_or(2, |f| f.level);
             let g = crate::tasks::mesh::genital_mesh(&pack, &controls, level, &st.positions, &normals).map_err(ApiError::invalid)?;
@@ -635,7 +660,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         result["mesh"] = json!({"frame": "dense frame: metres, z up", "positions": f32s(&positions), "normals": f32s(&normals),
                                 "indices": b64(&indices), "seam_lines": f32s(&lines), "head_positions": f32s(&head),
-                                "head_scale": controls.head_scale});
+                                "head_scale": controls.head_scale, "wearables": worn});
     }
     if !failed.is_empty() && input.get("enforce").and_then(Value::as_bool).unwrap_or(true) {
         return Err(ApiError::new(Code::GateFailed, format!("stitch gates failed: {}", failed.join("; "))).details(result));

@@ -19,6 +19,8 @@ pub struct BodyUi {
     pub pairs: Vec<Pair>,
     pub compounds: Vec<String>,
     pub genitals: Vec<String>,
+    pub wear_key: String,
+    pub store_wear: Vec<(String, String)>,
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
@@ -79,6 +81,9 @@ impl World {
                 next.remove(field);
             }
         }
+        if next.get("wearables").and_then(Value::as_array).is_some_and(Vec::is_empty) {
+            next.remove("wearables");
+        }
         let next = Value::Object(next);
         if next == s.character.body {
             return false;
@@ -117,6 +122,53 @@ impl World {
                 put(c, name, v);
             }
         }))
+    }
+
+    pub fn wearables_load(&mut self) {
+        let Some(s) = &self.session else { return };
+        if self.body_ui.wear_key == s.store {
+            return;
+        }
+        self.body_ui.wear_key = s.store.clone();
+        let env = gf_api::call(&gf_api::Ctx::from_env(), "wearable.list", &json!({"store": s.store}));
+        self.body_ui.store_wear = env["result"]["wearables"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|w| Some((w["wearable"].as_str()?.to_string(), w["name"].as_str().unwrap_or("").to_string())))
+            .collect();
+    }
+
+    pub fn body_wear(&mut self, asset: &str) -> Result<bool, String> {
+        if !asset.starts_with("sha256:") {
+            return Err(format!("{asset} is not a wearable reference (sha256:...)"));
+        }
+        Ok(self.body_edit(|b| {
+            let list = b.entry("wearables").or_insert_with(|| json!([]));
+            if let Some(list) = list.as_array_mut()
+                && !list.iter().any(|w| w["asset"] == asset)
+            {
+                list.push(json!({"asset": asset, "hide_body": true}));
+            }
+        }))
+    }
+
+    pub fn body_unwear(&mut self, asset: &str) -> bool {
+        self.body_edit(|b| {
+            if let Some(list) = b.get_mut("wearables").and_then(Value::as_array_mut) {
+                list.retain(|w| w["asset"] != asset);
+            }
+        })
+    }
+
+    pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
+        self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset {
+                    w["hide_body"] = json!(hide);
+                }
+            }
+        })
     }
 
     pub fn body_set_genitals(&mut self, kind: &str) -> Result<bool, String> {
@@ -165,6 +217,7 @@ impl crate::studio::Studio<'_> {
                 return;
             }
             self.world.body_sliders_load();
+            self.world.wearables_load();
             if let Some(e) = &self.world.body_ui.error {
                 ui.colored_label(ui.visuals().error_fg_color, trf("body.sliders_failed", &[("error", e)]));
                 return;
@@ -174,6 +227,7 @@ impl crate::studio::Studio<'_> {
             let mut pair_commit = None;
             let mut compound_commit = None;
             let mut genitals_commit = None;
+            let mut wear_commit: Option<(String, Option<bool>)> = None;
             if !ui_state.genitals.is_empty() {
                 let current = body["genitals"].as_str().unwrap_or("none").to_string();
                 let label = |k: &str| tr(&format!("body.genitals.{k}")).to_string();
@@ -222,6 +276,40 @@ impl crate::studio::Studio<'_> {
                 });
             }
             ui.separator();
+            ui.label(egui::RichText::new(tr("body.wearables")).strong());
+            let worn: Vec<(String, bool)> = body["wearables"].as_array().into_iter().flatten().filter_map(|w| Some((w["asset"].as_str()?.to_string(), w["hide_body"].as_bool().unwrap_or(true)))).collect();
+            let label = |asset: &str| {
+                let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
+                format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
+            };
+            if worn.is_empty() {
+                ui.label(egui::RichText::new(tr("body.wear_none")).weak());
+            }
+            for (asset, hide) in &worn {
+                ui.horizontal(|ui| {
+                    ui.label(label(asset));
+                    let mut h = *hide;
+                    if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
+                        wear_commit = Some((asset.clone(), Some(h)));
+                    }
+                    if ui.small_button(tr("body.wear_remove")).clicked() {
+                        wear_commit = Some((asset.clone(), None));
+                    }
+                });
+            }
+            let free: Vec<&(String, String)> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.0)).collect();
+            if free.is_empty() {
+                ui.label(egui::RichText::new(tr("body.wear_store_empty")).weak());
+            } else {
+                egui::ComboBox::from_id_salt("body_wear_add").selected_text(tr("body.wear_add")).show_ui(ui, |ui| {
+                    for w in free {
+                        if ui.selectable_label(false, label(&w.0)).clicked() {
+                            wear_commit = Some((w.0.clone(), Some(true)));
+                        }
+                    }
+                });
+            }
+            ui.separator();
             let shaped = body.get("weights").is_some() || body.get("compounds").is_some();
             let reset = ui.add_enabled(shaped, egui::Button::new(tr("body.reset"))).clicked();
             if let Some((id, v)) = pair_commit {
@@ -229,6 +317,20 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((name, v)) = compound_commit {
                 let _ = self.world.body_set_compound(&name, v);
+            }
+            if let Some((asset, hide)) = wear_commit {
+                let worn_now = worn.iter().any(|w| w.0 == asset);
+                match (worn_now, hide) {
+                    (true, Some(h)) => {
+                        self.world.body_wear_hide(&asset, h);
+                    }
+                    (true, None) => {
+                        self.world.body_unwear(&asset);
+                    }
+                    (false, _) => {
+                        let _ = self.world.body_wear(&asset);
+                    }
+                }
             }
             if let Some(kind) = genitals_commit {
                 let _ = self.world.body_set_genitals(&kind);

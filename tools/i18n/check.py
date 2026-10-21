@@ -54,7 +54,7 @@ JS_SINKS = [
     re.compile(r"\blabel:\s*[\"'`]([^\"'`$]*" + LETTERS + r")"),
     re.compile(r"\bnew Error\(\s*[\"'`]([^\"'`$]*" + LETTERS + r"[^\"'`]*)"),
     re.compile(r"\btext:\s*[\"'`]([^\"'`$]*" + LETTERS + r")"),
-    re.compile(r"\bel\([\"'][a-z]+[\"'],[^()]*?,\s*[\"'`]([^\"'`$]*" + LETTERS + r")"),
+    re.compile(r"\bel\([\"'][a-z]+[\"'],[^()]*?,\s*[\"'`]([^\"'`$]*" + LETTERS + r")(?![^\"'`$]*[\"'`]\s*:)"),
 ]
 RS_SINKS = [
     re.compile(r"\.(?:label|button|small_button|heading|strong|selectable_label|on_hover_text|hint_text|menu_button)\((?:&?format!\()?\"([^\"]*" + LETTERS + r"[^\"]*)\""),

@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -143,6 +143,22 @@ fn body() -> Value {
              "fields": [hidden("store", "$import.input.store"), hidden("body", "$import.result.body"),
                         {"name": "targets", "label": "MakeHuman targets folder", "widget": "folder", "bind": "$import.input.targets", "common": true},
                         {"name": "families", "label": "Target families (JSON list)", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn wearable() -> Value {
+    json!({
+        "id": "wearable", "title": "Import a garment", "group": "Body", "developer": false,
+        "summary": "MakeHuman clothes, shoes, hats, hair or beards into the store, ready to wear in the Body shape panel.",
+        "steps": [
+            {"id": "import", "title": "Garment", "command": "wearable.import",
+             "help": "The path of a MakeHuman clothes file (.mhclo) on this machine, with its .obj, .mhmat and textures beside it; several separated by commas. The binding fits the garment to any shaped body; its hidden-vertex list says what body it covers. Wear it from the Body shape panel (Wearables).",
+             "fields": [
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "mhclo", "label": "MakeHuman clothes file (.mhclo)", "common": true},
+             ],
              "shows": [{"kind": "report"}]},
         ],
     })

@@ -794,6 +794,7 @@ impl Offscreen {
             }
             "body" => {
                 w.body_sliders_load();
+                w.wearables_load();
                 if let Some(e) = &w.body_ui.error {
                     return Err(format!("body.sliders: {e}"));
                 }
@@ -804,9 +805,12 @@ impl Offscreen {
                         _ => return Err("body set needs value and one of slider or compound".into()),
                     },
                     "genitals" => w.body_set_genitals(text("kind").ok_or("body genitals needs kind (none or one of the body's kinds)")?)?,
+                    "wear" => w.body_wear(text("asset").ok_or("body wear needs asset (a wearable reference)")?)?,
+                    "unwear" => w.body_unwear(text("asset").ok_or("body unwear needs asset")?),
+                    "hide" => w.body_wear_hide(text("asset").ok_or("body hide needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
@@ -815,7 +819,7 @@ impl Offscreen {
                 let body = w.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
                 let values: serde_json::Map<String, Value> =
                     w.body_ui.pairs.iter().map(|p| (p.id.clone(), json!(crate::body_panel::pair_value(&body, p)))).filter(|(_, v)| v.as_f64() != Some(0.0)).collect();
-                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "genitals": w.body_ui.genitals, "values": values,
+                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "genitals": w.body_ui.genitals, "store_wearables": w.body_ui.store_wear.iter().map(|x| json!({"wearable": x.0, "name": x.1})).collect::<Vec<_>>(), "values": values,
                        "settle_error": w.settle_error})
             }
             "stitch" => {
@@ -859,7 +863,7 @@ impl Offscreen {
                 w.tick();
                 let m = w.stitch.last.as_ref();
                 json!({"status": w.stitch.status, "pass": w.stitch.pass, "stale": w.stitch.stale, "vertices": m.map(|m| m.positions.len() / 3), "triangles": m.map(|m| m.indices.len() / 3),
-                       "seam_segments": m.map(|m| m.lines.len() / 2), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
+                       "seam_segments": m.map(|m| m.lines.len() / 2), "wearables": m.map(|m| m.wearables.iter().map(|x| json!({"name": x.name, "vertices": x.positions.len() / 3})).collect::<Vec<_>>()), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
             }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));

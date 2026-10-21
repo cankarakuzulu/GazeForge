@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{self, ApiError};
 use crate::tasks::api;
-use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, skin, wizards};
+use crate::{CommandDef, Ctx, Kind, anim, body, designer, eyes, grid, jobs, photo, photo_fit, photo_gate, project, registry, skin, wear, wizards};
 
 pub static REGISTRY: &[CommandDef] = &[
     CommandDef {
@@ -203,6 +203,24 @@ pub static REGISTRY: &[CommandDef] = &[
         input: body::joints_input,
         output: body::joints_output,
         run: body::joints,
+    },
+    CommandDef {
+        name: "wearable.list",
+        kind: Kind::Query,
+        summary: "The wearables in a store (clothes, shoes, hats, hair, beards imported with wearable.import): reference, name, vertex count, how many base vertices each hides, whether it is transparent, its material maps.",
+        limits: "A wearable is worn by listing it in the spec's body.wearables; it needs a MakeHuman-mode body.",
+        input: wear::list_input,
+        output: wear::list_output,
+        run: wear::list,
+    },
+    CommandDef {
+        name: "wearable.import",
+        kind: Kind::Mutation,
+        summary: "Import MakeHuman clothes files (.mhclo with their .obj, .mhmat and textures) into a store as wearables; the binding fits each one to any shaped body.",
+        limits: "Content-addressed: importing the same files again gives the same reference. The garment mesh must have one vertex per binding line.",
+        input: wear::import_input,
+        output: wear::import_output,
+        run: wear::import,
     },
     CommandDef {
         name: "body.sliders",

@@ -11,6 +11,7 @@ const CONTROLS = [
 ];
 const BODY_COLOR = [0.78, 0.74, 0.70];
 const FAIL_COLOR = [0.86, 0.22, 0.18];
+const WEAR_COLORS = [[0.25, 0.36, 0.62], [0.55, 0.30, 0.22], [0.30, 0.52, 0.34], [0.62, 0.52, 0.24], [0.46, 0.32, 0.56], [0.30, 0.55, 0.56]];
 
 function load() {
   try {
@@ -109,10 +110,16 @@ function mount(root, api) {
     save(state);
   }
 
+  let drawnWear = 0;
+
   function draw() {
     const visible = last && state.show && !stale;
     if (!visible) api.setExtraMesh('stitch-body', null);
     else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
+    const wear = visible ? last.wearables : [];
+    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: WEAR_COLORS[i % WEAR_COLORS.length], label: w.name }));
+    for (let i = wear.length; i < drawnWear; i++) api.setExtraMesh(`wear-${i}`, null);
+    drawnWear = wear.length;
     if (!last || !state.seam || stale) api.setOverlay('stitch-seam', null);
     else api.setOverlay('stitch-seam', { lines: last.lines, color: last.pass ? [1.0, 0.35, 0.2] : [1.0, 0.0, 0.0] });
     api.setPose('stitch-head', visible && last.head && last.headScale !== 1 ? last.head : null);
@@ -142,6 +149,12 @@ function mount(root, api) {
       lines: new Float32Array(bytes(m.seam_lines)),
       head: m.head_positions ? new Float32Array(bytes(m.head_positions)) : null,
       headScale: m.head_scale ?? 1,
+      wearables: (m.wearables || []).map((w) => ({
+        name: w.name,
+        positions: new Float32Array(bytes(w.positions)),
+        normals: new Float32Array(bytes(w.normals)),
+        indices: new Uint32Array(bytes(w.indices)),
+      })),
       values: { ...state.values },
     };
   }

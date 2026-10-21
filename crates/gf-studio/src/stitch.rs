@@ -15,6 +15,14 @@ pub const CONTROLS: [(&str, f64, f64, f64, f64); 6] = [
 ];
 const BODY: [f32; 3] = [0.78, 0.74, 0.70];
 const FAIL: [f32; 3] = [0.86, 0.22, 0.18];
+const WEAR: [[f32; 3]; 6] = [[0.25, 0.36, 0.62], [0.55, 0.30, 0.22], [0.30, 0.52, 0.34], [0.62, 0.52, 0.24], [0.46, 0.32, 0.56], [0.30, 0.55, 0.56]];
+
+pub struct WearMesh {
+    pub name: String,
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+}
 
 pub struct StitchMesh {
     pub positions: Vec<f32>,
@@ -22,6 +30,7 @@ pub struct StitchMesh {
     pub indices: Vec<u32>,
     pub lines: Vec<[f64; 3]>,
     pub head: Option<Vec<f32>>,
+    pub wearables: Vec<WearMesh>,
     pub pass: bool,
 }
 
@@ -38,6 +47,7 @@ pub struct Stitch {
     pub pass: Option<bool>,
     pub last: Option<StitchMesh>,
     pub stale: bool,
+    pub drawn_wear: usize,
     pub pending: bool,
     pub wanted: bool,
     pub job: Option<Receiver<Result<(Value, bool), String>>>,
@@ -58,6 +68,7 @@ impl Default for Stitch {
             pass: None,
             last: None,
             stale: false,
+            drawn_wear: 0,
             pending: false,
             wanted: false,
             job: None,
@@ -75,12 +86,23 @@ fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
     let idx = gf_api::designer::from_base64(m["indices"].as_str().ok_or("character.stitch returned no indices")?)?;
     let lines = floats(&m["seam_lines"], "seam lines")?.chunks_exact(3).map(|c| [c[0] as f64, c[1] as f64, c[2] as f64]).collect();
     let scale = m["head_scale"].as_f64().unwrap_or(1.0);
+    let mut wearables = Vec::new();
+    for w in m["wearables"].as_array().into_iter().flatten() {
+        let idx = gf_api::designer::from_base64(w["indices"].as_str().ok_or("a stitched wearable has no indices")?)?;
+        wearables.push(WearMesh {
+            name: w["name"].as_str().unwrap_or("").to_string(),
+            positions: floats(&w["positions"], "wearable positions")?,
+            normals: floats(&w["normals"], "wearable normals")?,
+            indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+        });
+    }
     Ok(StitchMesh {
         positions: floats(&m["positions"], "positions")?,
         normals: floats(&m["normals"], "normals")?,
         indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
         lines,
         head: if scale != 1.0 { Some(floats(&m["head_positions"], "head positions")?) } else { None },
+        wearables,
         pass,
     })
 }
@@ -261,6 +283,18 @@ impl World {
             None => (None, None, None),
         };
         self.set_extra("stitch-body", body);
+        let wear: Vec<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])> = match &self.stitch.last {
+            Some(m) if visible => m.wearables.iter().enumerate().map(|(i, w)| (w.positions.clone(), w.normals.clone(), w.indices.clone(), WEAR[i % WEAR.len()])).collect(),
+            _ => Vec::new(),
+        };
+        let drawn = wear.len();
+        for (i, w) in wear.into_iter().enumerate() {
+            self.set_extra(&format!("wear-{i}"), Some(w));
+        }
+        for i in drawn..self.stitch.drawn_wear {
+            self.set_extra(&format!("wear-{i}"), None);
+        }
+        self.stitch.drawn_wear = drawn;
         self.set_overlay("stitch-seam", seam);
         let _ = self.set_pose("stitch-head", head);
     }

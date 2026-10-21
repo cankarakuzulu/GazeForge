@@ -48,6 +48,8 @@ function mount(root, api) {
   let pairs = [];
   let compounds = [];
   let genitals = [];
+  let storeWear = [];
+  let wearKey = '';
   const rows = new Map();
   const note = el('div', { class: 'gf-body-note' });
   const filter = el('input', { type: 'text', class: 'wide', placeholder: tr('body.filter') });
@@ -56,8 +58,11 @@ function mount(root, api) {
   const reset = el('button', { type: 'button', text: tr('body.reset') });
   const genitalsPick = el('select', { 'data-body': 'genitals' });
   const genitalsRow = el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.genitals') }), genitalsPick]);
+  const wearList = el('div', { class: 'gf-body-wear' });
+  const wearAdd = el('select', { 'data-body': 'wear-add' });
   const content = el('div', {}, [
     genitalsRow,
+    el('div', { class: 'gf-body-head', text: tr('body.wearables') }), wearList, wearAdd,
     el('div', { class: 'gf-body-head', text: tr('body.compounds') }), compoundBox,
     el('div', { class: 'gf-body-head', text: tr('body.regional') }), filter, familyBox, reset,
   ]);
@@ -123,9 +128,44 @@ function mount(root, api) {
     }
   }
 
+  function wearName(asset) {
+    const w = storeWear.find((x) => x.wearable === asset);
+    return `${w ? w.name : '?'} (${asset.replace('sha256:', '').slice(0, 8)})`;
+  }
+
+  function withWear(body, edit) {
+    const next = JSON.parse(JSON.stringify(body));
+    next.wearables = edit(next.wearables || []);
+    if (!next.wearables.length) delete next.wearables;
+    return next;
+  }
+
+  function syncWear(body) {
+    const worn = body.wearables || [];
+    wearList.replaceChildren(...(worn.length ? worn.map((w) => {
+      const hide = el('input', { type: 'checkbox', 'data-wear-hide': w.asset, title: tr('body.wear_hide_tip') });
+      hide.checked = w.hide_body !== false;
+      hide.addEventListener('change', () => {
+        const b = api.body.get();
+        if (b) apply(withWear(b, (list) => list.map((x) => (x.asset === w.asset ? { ...x, hide_body: hide.checked } : x))), tr('body.wear_hide_line', { name: wearName(w.asset), state: hide.checked ? '✓' : '✗' }));
+      });
+      const remove = el('button', { type: 'button', class: 'small', 'data-wear-remove': w.asset, text: tr('body.wear_remove') });
+      remove.addEventListener('click', () => {
+        const b = api.body.get();
+        if (b) apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), tr('body.wear_remove_line', { name: wearName(w.asset) }));
+      });
+      return el('div', { class: 'gf-stitch-row', 'data-wear': w.asset }, [el('span', { text: wearName(w.asset) }), el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), remove]);
+    }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
+    const free = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable));
+    wearAdd.replaceChildren(el('option', { value: '', text: free.length ? tr('body.wear_add') : tr('body.wear_store_empty') }), ...free.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));
+    wearAdd.disabled = !free.length;
+    wearAdd.value = '';
+  }
+
   function sync() {
     const body = api.body.get();
     if (!body) return;
+    syncWear(body);
     for (const name of compounds) {
       const r = rows.get(`c:${name}`);
       const v = Number(body.compounds && body.compounds[name]) || 0;
@@ -164,6 +204,10 @@ function mount(root, api) {
         pairs = r.pairs || [];
         compounds = (r.compounds || []).filter((c) => !(c.missing && c.missing.length)).map((c) => c.name);
         genitals = r.genitals || [];
+        if (character.store !== wearKey) {
+          wearKey = character.store;
+          storeWear = ((await api.call('wearable.list', { store: character.store })).wearables) || [];
+        }
         note.textContent = '';
         build();
       } catch (e) {
@@ -181,6 +225,12 @@ function mount(root, api) {
   }
 
   filter.addEventListener('input', applyFilter);
+  wearAdd.addEventListener('change', () => {
+    const asset = wearAdd.value;
+    const b = api.body.get();
+    if (!asset || !b) return;
+    apply(withWear(b, (list) => (list.some((x) => x.asset === asset) ? list : [...list, { asset, hide_body: true }])), tr('body.wear_add_line', { name: wearName(asset) }));
+  });
   genitalsPick.addEventListener('change', () => {
     const b = api.body.get();
     if (!b) return;
