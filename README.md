@@ -461,7 +461,7 @@ gazeforge wearable attach --store DIR --spec FILE --obj SOLID.obj|.glb --bone NA
 ```
 
 ```json
-"body": {"wearables": [{"asset": "sha256:...", "hide_body": true}, {"asset": "sha256:...", "physics": "springbone"}]}
+"body": {"wearables": [{"asset": "sha256:...", "hide_body": true, "layer": 2}, {"asset": "sha256:...", "physics": "springbone"}]}
 ```
 
 - **MakeHuman clothes** (`wearable import`, the "Import a garment" task): a `.mhclo` file with its mesh, material and
@@ -473,11 +473,12 @@ gazeforge wearable attach --store DIR --spec FILE --obj SOLID.obj|.glb --bone NA
 - **Rigid items** (`wearable attach`, the "Attach a solid to a bone" task): a sword or a helmet kept in one bone's
   frame, placed on any character at its modelled size (or scaled with the bone), weighted wholly to that bone.
 
-When worn, each item is pushed out of the body (opaque items), layered over the items under it (MakeHuman's `z_depth`),
-and the body it covers is left out unless `hide_body` is false. `export-glb` writes every item textured (colour,
+When worn, each item is pushed out of the body (opaque items), layered over the items under it (by its `layer`, or
+MakeHuman's `z_depth` when it has none: lower is closer to the skin), and the body it covers is left out unless
+`hide_body` is false. `export-glb` writes every item textured (colour,
 normal, occlusion packed into the metallic-roughness texture; alpha cards as a mask) on every level of detail, decimated
 to the body's ratio (hair and beard cards kept whole), and skinned with the body rig. The Body shape panel (studio and
-browser) wears, hides, takes off and sets the physics of each item, with undo; the stitch preview draws them.
+browser) wears, hides, takes off, orders and sets the physics of each item, with undo; the stitch preview draws them.
 
 **Physics** (`physics`, needs `--body-rig`): `cloth` writes a `_PIN` weight per vertex (1 where the item lies on the
 body, 0 where it hangs free); `springbone` builds chains of extra joints from the item's own mesh, rooted where it rests
