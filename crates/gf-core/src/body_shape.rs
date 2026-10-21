@@ -273,7 +273,12 @@ mod tests {
             assert_eq!(c.plus.len(), c.minus.len(), "{}", c.name);
             for ((p, wp), (m, wm)) in c.plus.iter().zip(&c.minus) {
                 assert_eq!(wp, wm, "{}", c.name);
-                let flip = |s: &str| s.replace("-incr", "-#").replace("-decr", "-incr").replace("-#", "-decr");
+                let flip = |s: &str| {
+                    [("-incr", "-decr"), ("-decr", "-incr"), ("-up", "-down"), ("-down", "-up")]
+                        .iter()
+                        .find_map(|(a, b)| s.strip_suffix(a).map(|x| format!("{x}{b}")))
+                        .unwrap_or_else(|| s.to_string())
+                };
                 assert_eq!(&flip(p), m, "{}: {p} pairs with {m}", c.name);
             }
         }

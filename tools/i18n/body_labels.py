@@ -18,7 +18,7 @@ FAMILY = {"arms": "Arms", "legs": "Legs", "feet": "Feet", "hands": "Hands", "hip
           "buttocks": "Buttocks", "neck": "Neck", "genitals": "Genitals"}
 COMPOUND = {"leg_length": "Leg length", "arm_length": "Arm length", "shoulder_width": "Shoulder width", "torso_length": "Torso length",
             "hip_width": "Hip width", "waist": "Waist", "chest": "Chest", "athletic": "Athletic", "curvy": "Curvy", "belly": "Belly",
-            "hand_size": "Hand size", "foot_size": "Foot size", "arm_muscle": "Arm muscle", "leg_muscle": "Leg muscle"}
+            "hand_size": "Hand size", "foot_size": "Foot size", "arm_muscle": "Arm muscle", "leg_muscle": "Leg muscle", "breast_shape": "Breasts natural / implanted"}
 
 
 LABELS = {"genitals/penis-testicles": "Testicle size", "genitals/penis-circ": "Penis girth", "breast/breast-dist": "Breast spacing",
