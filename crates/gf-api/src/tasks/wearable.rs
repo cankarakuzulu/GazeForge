@@ -13,6 +13,8 @@ use super::{Options, need, only};
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
 pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out", "hide"];
 const INSIDE_TOLERANCE_M: f64 = 0.001;
+const COVER_REACH_M: f64 = 0.15;
+const COVER_BEHIND_M: f64 = 0.005;
 
 struct BaseFrame {
     body: HashMap<u32, Point>,
@@ -80,6 +82,43 @@ fn vertex_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
     }).collect()
 }
 
+fn sub(a: Point, b: Point) -> Point {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross(u: Point, v: Point) -> Point {
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+}
+
+fn dot(u: Point, v: Point) -> f64 {
+    u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+}
+
+fn normalized(u: Point) -> Point {
+    let l = dot(u, u).sqrt().max(1e-30);
+    u.map(|x| x / l)
+}
+
+fn ray_hits(origin: Point, dir: Point, t: &[Point; 3]) -> Option<f64> {
+    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+    let p = cross(dir, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-14 {
+        return None;
+    }
+    let s = sub(origin, t[0]);
+    let u = dot(s, p) / det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = cross(s, e1);
+    let v = dot(dir, q) / det;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    Some(dot(e2, q) / det)
+}
+
 fn nearest(points: &[Point], p: Point) -> usize {
     let d = |q: &Point| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
     (0..points.len()).min_by(|&a, &b| d(&points[a]).total_cmp(&d(&points[b]))).unwrap_or(0)
@@ -132,6 +171,7 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--hide takes on or off, got {other}")),
     };
     let mut garments = String::new();
+    let mut garment_triangles: Vec<[Point; 3]> = Vec::new();
     let mut covered: HashSet<u32> = HashSet::new();
     let mut offset = head.len() + st.positions.len();
     let mut rows = Vec::new();
@@ -167,6 +207,11 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
             garments.push_str(&format!("f {}\n", ids.join(" ")));
         }
         covered.extend(&binding.hidden);
+        for f in &faces {
+            for k in 1..f.len().saturating_sub(1) {
+                garment_triangles.push([positions[f[0].0 as usize], positions[f[k].0 as usize], positions[f[k + 1].0 as usize]]);
+            }
+        }
         offset += positions.len();
         rows.push(json!({"name": name, "file": file, "vertices": positions.len(), "faces": faces.len(), "hides_base_vertices": binding.hidden.len(),
                          "inside_body": {"vertices": depths.len(), "share": depths.len() as f64 / positions.len() as f64,
@@ -175,17 +220,32 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     }
     let hidden = if hide { hidden_body(pack, &st, &covered)? } else { vec![false; st.positions.len()] };
     let mut dropped = 0;
+    let mut uncovered: Vec<[u32; 3]> = Vec::new();
     for t in &st.triangles {
         if t.iter().all(|&v| hidden[v as usize]) {
             dropped += 1;
+            let [a, b, c] = t.map(|v| st.positions[v as usize]);
+            let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
+            let n = normalized(cross(sub(b, a), sub(c, a)));
+            if !garment_triangles.iter().any(|g| ray_hits(centre, n, g).is_some_and(|d| (-COVER_BEHIND_M..=COVER_REACH_M).contains(&d))) {
+                uncovered.push(*t);
+            }
             continue;
         }
         obj.push_str(&format!("f {} {} {}\n", t[0] + h + 1, t[1] + h + 1, t[2] + h + 1));
     }
     obj.push_str(&garments);
+    if !uncovered.is_empty() {
+        obj.push_str("o uncovered\n");
+        for t in &uncovered {
+            obj.push_str(&format!("f {} {} {}\n", t[0] + h + 1, t[1] + h + 1, t[2] + h + 1));
+        }
+    }
     std::fs::write(out, obj).map_err(|e| format!("{}: {e}", out.display()))?;
     Ok(json!({"ok": true, "command": "wearable fit", "out": out.display().to_string(),
               "body": {"vertices": st.positions.len(), "head_vertices": head.len(), "triangles": st.triangles.len(), "hidden_triangles": dropped, "hide": hide,
+                       "hidden_uncovered": {"triangles": uncovered.len(), "object": "uncovered", "reach_mm": COVER_REACH_M * 1000.0,
+                                            "meaning": "a left-out body triangle whose outward normal line from its centroid meets no garment triangle within the reach (or just behind it): a hole where the body is hidden and nothing covers it"},
                        "hide_meaning": "a body triangle is left out when all three corners are covered: every cage vertex a corner is refined from is in some garment's hidden list"},
               "garments": rows, "frame": "world: metres, z up, the character's root similarity applied",
               "inside_meaning": format!("garment vertices more than {} mm on the inner side of the nearest vertex of the stitched LOD0 character (head and body), along that vertex's normal", INSIDE_TOLERANCE_M * 1000.0)}))
