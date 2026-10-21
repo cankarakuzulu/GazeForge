@@ -610,6 +610,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: api::build,
     },
     CommandDef {
+        name: "base.derive_lods",
+        kind: Kind::Job,
+        summary: "Add or replace a game base's coarser levels of detail: the finest level stays exactly as it is, every coarser level is decimated from it (carrying the dense shapes and layout weights), and the result is a new game base in the store (argv `derive-lods`).",
+        limits: "Fields are the argv options with _ for -; the result is the argv command's JSON. lods must be strictly decreasing and below the finest level's vertex count. Pass the importance weights the base was built with (weights): without them the coarser levels are decimated unweighted, and the base does not record which weights it used.",
+        input: api::derive_input,
+        output: api::argv_output,
+        run: api::derive,
+    },
+    CommandDef {
         name: "export.obj",
         kind: Kind::Job,
         summary: "Place dense positions on a game base with a placement and write the game mesh as an .obj (argv `export-obj`).",

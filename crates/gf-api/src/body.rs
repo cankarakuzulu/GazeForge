@@ -58,7 +58,7 @@ pub fn import_input() -> Value {
             "cut_z_m": {"type": "number", "description": "mesh mode: remove every face above this height (metres, z up, after unit and axis) and join at the cut"},
             "align": {"enum": ["translate", "similarity", "none"], "description": "mesh mode: translate (default) moves the body's neck ring centre onto the head seam's; similarity also scales the body to the seam's size; none keeps the OBJ's placement"},
             "lods": {"type": "array", "items": {"type": "integer"}, "description": "vertex counts of the coarser body LODs (default [3500, 1400]); makehuman mode with subdivide 0 and mesh mode"},
-            "subdivide": {"type": "integer", "minimum": 0, "maximum": 2, "description": "makehuman mode: Catmull-Clark levels the shaped body is refined by before it is stitched and decimated (default 2; 0 keeps the cage as LOD0); LOD0 is decimated from this level, the coarser LODs from level 1, so each LOD's neck ring stays sparser than the head LOD's seam"},
+            "subdivide": {"type": "integer", "minimum": 0, "maximum": 2, "description": "makehuman mode: Catmull-Clark levels the shaped body is refined by before it is stitched and decimated (default 2; 0 keeps the cage as LOD0); each LOD is decimated from the level its size calls for (this level at 20000 vertices and up, level 1 from 2000, the cage below) with the protected neck collar at most a quarter of it, so its neck ring stays sparser than the head LOD's seam"},
             "fine_lods": {"type": "array", "items": {"type": "integer"}, "description": "makehuman mode with subdivide > 0: vertex counts of every body LOD, each a decimation of the refined body with the neck band kept fine (default [24000, 8000, 3000])"},
             "targets": {"type": "string", "description": "makehuman mode: the MakeHuman targets directory, to shape the body with macro sliders"},
             "macro": {"type": "string", "description": "makehuman mode: the macro definition (macro.json) for the sliders"},
@@ -193,7 +193,8 @@ pub fn sliders_input() -> Value {
 }
 
 pub fn sliders_output() -> Value {
-    shape(json!({"pairs": {"type": "array"}, "compounds": {"type": "array"}, "shared_with_head": {"type": "integer"}}))
+    shape(json!({"pairs": {"type": "array"}, "compounds": {"type": "array"}, "shared_with_head": {"type": "integer"},
+                 "genitals": {"type": "array", "items": {"type": "string"}, "description": "the body.genitals kinds this body can wear (empty when its pack has no helper-genital patch or its targets no helpers)"}}))
 }
 
 pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -231,7 +232,9 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             json!({"name": c.name, "missing": missing})
         })
         .collect();
-    Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared}))
+    let body: gf_io::body_store::BodyManifest = store.get_manifest("bodies", &targets.body).map_err(ApiError::not_found)?;
+    let genitals: Vec<&str> = if body.files.contains_key("genital/quads.npy") && targets.helpers > 0 { bs::GENITALS.to_vec() } else { Vec::new() };
+    Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared, "genitals": genitals}))
 }
 
 pub struct Shaped {
@@ -611,14 +614,26 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     result["body"]["world"] = json!({"scale": similarity.scale, "rotation_quaternion": similarity.quaternion(), "origin_m": similarity.translation_for_origin()});
     if input.get("return_mesh").and_then(Value::as_bool).unwrap_or(false) {
-        let (_, normals) = b::two_sided_normals(&head, &base.triangles, &st);
-        let indices: Vec<u8> = st.triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+        let (_, mut normals) = b::two_sided_normals(&head, &base.triangles, &st);
+        let mut positions = st.positions.clone();
+        let mut triangles = st.triangles.clone();
+        if spec.body.as_ref().is_some_and(|s| !s.genitals.is_empty()) && text(input, "body").is_empty() {
+            let level = pack.fine.as_ref().map_or(2, |f| f.level);
+            let g = crate::tasks::mesh::genital_mesh(&pack, &controls, level, &st.positions, &normals).map_err(ApiError::invalid)?;
+            let offset = positions.len() as u32;
+            triangles.extend(g.triangles.iter().map(|t| t.map(|i| i + offset)));
+            positions.extend(&g.positions);
+            normals.extend(&g.normals);
+            result["body"]["genitals"] = json!({"vertices": g.positions.len(), "triangles": g.triangles.len(), "subdivision_level": level,
+                                                "meaning": "drawn with the body mesh (appended after its vertices); export-glb writes it as its own Genitals_LODn node"});
+        }
+        let indices: Vec<u8> = triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
         let mut lines = Vec::new();
         for m in 0..seam.len() {
             lines.push(seam[m].position);
             lines.push(seam[(m + 1) % seam.len()].position);
         }
-        result["mesh"] = json!({"frame": "dense frame: metres, z up", "positions": f32s(&st.positions), "normals": f32s(&normals),
+        result["mesh"] = json!({"frame": "dense frame: metres, z up", "positions": f32s(&positions), "normals": f32s(&normals),
                                 "indices": b64(&indices), "seam_lines": f32s(&lines), "head_positions": f32s(&head),
                                 "head_scale": controls.head_scale});
     }

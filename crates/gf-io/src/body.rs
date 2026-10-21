@@ -560,7 +560,7 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
         let mut fine = b::Fine::new(quads, quad_uvs, mesh.positions.len(), input.subdivide, &ring, &controls)?;
         let all = fine.stencil.apply(&mesh.positions);
         for (i, &target) in input.fine_lods.iter().enumerate() {
-            let level = if i == 0 { input.subdivide } else { input.subdivide.min(1) };
+            let level = if target >= 20000 { input.subdivide } else if target >= 2000 { input.subdivide.min(1) } else { 0 };
             let (triangles, uvs) = if level == input.subdivide {
                 (fine.triangles.clone(), fine.uvs.clone())
             } else {
@@ -570,7 +570,8 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
             let n = triangles.iter().flatten().map(|&v| v as usize + 1).max().unwrap_or(0);
             let source = Mesh { positions: all[..n].to_vec(), triangles, uvs };
             let ring: Vec<u32> = fine.ring.iter().map(|r| r.vertex).filter(|&v| (v as usize) < n).collect();
-            let mut made = make_lods(&source, &[target], &ring, FINE_COLLAR_ROWS << level);
+            let rows = (FINE_COLLAR_ROWS << level).min(target / 4 / ring.len().max(1)).max(1);
+            let mut made = make_lods(&source, &[target], &ring, rows);
             if made.len() != 1 {
                 return Err(format!("fine LOD{i}: {target} vertices is not below the {n} vertices of subdivision level {level}"));
             }

@@ -120,6 +120,7 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("shape-targets", &["all", "head", "none"]),
     ("levels", &["all", "finest"]),
     ("quads", &["on", "off"]),
+    ("body-gates", &["refuse", "report"]),
 ];
 
 const TEXT: &[(&str, &str)] = &[
@@ -163,6 +164,9 @@ const TEXT: &[(&str, &str)] = &[
     ("f5-eye-depth", "pair: a,b"),
     ("f6-sliver-eye", "pair: a,b"),
     ("game", "game base reference, sha256:<hex>, as store.list prints it"),
+    ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast) or the path of a MakeHuman rig .json"),
+    ("body-weights", "path of the MakeHuman weights .json that goes with a --body-rig path (a preset carries its own)"),
+    ("body-gates", "refuse: a body whose stitch gates fail is not exported; report: it is exported and the failures go in the sidecar"),
     ("shape-targets", "catalog targets scored one at a time: all, head (designer categories, expressions and macro keys) or none"),
     ("samples", "random combinations of head targets (and expressions) scored as well"),
     ("seed", "seed of the random combinations"),
@@ -272,6 +276,14 @@ pub fn build_input() -> Value {
 
 pub fn build(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, super::build_base)
+}
+
+pub fn derive_input() -> Value {
+    schema(&[super::DERIVE_KEYS], &["store", "game", "dense", "out", "lods"])
+}
+
+pub fn derive(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, super::derive_lods)
 }
 
 pub fn obj_input() -> Value {

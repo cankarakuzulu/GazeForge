@@ -75,15 +75,18 @@ fn face_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
     }).collect()
 }
 
-fn genital_lod(
-    pack: &gf_core::body::BodyPack,
-    controls: &gf_core::body::Controls,
-    level: usize,
-    body_positions: &[Point],
-    body_normals: &[Point],
-    by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>,
-    name: String,
-) -> Result<(Lod, Value), String> {
+pub struct GenitalMesh {
+    pub level: gf_core::subdiv::Level,
+    pub positions: Vec<Point>,
+    pub normals: Vec<Point>,
+    pub triangles: Vec<[u32; 3]>,
+    pub uvs: Vec<[Uv; 3]>,
+    pub rim: usize,
+    pub gap_mm: f64,
+    pub flipped: bool,
+}
+
+pub fn genital_mesh(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, level: usize, body_positions: &[Point], body_normals: &[Point]) -> Result<GenitalMesh, String> {
     let g = pack.genital.as_ref().ok_or("the spec asks for genitals but the body has no helper-genital patch: re-import it (body.import)")?;
     if pack.helpers.positions.is_empty() {
         return Err("the body carries no helper vertices: re-import it (body.import, then body.targets)".into());
@@ -125,6 +128,20 @@ fn genital_lod(
         }
     }
     let normals = face_normals(&positions, &triangles);
+    Ok(GenitalMesh { level: l, positions, normals, triangles, uvs, rim: rim.len(), gap_mm, flipped })
+}
+
+fn genital_lod(
+    pack: &gf_core::body::BodyPack,
+    controls: &gf_core::body::Controls,
+    level: usize,
+    body_positions: &[Point],
+    body_normals: &[Point],
+    by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>,
+    name: String,
+) -> Result<(Lod, Value), String> {
+    let GenitalMesh { level: l, positions, normals, triangles, uvs, rim, gap_mm, flipped } = genital_mesh(pack, controls, level, body_positions, body_normals)?;
+    let g = pack.genital.as_ref().ok_or("the body has no helper-genital patch")?;
     let surface = gm::split_seams(&triangles, &uvs);
     let skin = match by_obj {
         Some(w) => {
@@ -145,7 +162,7 @@ fn genital_lod(
         }
         None => None,
     };
-    let report = json!({"node": name, "subdivision_level": level, "vertices": surface.source.len(), "triangles": triangles.len(), "rim_vertices": rim.len(),
+    let report = json!({"node": name, "subdivision_level": level, "vertices": surface.source.len(), "triangles": triangles.len(), "rim_vertices": rim,
                         "rim_off_body_before_mm": gap_mm, "winding_flipped": flipped});
     let lod = Lod {
         name,

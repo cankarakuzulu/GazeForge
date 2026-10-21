@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), create(), photos(), export(), body(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -76,6 +76,27 @@ fn build_base() -> Value {
     })
 }
 
+fn lods() -> Value {
+    json!({
+        "id": "lods", "title": "Add levels of detail", "group": "Setup", "developer": false,
+        "summary": "More or different coarser levels of detail for a game base already in the store: the finest level stays exactly as it is, so characters made on it keep their head.",
+        "steps": [
+            {"id": "derive", "title": "Levels", "command": "base.derive_lods",
+             "help": "List the coarser levels as vertex counts, strictly decreasing and below the finest level (for example 10000,5000,2500,1200,500). Each is decimated from the finest, carrying the dense shapes; give the importance weights the base was built with, or the coarse levels are decimated without them. The new game base goes into the store beside the old one. Point a character's base.game_base at it, then import a body with as many levels of detail.",
+             "fields": [
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "game", "label": "Game base", "bind": "$run.game", "common": true},
+                 {"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
+                 {"name": "out", "label": "Output folder", "widget": "folder", "bind": "$dir/base", "common": true},
+                 {"name": "lods", "label": "Levels of detail (e.g. 10000,5000,2500)", "common": true},
+                 {"name": "shapes", "label": "Shapes to serve (all, none, a,b)"},
+                 {"name": "weights", "label": "Importance weights (.npy)", "widget": "file_open", "ext": ".npy"},
+             ],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
 fn create() -> Value {
     json!({
         "id": "create", "title": "Create a character from data", "group": "Characters", "developer": false,
@@ -100,16 +121,27 @@ fn create() -> Value {
 fn body() -> Value {
     json!({
         "id": "body", "title": "Import a body", "group": "Body", "developer": false,
-        "summary": "A body mesh made into a body pack the head stitches onto (the Stitch panel and export --body use it).",
+        "summary": "A body mesh made into a body pack the head stitches onto (the Stitch panel and export --body use it), and the MakeHuman targets that shape it with the character's macros and the Body shape panel.",
         "steps": [
             {"id": "import", "title": "Body", "command": "body.import",
-             "help": "A MakeHuman body (exact) or any body mesh; the neck is cut where the head meets it.",
+             "help": "A MakeHuman body (exact) or any body mesh; the neck is cut where the head meets it. A MakeHuman body is refined by Catmull-Clark (subdivision levels) and each body level of detail is decimated from it: list one vertex count per head level of detail.",
              "fields": [
                  {"name": "mode", "label": "Kind", "common": true},
                  {"name": "obj", "label": "Body .obj", "widget": "file_open", "ext": ".obj", "common": true},
                  {"name": "dense", "label": "Dense base folder", "widget": "folder", "common": true},
                  {"name": "out", "label": "Body pack folder", "widget": "folder", "bind": "$dir/body", "common": true},
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "targets", "label": "MakeHuman targets folder", "widget": "folder", "common": true},
+                 {"name": "macro", "label": "Macro definition", "widget": "file_open", "ext": ".json", "common": true},
+                 {"name": "subdivide", "label": "Subdivision levels (0-2)"},
+                 {"name": "fine_lods", "label": "Body levels of detail (vertices, finest first)"},
              ],
+             "shows": [{"kind": "report"}]},
+            {"id": "targets", "title": "Targets", "command": "body.targets", "optional": true,
+             "help": "The MakeHuman targets on this body, so the macros shape it and the Body shape panel has its sliders; name the families to import (macrodetails and breast by default; add legs, arms, torso, hip, stomach, buttocks, pelvis, neck, hands, feet and genitals for the regional sliders). Put the reference in the spec's body.targets.",
+             "fields": [hidden("store", "$import.input.store"), hidden("body", "$import.result.body"),
+                        {"name": "targets", "label": "MakeHuman targets folder", "widget": "folder", "bind": "$import.input.targets", "common": true},
+                        {"name": "families", "label": "Target families (JSON list)", "common": true}],
              "shows": [{"kind": "report"}]},
         ],
     })
@@ -262,6 +294,8 @@ fn export() -> Value {
                  {"name": "morphs", "label": "Morph targets", "widget": "targets"},
                  {"name": "eyes", "label": "Eyes file", "widget": "file_open", "ext": ".json"},
                  {"name": "body", "label": "Body pack", "widget": "folder"},
+                 {"name": "body_rig", "label": "Body skeleton (game_engine, game_engine_with_breast or a rig .json)"},
+                 {"name": "body_gates", "label": "When the body's stitch gates fail"},
                  {"name": "lids", "label": "Eyelid fitting"},
                  {"name": "rig", "label": "Face rig"},
                  {"name": "sparse", "label": "Sparse morphs"},

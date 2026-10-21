@@ -47,13 +47,17 @@ function mount(root, api) {
   let key = '';
   let pairs = [];
   let compounds = [];
+  let genitals = [];
   const rows = new Map();
   const note = el('div', { class: 'gf-body-note' });
   const filter = el('input', { type: 'text', class: 'wide', placeholder: tr('body.filter') });
   const compoundBox = el('div', { class: 'gf-body-compounds' });
   const familyBox = el('div', { class: 'gf-body-families' });
   const reset = el('button', { type: 'button', text: tr('body.reset') });
+  const genitalsPick = el('select', { 'data-body': 'genitals' });
+  const genitalsRow = el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.genitals') }), genitalsPick]);
   const content = el('div', {}, [
+    genitalsRow,
     el('div', { class: 'gf-body-head', text: tr('body.compounds') }), compoundBox,
     el('div', { class: 'gf-body-head', text: tr('body.regional') }), filter, familyBox, reset,
   ]);
@@ -82,6 +86,8 @@ function mount(root, api) {
 
   function build() {
     rows.clear();
+    genitalsPick.replaceChildren(...['none', ...genitals].map((k) => el('option', { value: k, text: tr(`body.genitals.${k}`) })));
+    genitalsRow.style.display = genitals.length ? '' : 'none';
     compoundBox.replaceChildren(...compounds.map((name) => {
       const label = tr(`body.compound.${name}`);
       return slider(`c:${name}`, label, -1, 1, (v) => {
@@ -137,6 +143,7 @@ function mount(root, api) {
       const set = fam.filter((p) => pairValue(body, p) !== 0).length;
       d.querySelector('summary').textContent = tr('body.family_line', { family: tr(`body.family.${d.dataset.family}`), set, count: fam.length });
     }
+    genitalsPick.value = body.genitals || 'none';
     reset.disabled = !body.weights && !body.compounds;
   }
 
@@ -156,11 +163,13 @@ function mount(root, api) {
         const r = await api.call('body.sliders', { store: character.store, targets: body.targets, catalog: character.catalog });
         pairs = r.pairs || [];
         compounds = (r.compounds || []).filter((c) => !(c.missing && c.missing.length)).map((c) => c.name);
+        genitals = r.genitals || [];
         note.textContent = '';
         build();
       } catch (e) {
         pairs = [];
         compounds = [];
+        genitals = [];
         build();
         note.textContent = tr('body.sliders_failed', { error: e && e.message ? e.message : e });
         content.style.display = 'none';
@@ -172,6 +181,14 @@ function mount(root, api) {
   }
 
   filter.addEventListener('input', applyFilter);
+  genitalsPick.addEventListener('change', () => {
+    const b = api.body.get();
+    if (!b) return;
+    const next = JSON.parse(JSON.stringify(b));
+    if (genitalsPick.value === 'none') delete next.genitals;
+    else next.genitals = genitalsPick.value;
+    apply(next, tr('body.genitals_line', { kind: tr(`body.genitals.${genitalsPick.value}`) }));
+  });
   reset.addEventListener('click', () => {
     const b = api.body.get();
     if (!b) return;

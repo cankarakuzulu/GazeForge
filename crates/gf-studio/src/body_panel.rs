@@ -18,6 +18,7 @@ pub struct BodyUi {
     pub key: String,
     pub pairs: Vec<Pair>,
     pub compounds: Vec<String>,
+    pub genitals: Vec<String>,
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
@@ -64,6 +65,7 @@ impl World {
             .map(|p| Pair { id: text(&p["id"]).unwrap_or_default(), family: text(&p["family"]).unwrap_or_default(), incr: text(&p["incr"]), decr: text(&p["decr"]) })
             .collect();
         self.body_ui.compounds = r["compounds"].as_array().into_iter().flatten().filter(|c| c["missing"].as_array().is_none_or(Vec::is_empty)).filter_map(|c| text(&c["name"])).collect();
+        self.body_ui.genitals = r["genitals"].as_array().into_iter().flatten().filter_map(text).collect();
         self.body_ui.error = None;
     }
 
@@ -117,6 +119,19 @@ impl World {
         }))
     }
 
+    pub fn body_set_genitals(&mut self, kind: &str) -> Result<bool, String> {
+        if !(kind.is_empty() || kind == "none" || self.body_ui.genitals.iter().any(|g| g == kind)) {
+            return Err(format!("{kind} is not a genitals kind this body can wear"));
+        }
+        Ok(self.body_edit(|b| {
+            if kind.is_empty() || kind == "none" {
+                b.remove("genitals");
+            } else {
+                b.insert("genitals".into(), json!(kind));
+            }
+        }))
+    }
+
     pub fn body_reset(&mut self) -> bool {
         self.body_edit(|b| {
             b.remove("weights");
@@ -158,6 +173,19 @@ impl crate::studio::Studio<'_> {
             let ui_state = &mut self.world.body_ui;
             let mut pair_commit = None;
             let mut compound_commit = None;
+            let mut genitals_commit = None;
+            if !ui_state.genitals.is_empty() {
+                let current = body["genitals"].as_str().unwrap_or("none").to_string();
+                let label = |k: &str| tr(&format!("body.genitals.{k}")).to_string();
+                egui::ComboBox::from_label(tr("body.genitals")).selected_text(label(&current)).show_ui(ui, |ui| {
+                    for kind in std::iter::once("none").chain(ui_state.genitals.iter().map(String::as_str)) {
+                        if ui.selectable_label(current == kind, label(kind)).clicked() && current != kind {
+                            genitals_commit = Some(kind.to_string());
+                        }
+                    }
+                });
+                ui.separator();
+            }
             ui.label(egui::RichText::new(tr("body.compounds")).strong());
             for name in &ui_state.compounds {
                 let value = body["compounds"][name].as_f64().unwrap_or(0.0);
@@ -201,6 +229,9 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((name, v)) = compound_commit {
                 let _ = self.world.body_set_compound(&name, v);
+            }
+            if let Some(kind) = genitals_commit {
+                let _ = self.world.body_set_genitals(&kind);
             }
             if reset {
                 self.world.body_reset();

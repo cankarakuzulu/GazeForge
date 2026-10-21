@@ -803,9 +803,10 @@ impl Offscreen {
                         (None, Some(c), Some(v)) => w.body_set_compound(c, v)?,
                         _ => return Err("body set needs value and one of slider or compound".into()),
                     },
+                    "genitals" => w.body_set_genitals(text("kind").ok_or("body genitals needs kind (none or one of the body's kinds)")?)?,
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
@@ -814,7 +815,7 @@ impl Offscreen {
                 let body = w.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
                 let values: serde_json::Map<String, Value> =
                     w.body_ui.pairs.iter().map(|p| (p.id.clone(), json!(crate::body_panel::pair_value(&body, p)))).filter(|(_, v)| v.as_f64() != Some(0.0)).collect();
-                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "values": values,
+                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "genitals": w.body_ui.genitals, "values": values,
                        "settle_error": w.settle_error})
             }
             "stitch" => {

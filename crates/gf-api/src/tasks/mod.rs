@@ -178,6 +178,73 @@ pub fn build_base(opts: &Options) -> Result<Value, String> {
               "settings": settings, "weights": weight_summary, "stats": result.stats, "lods": coarser}))
 }
 
+pub const DERIVE_KEYS: &[&str] = &["store", "game", "dense", "out", "lods", "shapes", "weights", "min-angle", "max-angle", "max-turn", "boundary-weight", "improve-below", "flip-flat"];
+
+pub fn derive_lods(opts: &Options) -> Result<Value, String> {
+    only(opts, "derive-lods", &[DERIVE_KEYS])?;
+    let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
+    let reference = need(opts, "game")?;
+    let (manifest, base) = store.load_game(reference)?;
+    let lods = lod_targets(opts, base.kept.len())?;
+    if lods.is_empty() {
+        return Err("--lods names the coarser levels to derive, e.g. 10000,5000,2500".into());
+    }
+    let settings = Settings {
+        target_vertices: lods[0],
+        min_angle_deg: number(opts, "min-angle", 4.0)?,
+        max_angle_deg: number(opts, "max-angle", 170.0)?,
+        max_normal_turn_deg: number(opts, "max-turn", 45.0)?,
+        boundary_weight: number(opts, "boundary-weight", 100.0)?,
+        improve_below_deg: number(opts, "improve-below", 20.0)?,
+        flip_flat_deg: number(opts, "flip-flat", 15.0)?,
+    };
+    crate::jobs::progress("load", 0, 1, "dense base and shapes");
+    let dense = Dense::load(Path::new(need(opts, "dense")?))?;
+    if base.owner.len() != dense.positions.len() {
+        return Err(format!("the game base covers {} dense vertices, the dense base has {}", base.owner.len(), dense.positions.len()));
+    }
+    let names: Vec<String> = match opts.get("shapes").map(String::as_str).unwrap_or("all") {
+        "all" => dense.manifest.shapes.iter().map(|s| s.name.clone()).collect(),
+        "none" => Vec::new(),
+        list => list.split(',').map(str::to_string).collect(),
+    };
+    let pick = |all: &[[f64; 3]]| -> Vec<[f64; 3]> { base.kept.iter().map(|&d| all[d as usize]).collect() };
+    let mut shapes = vec![pick(&dense.positions)];
+    for name in &names {
+        shapes.push(pick(&dense.shape(name)?));
+    }
+    let weights = match opts.get("weights") {
+        Some(path) => {
+            let all = dense.vertex_weights(path)?;
+            Some(base.kept.iter().map(|&d| all[d as usize]).collect::<Vec<f64>>())
+        }
+        None => None,
+    };
+    crate::jobs::progress("decimate", 0, 1, "");
+    let started = std::time::Instant::now();
+    let clock = || started.elapsed().as_secs_f64();
+    let levels = decimate::decimate_levels(shapes, &base.triangles, &base.triangle_uvs, &settings, weights.as_deref(), &lods[1..], Some(&clock));
+    let out = Path::new(need(opts, "out")?);
+    game_base::save(out, &base)?;
+    std::fs::write(out.join("report.json"), serde_json::to_string_pretty(&manifest.build).map_err(|e| e.to_string())?).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut rows = Vec::new();
+    for (target, level) in lods.iter().zip(levels) {
+        let kept: Vec<u32> = level.kept.iter().map(|&k| base.kept[k as usize]).collect();
+        let owner: Vec<u32> = base.owner.iter().map(|&g| level.owner[g as usize]).collect();
+        let derived = decimate::Decimated { kept, owner, triangles: level.triangles, triangle_uvs: level.triangle_uvs, stats: level.stats };
+        let dir = out.join(format!("lod_{target}"));
+        game_base::save(&dir, &derived)?;
+        let mut stored = serde_json::to_value(&derived.stats).map_err(|e| e.to_string())?;
+        stored.as_object_mut().map(|m| m.remove("seconds"));
+        std::fs::write(dir.join("report.json"), serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?).map_err(|e| format!("{}: {e}", dir.display()))?;
+        rows.push(json!({"target": target, "vertices": derived.kept.len(), "triangles": derived.triangles.len(), "stats": derived.stats}));
+    }
+    let (game, _) = store.import_game(out, &manifest.pack)?;
+    Ok(json!({"ok": true, "command": "derive-lods", "from": reference, "game": game, "out": out.display().to_string(), "lod0": {"vertices": base.kept.len(), "triangles": base.triangles.len(), "same_as": reference},
+              "lods": rows, "shapes": names,
+              "method": "the finest level is the given base's, unchanged; every coarser level decimates it (its vertices, triangles and UVs, carried through the dense shapes), so each is a subset of the finest and a new level can be added at any time; the stored level reports leave out the decimation time (it is in lods[].stats here), so the same inputs give the same reference"}))
+}
+
 pub fn lod_targets(opts: &Options, finest: usize) -> Result<Vec<usize>, String> {
     let Some(text) = opts.get("lods") else {
         return Ok(Vec::new());
