@@ -792,6 +792,31 @@ impl Offscreen {
                 json!({"status": w.timeline.status, "rig_note": w.timeline.rig_note, "readout": w.timeline.readout, "t": w.timeline.t, "frames": w.timeline.clip.as_ref().map(|c| c.times.len()),
                        "poses": w.poses.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), "eye_pose": w.eye_pose.is_some()})
             }
+            "body" => {
+                w.body_sliders_load();
+                if let Some(e) = &w.body_ui.error {
+                    return Err(format!("body.sliders: {e}"));
+                }
+                let changed = match text("do").unwrap_or("summary") {
+                    "set" => match (text("slider"), text("compound"), num("value")) {
+                        (Some(id), None, Some(v)) => w.body_set_pair(id, v)?,
+                        (None, Some(c), Some(v)) => w.body_set_compound(c, v)?,
+                        _ => return Err("body set needs value and one of slider or compound".into()),
+                    },
+                    "reset" => w.body_reset(),
+                    "summary" => false,
+                    other => return Err(format!("body do is set, reset or summary, got {other}")),
+                };
+                if changed {
+                    w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
+                }
+                w.tick();
+                let body = w.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
+                let values: serde_json::Map<String, Value> =
+                    w.body_ui.pairs.iter().map(|p| (p.id.clone(), json!(crate::body_panel::pair_value(&body, p)))).filter(|(_, v)| v.as_f64() != Some(0.0)).collect();
+                json!({"changed": changed, "body": body, "sliders": w.body_ui.pairs.len(), "compounds": w.body_ui.compounds, "values": values,
+                       "settle_error": w.settle_error})
+            }
             "stitch" => {
                 match text("do").unwrap_or("summary") {
                     "go" => {
