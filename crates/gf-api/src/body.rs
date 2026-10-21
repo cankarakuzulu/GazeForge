@@ -412,7 +412,35 @@ pub fn rig_source(rig: &str, weights: Option<&str>) -> Result<(Value, Value, Val
     Ok((read(rig)?, read(w)?, json!({"rig": file(rig), "weights": file(w)})))
 }
 
-pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weights_json: &Value, source: Value) -> Result<BodyRig, String> {
+pub struct HeadFit {
+    pub reference: Vec<Point>,
+    pub fitted: Vec<Point>,
+    pub ring_offset_mm: f64,
+}
+
+const HEAD_FIT_NEAREST: usize = 8;
+
+impl HeadFit {
+    pub fn shift(&self, p: Point) -> Point {
+        let mut near: Vec<(f64, usize)> = self.reference.iter().enumerate().map(|(i, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2), i)).collect();
+        let k = HEAD_FIT_NEAREST.min(near.len());
+        if k == 0 {
+            return [0.0; 3];
+        }
+        near.select_nth_unstable_by(k - 1, |a, b| a.0.total_cmp(&b.0));
+        let (mut sum, mut total) = ([0.0; 3], 0.0);
+        for &(d2, i) in &near[..k] {
+            let w = 1.0 / (d2 + 1e-10);
+            for (s, (f, r)) in sum.iter_mut().zip(self.fitted[i].iter().zip(&self.reference[i])) {
+                *s += w * (f - r);
+            }
+            total += w;
+        }
+        sum.map(|s| s / total)
+    }
+}
+
+pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weights_json: &Value, source: Value, head_fit: Option<&HeadFit>) -> Result<BodyRig, String> {
     let rig = gf_core::body_rig::RigDef::parse(rig_json)?;
     if rig.bones.len() > 256 {
         return Err(format!("the rig has {} bones; a glTF skin here holds at most 256", rig.bones.len()));
@@ -432,12 +460,35 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weigh
     }
     let head_joint = (0..score.len()).max_by(|&a, &b| score[a].total_cmp(&score[b])).ok_or("the rig has no bones")?;
     let unweighted = pack.source.iter().chain(&pack.cage_source).filter(|o| by_obj.get(o).is_none_or(Vec::is_empty)).count();
-    let meta = json!({"source": source,
+    let mut heads: Vec<Point> = ends.iter().map(|e| control(e.0)).collect();
+    let under_head = |mut j: usize| -> bool {
+        while let Some(p) = rig.bones[j].parent.as_deref().and_then(|n| rig.bones.iter().position(|b| b.name == n)) {
+            if p == head_joint {
+                return true;
+            }
+            j = p;
+        }
+        false
+    };
+    let mut head_moves = Vec::new();
+    if let Some(fit) = head_fit {
+        for j in (0..heads.len()).filter(|&j| under_head(j)) {
+            let d = fit.shift(heads[j]);
+            heads[j] = [heads[j][0] + d[0], heads[j][1] + d[1], heads[j][2] + d[2]];
+            head_moves.push((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() * 1000.0);
+        }
+    }
+    let head_joints = match head_fit {
+        Some(fit) => json!({"moved": head_moves.len(), "max_mm": head_moves.iter().copied().fold(0.0f64, f64::max), "ring_offset_mm": fit.ring_offset_mm,
+                            "method": "joints under the head bone follow the head's own shape: each moves by the inverse-square mean displacement of its 8 nearest head cage vertices, from the head as the body targets shape it (the spec without head-only weights, residual and head scale) to the head as exported"}),
+        None => json!({"moved": 0, "method": "joints under the head bone stay where the body targets put them"}),
+    };
+    let meta = json!({"source": source, "head_joints": head_joints,
                       "bones": rig.bones.len(), "head_bone": rig.bones[head_joint].name, "weights_for_bones_not_in_the_rig": unknown, "unweighted_vertices": unweighted,
                       "joints": "one glTF joint per bone at the bone's head, evaluated on this body (MakeHuman's rule: a helper cube's mean, a vertex or a mean of vertices); translation-only rest, so each inverse bind is the joint's negated position; tails and rolls are not used",
                       "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the 4 strongest, renormalised",
                       "eyes": "rigid on the head bone"});
-    Ok(BodyRig { heads: ends.iter().map(|e| control(e.0)).collect(), rig, by_obj, head_joint, meta })
+    Ok(BodyRig { heads, rig, by_obj, head_joint, meta })
 }
 
 pub fn refined_input() -> Value {
@@ -686,4 +737,26 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         return Err(ApiError::new(Code::GateFailed, format!("stitch gates failed: {}", failed.join("; "))).details(result));
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid() -> Vec<Point> {
+        (0..10).flat_map(|i| (0..10).map(move |j| [i as f64 * 0.01, j as f64 * 0.01, 0.0])).collect()
+    }
+
+    #[test]
+    fn a_joint_moves_with_the_head_near_it() {
+        let reference = grid();
+        let fitted: Vec<Point> = reference.iter().map(|p| [p[0] + 0.004, p[1], p[2] + 0.002]).collect();
+        let fit = HeadFit { reference: reference.clone(), fitted, ring_offset_mm: 0.0 };
+        let d = fit.shift([0.045, 0.045, 0.01]);
+        assert!((d[0] - 0.004).abs() < 1e-12 && d[1].abs() < 1e-12 && (d[2] - 0.002).abs() < 1e-12, "a rigid shift moves the joint by exactly that: {d:?}");
+        let local: Vec<Point> = reference.iter().map(|p| if p[0] < 0.03 { [p[0], p[1], p[2] + 0.01] } else { *p }).collect();
+        let fit = HeadFit { reference, fitted: local, ring_offset_mm: 0.0 };
+        assert!((fit.shift([0.0, 0.05, 0.005])[2] - 0.01).abs() < 1e-9, "a joint over the raised part rises with it");
+        assert!(fit.shift([0.09, 0.05, 0.005])[2].abs() < 1e-9, "a joint over the still part stays");
+    }
 }

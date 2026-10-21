@@ -22,6 +22,13 @@ open, with its last measurement, rather than left out.
   `cmu_mb`, `openpose`; MakeHuman's rigs and weights bundled, CC0) skins the whole character; `body.joints` returns a
   rig's joints on any shaped body. Measured: joints equal MakeHuman's rule to 0.001 mm on all eight rigs; in Godot 4.7
   the rest pose reproduces to 0.07 mm and the neck seam stays closed with the spine, neck and head rotated.
+- **Head joints follow the head.** On export with a body rig, the joints under the head bone move with the head's own
+  sliders, head scale and sculpt (each by the inverse-square mean displacement of its 8 nearest head cage vertices,
+  from the head the body targets alone would give to the head as exported). Measured (`default` rig, eyes moved by
+  head sliders, head scale 1.1): eye joints 27.3 mm from the eyeball centres before, 5.3-5.6 mm after; on an unchanged
+  head 3.1 mm before and 3.4 mm after (0.4 mm worse: the reference head and the body's helpers disagree by up to 6 mm at
+  the neck ring, where the head keeps its own neck shape). B3 skin gate unchanged: rest identity 2e-8, seam gap 0 under
+  a pose. `body.joints` still reports the body targets' joints.
 - **Humanoid maps.** Each rig preset but `openpose` maps to Godot's humanoid profile and Unity's humanoid, written into
   the glb as the root extension `GAZEFORGE_humanoid` (`extensions/GAZEFORGE_humanoid/README.md`). Tested in the core
   for every preset: all required bones mapped, each under the bone its profile parent maps to, every Left bone on the

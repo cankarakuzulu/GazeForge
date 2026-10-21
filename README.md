@@ -427,8 +427,13 @@ into the glb as `GAZEFORGE_humanoid` ([contract](extensions/GAZEFORGE_humanoid/R
 names and Unity's to the preset's bones. The Godot addon `clients/godot-addon/addons/gazeforge_humanoid` attaches the
 map to the skeleton on import and ships a ready retarget bone map per preset; through Godot's own retargeter the bones
 take the humanoid names and an animation made on them plays (tested on `mixamo` and `default`: turning `LeftUpperArm`
-moves the left hand 36 cm and the right hand not at all). Not yet: the face rig together with a body rig, head-region
-joints that follow the head's own sliders and sculpt.
+moves the left hand 36 cm and the right hand not at all). **Head joints follow the head:** the joints under the head
+bone (jaw, eyes, the `default` preset's face bones) move with the head's own sliders, head scale and sculpt on export -
+each by the displacement of the head surface around it, from the head the body targets would give to the head as
+exported. Measured with `--body-rig default` on a character whose eyes were moved by head sliders and whose head was
+scaled 1.1: the eye joints sat 27 mm from the eyeball centres before and 5.3-5.6 mm after (3 mm is MakeHuman's own
+offset on an unchanged head); the neck seam stays shut under a pose. `body.joints` does not apply it yet. Not yet: the
+face rig together with a body rig.
 
 **Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
 (`Genitals_LODn`), shaped by the macros and the genital sliders (penis length and girth, testicle size), its rim set

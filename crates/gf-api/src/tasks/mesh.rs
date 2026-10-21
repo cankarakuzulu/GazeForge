@@ -1023,6 +1023,25 @@ fn eye_part_mesh(eye: &lids::Eye, name: &str, joint: Option<usize>, origin: Poin
     }
 }
 
+fn head_fit(store: &Store, spec: &gf_core::character::Spec, macros: Option<&ch::MacroSource>, pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, positions: &[Point]) -> Result<crate::body::HeadFit, String> {
+    let body = spec.body.as_ref().ok_or("the spec has no body")?.canonical();
+    let targets = store.load_body_targets(&body.targets)?;
+    let mut reference = spec.clone();
+    reference.weights.retain(|id, _| targets.targets.contains_key(id));
+    reference.residual = None;
+    if let Some(m) = reference.macros.as_mut() {
+        m.head_scale = 1.0;
+    }
+    let (plain, _, _, _) = ch::evaluate_traced(store, &reference, macros)?;
+    let n = pack.cage_source.len().min(plain.len()).min(positions.len());
+    let mut fitted = positions[..n].to_vec();
+    gf_core::body::scale_about(&mut fitted, pack.pivot(), controls.head_scale);
+    let at: HashMap<u32, usize> = pack.source.iter().enumerate().map(|(i, &o)| (o, i)).collect();
+    let ring_offset_mm = pack.cage_source[..n].iter().enumerate().filter_map(|(d, o)| at.get(o).map(|&i| (plain[d], pack.mesh.positions[i])))
+        .map(|(a, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() * 1000.0).fold(0.0f64, f64::max);
+    Ok(crate::body::HeadFit { reference: plain[..n].to_vec(), fitted, ring_offset_mm })
+}
+
 pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let store = Store::open(Path::new(need(opts, "store")?))?;
     let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
@@ -1126,8 +1145,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 return Err("--body-rig cannot be combined with --rig yet: the head and face rig on the body's head bone is the next step".into());
             }
             let (pack, _, controls) = body.as_ref().filter(|_| world.is_some()).ok_or("--body-rig needs the spec's own body (a makehuman-mode body in the spec), not --body")?;
+            let fit = head_fit(&store, &spec, source.as_ref(), pack, controls, &positions)?;
             let (rig_json, weights_json, source) = crate::body::rig_source(r, w.map(String::as_str))?;
-            Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source)?)
+            Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source, Some(&fit))?)
         }
     };
     let head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
