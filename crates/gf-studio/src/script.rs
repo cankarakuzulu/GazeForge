@@ -808,9 +808,10 @@ impl Offscreen {
                     "wear" => w.body_wear(text("asset").ok_or("body wear needs asset (a wearable reference)")?)?,
                     "unwear" => w.body_unwear(text("asset").ok_or("body unwear needs asset")?),
                     "hide" => w.body_wear_hide(text("asset").ok_or("body hide needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
+                    "cloth" => w.body_wear_cloth(text("asset").ok_or("body cloth needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, cloth, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;

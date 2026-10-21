@@ -69,7 +69,11 @@ pub struct WearableRef {
     pub asset: String,
     #[serde(default = "yes")]
     pub hide_body: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub physics: String,
 }
+
+pub const WEARABLE_PHYSICS: &[&str] = &["cloth"];
 
 fn yes() -> bool {
     true
@@ -113,6 +117,9 @@ impl BodySpec {
         for (i, w) in self.wearables.iter().enumerate() {
             if let Err(e) = hash::parse_reference(&w.asset) {
                 out.push(format!("body.wearables[{i}].asset: {e}"));
+            }
+            if !(w.physics.is_empty() || w.physics == "none" || WEARABLE_PHYSICS.contains(&w.physics.as_str())) {
+                out.push(format!("body.wearables[{i}].physics {:?} is not none or one of {WEARABLE_PHYSICS:?}", w.physics));
             }
             if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
                 out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
@@ -274,7 +281,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new() };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -283,6 +290,10 @@ mod tests {
         assert!(!text.contains("wearables"), "an undressed body keeps its bytes: {text}");
         let read: BodySpec = serde_json::from_str(&format!("{}, \"wearables\": [{{\"asset\": \"{r}\"}}]}}", text.trim_end_matches('}'))).unwrap();
         assert!(read.wearables[0].hide_body, "hide_body defaults to true");
+        assert!(read.wearables[0].physics.is_empty());
+        let shaken = BodySpec { wearables: vec![WearableRef { physics: "jelly".into(), ..worn(&r) }], ..ok.clone() };
+        assert!(shaken.problems().iter().any(|x| x.contains("physics")));
+        assert!(BodySpec { wearables: vec![WearableRef { physics: "cloth".into(), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
     }
 
     #[test]

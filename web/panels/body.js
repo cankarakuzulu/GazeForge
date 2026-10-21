@@ -149,12 +149,26 @@ function mount(root, api) {
         const b = api.body.get();
         if (b) apply(withWear(b, (list) => list.map((x) => (x.asset === w.asset ? { ...x, hide_body: hide.checked } : x))), tr('body.wear_hide_line', { name: wearName(w.asset), state: hide.checked ? '✓' : '✗' }));
       });
+      const cloth = el('input', { type: 'checkbox', 'data-wear-cloth': w.asset, title: tr('body.wear_cloth_tip') });
+      cloth.checked = w.physics === 'cloth';
+      cloth.addEventListener('change', () => {
+        const b = api.body.get();
+        if (b) {
+          apply(withWear(b, (list) => list.map((x) => {
+            if (x.asset !== w.asset) return x;
+            const next = { ...x };
+            if (cloth.checked) next.physics = 'cloth';
+            else delete next.physics;
+            return next;
+          })), tr('body.wear_cloth_line', { name: wearName(w.asset), state: cloth.checked ? '✓' : '✗' }));
+        }
+      });
       const remove = el('button', { type: 'button', class: 'small', 'data-wear-remove': w.asset, text: tr('body.wear_remove') });
       remove.addEventListener('click', () => {
         const b = api.body.get();
         if (b) apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), tr('body.wear_remove_line', { name: wearName(w.asset) }));
       });
-      return el('div', { class: 'gf-stitch-row', 'data-wear': w.asset }, [el('span', { text: wearName(w.asset) }), el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), remove]);
+      return el('div', { class: 'gf-stitch-row', 'data-wear': w.asset }, [el('span', { text: wearName(w.asset) }), el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [cloth, el('span', { text: tr('body.wear_cloth') })]), remove]);
     }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
     const free = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable));
     wearAdd.replaceChildren(el('option', { value: '', text: free.length ? tr('body.wear_add') : tr('body.wear_store_empty') }), ...free.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));

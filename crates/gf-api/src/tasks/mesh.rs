@@ -173,6 +173,7 @@ fn genital_lod(
         morphs: Vec::new(),
         skin,
         material: None,
+        custom: Vec::new(),
     };
     Ok((lod, report))
 }
@@ -338,7 +339,7 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize) -> Lod {
+fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize, pin: Option<&[f32]>) -> Lod {
     let normals = super::wearable::vertex_normals(&positions, triangles);
     let surface = gm::split_seams(triangles, uvs);
     let skin = by_obj.map(|w| {
@@ -368,6 +369,7 @@ fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept
         morphs: Vec::new(),
         skin,
         material: Some(material),
+        custom: pin.map(|w| vec![("_PIN".to_string(), surface.source.iter().map(|&v| w[v as usize]).collect())]).unwrap_or_default(),
     }
 }
 
@@ -1536,6 +1538,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let genitals = spec.body.as_ref().is_some_and(|b| b.canonical().genitals == "male");
     let mut genital_rows: Vec<Value> = Vec::new();
     let mut wear_slots: Vec<(usize, usize)> = Vec::new();
+    let mut physics_ext: Option<Value> = None;
     let mut wear_materials: Vec<gltf::Material> = Vec::new();
     if let Some((pack, pack_manifest, controls)) = &body {
         crate::jobs::progress("body", 0, 1, "");
@@ -1548,6 +1551,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let frame = super::wearable::BaseFrame::new(pack, controls, pack_manifest, &positions);
         let mut pending: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Value)> = Vec::new();
         let mut worn: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value)> = Vec::new();
+        let mut cloth_nodes: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
         let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
         let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for w in &worn_refs {
@@ -1558,7 +1562,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             let slot = wear_materials.len();
             wear_materials.push(wearable_material(&store, &item)?);
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
+            if w.physics == "cloth" && body_rig.is_none() {
+                return Err(format!("wearable {} asks for cloth physics: export it with --body-rig (the colliders and the pinning ride the skeleton)", item.manifest.name));
+            }
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
         let mut rows = Vec::new();
@@ -1650,6 +1657,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     weights_1: Vec::new(),
                 })),
                 material: None,
+                custom: Vec::new(),
             });
             if genitals && st.positions.len() >= GENITAL_MIN_BODY_VERTICES {
                 let level = pack.fine.as_ref().map_or(2, |f| f.level).saturating_sub(i);
@@ -1688,11 +1696,17 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         .collect();
                     super::wearable::layer(&mut layers);
                 }
-                for ((item, _, slot, ladder, _), positions) in worn.iter().zip(&placed) {
+                for ((item, _, slot, ladder, row), positions) in worn.iter().zip(&placed) {
                     let (kept, tris, uvs) = &ladder[i.min(ladder.len() - 1)];
                     let joint = item.manifest.attach.as_ref().and_then(|a| body_rig.as_ref().and_then(|br| br.rig.bones.iter().position(|b| b.name == a.bone)));
-                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot);
+                    let pin: Option<Vec<f32>> = (row["physics"] == "cloth").then(|| {
+                        positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect()
+                    });
+                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref());
                     wear_slots.push((body_lods.len(), *slot));
+                    if pin.is_some() {
+                        cloth_nodes.entry(item.manifest.name.clone()).or_insert_with(Vec::new).push(format!("{}_LOD{i}", lod.name));
+                    }
                     body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod });
                 }
             }
@@ -1710,6 +1724,20 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                            "skin": if let Some(br) = &body_rig { br.meta.clone() } else if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
         if !failures.is_empty() {
             body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
+        }
+        if !cloth_nodes.is_empty()
+            && let Some(br) = &body_rig
+        {
+            let caps = super::wearable::capsules(pack, controls, &br.rig, &br.by_obj, &frame)?;
+            let colliders: Vec<Value> = caps
+                .iter()
+                .map(|c| json!({"joint": c.joint, "bone": c.name, "head": gm::to_gltf(c.head), "tail": gm::to_gltf(c.tail), "radius": c.radius as f32, "from_vertices": c.vertices}))
+                .collect();
+            let cloth: Vec<Value> = cloth_nodes.iter().map(|(name, nodes)| json!({"wearable": name, "nodes": nodes, "pin": "_PIN"})).collect();
+            physics_ext = Some(json!({"version": 1, "colliders": colliders, "cloth": cloth,
+                                      "pin": {"near_m": super::wearable::PIN_NEAR_M, "far_m": super::wearable::PIN_FAR_M},
+                                      "frame": "glTF: metres, y up, in the Character root's space (the root's transform applies, like the meshes')"}));
+            body_meta["physics"] = json!({"colliders": colliders.len(), "cloth": cloth_nodes.len(), "extension": "GAZEFORGE_physics"});
         }
         if !worn.is_empty() {
             body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
@@ -1825,6 +1853,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             morphs,
             skin,
             material: None,
+            custom: Vec::new(),
         });
     }
     let morph_meta: Vec<Value> = ids
@@ -1864,6 +1893,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 morphs: Vec::new(),
                 skin: body_rig.as_ref().map(|br| skin_data(&vec![[(br.head_joint, 1.0)].as_slice(); vertices.len()])),
                 material: None,
+                custom: Vec::new(),
             });
         }
     }
@@ -1895,6 +1925,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         gltf::Root { name: "Character".into(), translation: [t[0], t[2], -t[1]], rotation: [q[0], q[2], -q[1], q[3]], scale: w.scale }
     });
     let (bytes, report) = gltf::glb_with_root(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r).or(body_gltf_rig.as_ref()), &eye_parts, &materials, root.as_ref())?;
+    let bytes = match physics_ext.take() {
+        Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_physics", ext)?,
+        None => bytes,
+    };
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

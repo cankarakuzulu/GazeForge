@@ -161,6 +161,22 @@ impl World {
         })
     }
 
+    pub fn body_wear_cloth(&mut self, asset: &str, on: bool) -> bool {
+        self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    if on {
+                        o.insert("physics".into(), json!("cloth"));
+                    } else {
+                        o.remove("physics");
+                    }
+                }
+            }
+        })
+    }
+
     pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
         self.body_edit(|b| {
             for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -228,6 +244,7 @@ impl crate::studio::Studio<'_> {
             let mut compound_commit = None;
             let mut genitals_commit = None;
             let mut wear_commit: Option<(String, Option<bool>)> = None;
+            let mut cloth_commit: Option<(String, bool)> = None;
             if !ui_state.genitals.is_empty() {
                 let current = body["genitals"].as_str().unwrap_or("none").to_string();
                 let label = |k: &str| tr(&format!("body.genitals.{k}")).to_string();
@@ -278,6 +295,7 @@ impl crate::studio::Studio<'_> {
             ui.separator();
             ui.label(egui::RichText::new(tr("body.wearables")).strong());
             let worn: Vec<(String, bool)> = body["wearables"].as_array().into_iter().flatten().filter_map(|w| Some((w["asset"].as_str()?.to_string(), w["hide_body"].as_bool().unwrap_or(true)))).collect();
+            let cloth: Vec<String> = body["wearables"].as_array().into_iter().flatten().filter(|w| w["physics"] == "cloth").filter_map(|w| w["asset"].as_str().map(str::to_string)).collect();
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -291,6 +309,10 @@ impl crate::studio::Studio<'_> {
                     let mut h = *hide;
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
                         wear_commit = Some((asset.clone(), Some(h)));
+                    }
+                    let mut c = cloth.contains(asset);
+                    if ui.checkbox(&mut c, tr("body.wear_cloth")).on_hover_text(tr("body.wear_cloth_tip")).changed() {
+                        cloth_commit = Some((asset.clone(), c));
                     }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
@@ -317,6 +339,9 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((name, v)) = compound_commit {
                 let _ = self.world.body_set_compound(&name, v);
+            }
+            if let Some((asset, on)) = cloth_commit {
+                self.world.body_wear_cloth(&asset, on);
             }
             if let Some((asset, hide)) = wear_commit {
                 let worn_now = worn.iter().any(|w| w.0 == asset);

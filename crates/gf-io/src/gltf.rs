@@ -42,6 +42,7 @@ pub struct Lod {
     pub morphs: Vec<MorphData>,
     pub skin: Option<SkinData>,
     pub material: Option<usize>,
+    pub custom: Vec<(String, Vec<f32>)>,
 }
 
 pub struct Attachment {
@@ -430,6 +431,13 @@ pub fn glb_with_root(
                 primitive["attributes"]["JOINTS_1"] = json!(b.raw(&joint_bytes, Some(ARRAY_BUFFER), UNSIGNED_BYTE, n, "VEC4"));
                 primitive["attributes"]["WEIGHTS_1"] = json!(b.raw(&weight_bytes, Some(ARRAY_BUFFER), FLOAT, n, "VEC4"));
             }
+        }
+        for (name, values) in &lod.custom {
+            if !name.starts_with('_') || values.len() != n {
+                return Err(format!("{}: custom attribute {name} must start with _ and have one value per vertex", lod.name));
+            }
+            let bytes: Vec<u8> = values.iter().flat_map(|x| x.to_le_bytes()).collect();
+            primitive["attributes"][name] = json!(b.raw(&bytes, Some(ARRAY_BUFFER), FLOAT, n, "SCALAR"));
         }
         let mut mesh = json!({"name": lod.name});
         if !targets.is_empty() {
@@ -838,6 +846,34 @@ pub fn scene_obj_text(m: &SceneMesh) -> String {
     s
 }
 
+pub fn with_extension(glb: &[u8], name: &str, value: Value) -> Result<Vec<u8>, String> {
+    let (mut doc, bin) = chunks(glb)?;
+    let bin = bin.to_vec();
+    doc["extensions"][name] = value;
+    let used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
+    if !used.iter().any(|u| u == name) {
+        let mut used = used;
+        used.push(json!(name));
+        doc["extensionsUsed"] = json!(used);
+    }
+    let mut text = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
+    while text.len() % 4 != 0 {
+        text.push(b' ');
+    }
+    let total = 12 + 8 + text.len() + 8 + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend(0x4654_6C67u32.to_le_bytes());
+    out.extend(2u32.to_le_bytes());
+    out.extend((total as u32).to_le_bytes());
+    out.extend((text.len() as u32).to_le_bytes());
+    out.extend(0x4E4F_534Au32.to_le_bytes());
+    out.extend(&text);
+    out.extend((bin.len() as u32).to_le_bytes());
+    out.extend(0x004E_4942u32.to_le_bytes());
+    out.extend(&bin);
+    Ok(out)
+}
+
 pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
     let word = |at: usize| -> Result<u32, String> {
         Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))
@@ -919,7 +955,28 @@ mod tests {
             morphs: vec![MorphData { positions: morph, normals: vec![[0.0; 3]; 4] }],
             skin: None,
             material: None,
+            custom: Vec::new(),
         }
+    }
+
+    #[test]
+    fn custom_attributes_and_a_root_extension_survive_a_round_trip() {
+        let mut l = lod(vec![[0.0; 3]; 4]);
+        l.custom = vec![("_PIN".into(), vec![1.0, 0.5, 0.0, 0.25])];
+        let (bytes, _) = glb(&[l], &["m".into()], Sparse::Never, json!({}), "test").unwrap();
+        let bytes = with_extension(&bytes, "GAZEFORGE_physics", json!({"version": 1})).unwrap();
+        let (doc, bin) = chunks(&bytes).unwrap();
+        assert_eq!(doc["extensions"]["GAZEFORGE_physics"]["version"], 1);
+        assert_eq!(doc["extensionsUsed"], json!(["GAZEFORGE_physics"]));
+        let pin = doc["meshes"][0]["primitives"][0]["attributes"]["_PIN"].as_u64().unwrap();
+        assert_eq!(read_plain(&doc, bin, pin).unwrap(), vec![1.0, 0.5, 0.0, 0.25]);
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize, bytes.len());
+        assert_eq!(read_glb(&bytes).unwrap().1[0].positions.len(), 4);
+        let again = with_extension(&bytes, "GAZEFORGE_physics", json!({"version": 2})).unwrap();
+        assert_eq!(chunks(&again).unwrap().0["extensionsUsed"], json!(["GAZEFORGE_physics"]), "listed once");
+        let mut bad = lod(vec![[0.0; 3]; 4]);
+        bad.custom = vec![("PIN".into(), vec![0.0; 4])];
+        assert!(glb(&[bad], &["m".into()], Sparse::Never, json!({}), "test").unwrap_err().contains("must start with _"));
     }
 
     #[test]

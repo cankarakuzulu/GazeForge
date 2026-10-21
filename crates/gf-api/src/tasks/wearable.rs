@@ -40,6 +40,54 @@ fn source_mesh(store: &gf_io::store::Store, path: &Path, diffuse: Option<&String
                              "frame": "glTF y up converted to z up; node transforms applied"})))
 }
 
+pub const PIN_NEAR_M: f64 = 0.005;
+pub const PIN_FAR_M: f64 = 0.03;
+const COLLIDER_SKIP: &[&str] = &["index", "middle", "ring", "pinky", "thumb", "ball", "toe", "Root"];
+
+pub fn pin_weight(distance_out: f64) -> f32 {
+    let t = ((distance_out - PIN_NEAR_M) / (PIN_FAR_M - PIN_NEAR_M)).clamp(0.0, 1.0);
+    (1.0 - t * t * (3.0 - 2.0 * t)) as f32
+}
+
+fn segment_distance(p: Point, a: Point, b: Point) -> f64 {
+    let ab = sub(b, a);
+    let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-18)).clamp(0.0, 1.0);
+    let q = [a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]];
+    dot(sub(p, q), sub(p, q)).sqrt()
+}
+
+pub struct Capsule {
+    pub joint: usize,
+    pub name: String,
+    pub head: Point,
+    pub tail: Point,
+    pub radius: f64,
+    pub vertices: usize,
+}
+
+pub fn capsules(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, rig: &gf_core::body_rig::RigDef, by_obj: &HashMap<u32, gf_core::body_rig::Influences>, frame: &BaseFrame) -> Result<Vec<Capsule>, String> {
+    let at = gf_core::body_rig::Resolver::new(&pack.mesh.positions, &pack.source, &pack.helpers);
+    let ends = rig.evaluate(&at)?;
+    let control = pack.control_joint(controls);
+    let mut owned: Vec<Vec<Point>> = vec![Vec::new(); rig.bones.len()];
+    for (id, p) in frame.skin_points() {
+        if let Some(&(j, _)) = by_obj.get(&id).and_then(|w| w.iter().max_by(|a, b| a.1.total_cmp(&b.1))) {
+            owned[j].push(p);
+        }
+    }
+    let mut out = Vec::new();
+    for (j, bone) in rig.bones.iter().enumerate() {
+        if COLLIDER_SKIP.iter().any(|k| bone.name.contains(k)) || owned[j].len() < 8 {
+            continue;
+        }
+        let (h, t) = (control(ends[j].0), control(ends[j].1));
+        let mut d: Vec<f64> = owned[j].iter().map(|&p| segment_distance(p, h, t)).collect();
+        d.sort_by(f64::total_cmp);
+        out.push(Capsule { joint: j, name: bone.name.clone(), head: h, tail: t, radius: d[d.len() / 2], vertices: d.len() });
+    }
+    Ok(out)
+}
+
 pub struct BoneFrame {
     pub origin: Point,
     pub axes: [Point; 3],
@@ -264,6 +312,10 @@ impl BaseFrame {
 
     pub fn to_makehuman(&self, p: Point) -> Point {
         [p[0] / self.unit, p[2] / self.unit, -p[1] / self.unit]
+    }
+
+    pub fn skin_points(&self) -> impl Iterator<Item = (u32, Point)> + '_ {
+        self.body.iter().chain(self.head.iter().filter(|(k, _)| !self.body.contains_key(k))).map(|(&k, &p)| (k, p))
     }
 
     pub fn surface_ids(&self) -> std::collections::BTreeMap<u32, Point> {
@@ -714,4 +766,35 @@ pub fn check(opts: &Options) -> Result<Value, String> {
     Ok(json!({"ok": true, "command": "wearable check", "base_vertices": base.len(), "shaped": shaped, "files": rows,
               "units": "the base's (MakeHuman: decimetres)",
               "meaning": "each binding evaluated on the base (shaped by the macro targets when given) against its own .obj: as bound, and after removing the mean translation (MakeHuman exports some garments standing on the floor)"}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pins_hold_near_the_body_and_free_far_from_it() {
+        assert_eq!(pin_weight(-0.01), 1.0);
+        assert_eq!(pin_weight(PIN_NEAR_M), 1.0);
+        assert_eq!(pin_weight(PIN_FAR_M), 0.0);
+        assert_eq!(pin_weight(0.2), 0.0);
+        let mid = pin_weight((PIN_NEAR_M + PIN_FAR_M) / 2.0);
+        assert!((mid - 0.5).abs() < 1e-6, "{mid}");
+        let mut last = 1.0;
+        for k in 0..=50 {
+            let w = pin_weight(PIN_NEAR_M + (PIN_FAR_M - PIN_NEAR_M) * k as f64 / 50.0);
+            assert!(w <= last + 1e-7, "falls monotonically");
+            last = w;
+        }
+    }
+
+    #[test]
+    fn a_bone_frame_round_trips_points_and_a_segment_distance_is_exact() {
+        let bf = BoneFrame { origin: [0.1, 0.2, 1.0], axes: [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]], length: 0.25 };
+        let p = [0.3, -0.1, 1.4];
+        let q = bf.from_local(bf.to_local(p));
+        assert!((0..3).all(|k| (p[k] - q[k]).abs() < 1e-12));
+        assert!((segment_distance([1.0, 1.0, 0.0], [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]) - 1.0).abs() < 1e-12);
+        assert!((segment_distance([3.0, 0.0, 0.0], [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]) - 1.0).abs() < 1e-12, "past the tail: to the end point");
+    }
 }
