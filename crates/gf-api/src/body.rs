@@ -379,9 +379,22 @@ pub struct BodyRig {
     pub meta: Value,
 }
 
-pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_path: &Path, weights_path: &Path) -> Result<BodyRig, String> {
-    let read = |p: &Path| -> Result<Value, String> { serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?).map_err(|e| format!("{}: {e}", p.display())) };
-    let rig = gf_core::body_rig::RigDef::parse(&read(rig_path)?)?;
+pub fn rig_source(rig: &str, weights: Option<&str>) -> Result<(Value, Value, Value), String> {
+    let read = |p: &str| -> Result<Value, String> { serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?).map_err(|e| format!("{p}: {e}")) };
+    let file = |p: &str| Path::new(p).file_name().map(|n| n.to_string_lossy().to_string());
+    if gf_core::rig_presets::names().contains(&rig) {
+        let (r, w) = gf_core::rig_presets::preset(rig)?;
+        return match weights {
+            None => Ok((r, w, json!({"preset": rig, "source": "MakeHuman's standard rig and weights, bundled (CC0; THIRD_PARTY.md)"}))),
+            Some(p) => Ok((r, read(p)?, json!({"preset": rig, "weights": file(p)}))),
+        };
+    }
+    let w = weights.ok_or_else(|| format!("{rig} is not a rig preset ({}); a rig file needs its weights file too", gf_core::rig_presets::names().join(", ")))?;
+    Ok((read(rig)?, read(w)?, json!({"rig": file(rig), "weights": file(w)})))
+}
+
+pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weights_json: &Value, source: Value) -> Result<BodyRig, String> {
+    let rig = gf_core::body_rig::RigDef::parse(rig_json)?;
     if rig.bones.len() > 256 {
         return Err(format!("the rig has {} bones; a glTF skin here holds at most 256", rig.bones.len()));
     }
@@ -391,7 +404,7 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_path: &Path, weight
     let at = gf_core::body_rig::Resolver::new(&pack.mesh.positions, &pack.source, &pack.helpers);
     let ends = rig.evaluate(&at)?;
     let control = pack.control_joint(controls);
-    let (by_obj, unknown) = gf_core::body_rig::rig_weights(&read(weights_path)?, &rig)?;
+    let (by_obj, unknown) = gf_core::body_rig::rig_weights(weights_json, &rig)?;
     let mut score = vec![0.0; rig.bones.len()];
     for o in &pack.cage_source {
         for &(j, w) in by_obj.get(o).map(Vec::as_slice).unwrap_or(&[]) {
@@ -400,7 +413,7 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_path: &Path, weight
     }
     let head_joint = (0..score.len()).max_by(|&a, &b| score[a].total_cmp(&score[b])).ok_or("the rig has no bones")?;
     let unweighted = pack.source.iter().chain(&pack.cage_source).filter(|o| by_obj.get(o).is_none_or(Vec::is_empty)).count();
-    let meta = json!({"rig": rig_path.file_name().map(|n| n.to_string_lossy().to_string()), "weights": weights_path.file_name().map(|n| n.to_string_lossy().to_string()),
+    let meta = json!({"source": source,
                       "bones": rig.bones.len(), "head_bone": rig.bones[head_joint].name, "weights_for_bones_not_in_the_rig": unknown, "unweighted_vertices": unweighted,
                       "joints": "one glTF joint per bone at the bone's head, evaluated on this body (MakeHuman's rule: a helper cube's mean, a vertex or a mean of vertices); translation-only rest, so each inverse bind is the joint's negated position; tails and rolls are not used",
                       "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the 4 strongest, renormalised",

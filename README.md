@@ -410,9 +410,10 @@ fixed linear mix of regional targets from -1 to +1: leg and arm length, shoulder
 chest, athletic, curvy, belly, hand and foot size, arm and leg muscle. A target the head's catalog also has drives both
 sides, whichever slider sets it, so the neck stays matched.
 
-**A rig on the body.** `export-glb --body-rig rig.<name>.json --body-weights weights.<name>.json` takes one of
-MakeHuman's standard rigs (game_engine, default, mixamo, cmu_mb, openpose, ...) and its weights and skins the whole
-character: the joints are evaluated on this body as MakeHuman places them (the mean of a helper cube, a vertex or a
+**A rig on the body.** `export-glb --body-rig game_engine` takes one of MakeHuman's standard rigs with its weights,
+bundled in the binary (CC0, see THIRD_PARTY.md): `game_engine`, `game_engine_with_breast`, `default`, `mixamo`, `mixamo_unity`,
+`cmu_mb` or `openpose`; a rig file of the same format works too, with its weights file as `--body-weights`. It skins
+the whole character: the joints are evaluated on this body as MakeHuman places them (the mean of a helper cube, a vertex or a
 mean of vertices of the base mesh), so they follow the macros, regional sliders and compounds; the body takes
 MakeHuman's weights per vertex, the head the bilinear mix of the weights of the head cage's corners around each vertex,
 and the seam vertices of both meshes share theirs, so the neck stays closed in any pose; the eyes ride the head bone.

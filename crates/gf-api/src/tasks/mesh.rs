@@ -781,14 +781,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
     let body_rig = match (opts.get("body-rig"), opts.get("body-weights")) {
         (None, None) => None,
-        (Some(r), Some(w)) => {
+        (None, Some(_)) => return Err("--body-weights goes with --body-rig".into()),
+        (Some(r), w) => {
             if rigged {
                 return Err("--body-rig cannot be combined with --rig yet: the head and face rig on the body's head bone is the next step".into());
             }
             let (pack, _, controls) = body.as_ref().filter(|_| world.is_some()).ok_or("--body-rig needs the spec's own body (a makehuman-mode body in the spec), not --body")?;
-            Some(crate::body::body_rig(pack, controls, Path::new(r), Path::new(w))?)
+            let (rig_json, weights_json, source) = crate::body::rig_source(r, w.map(String::as_str))?;
+            Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source)?)
         }
-        _ => return Err("--body-rig and --body-weights go together".into()),
     };
     let head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
         (Some(br), Some((pack, _, _))) => {
