@@ -19,6 +19,48 @@ pub struct Polys {
     pub faces: Vec<Vec<(u32, Option<u32>)>>,
 }
 
+pub fn read_obj_groups(path: &Path, prefix: &str) -> Result<BTreeMap<String, Vec<u32>>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    let mut count: i64 = 0;
+    for (n, line) in text.lines().enumerate() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => count += 1,
+            Some("g") | Some("o") => current = parts.next().filter(|g| g.starts_with(prefix)).map(str::to_string),
+            Some("f") => {
+                let Some(g) = &current else { continue };
+                let ids = out.entry(g.clone()).or_default();
+                for corner in parts {
+                    let v: i64 = corner.split('/').next().unwrap_or("").parse().map_err(|_| format!("{} line {}: bad f", path.display(), n + 1))?;
+                    let k = if v < 0 { count + v } else { v - 1 };
+                    if k < 0 || k >= count {
+                        return Err(format!("{} line {}: face index out of range", path.display(), n + 1));
+                    }
+                    ids.push(k as u32);
+                }
+            }
+            _ => {}
+        }
+    }
+    for ids in out.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    Ok(out)
+}
+
+pub fn helpers_of(groups: &BTreeMap<String, Vec<u32>>, extra: &[u32], positions: &[Point]) -> Result<b::Helpers, String> {
+    let mut source: Vec<u32> = groups.values().flatten().chain(extra).copied().collect();
+    source.sort_unstable();
+    source.dedup();
+    let at: HashMap<u32, u32> = source.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+    let positions = source.iter().map(|&v| positions.get(v as usize).copied().ok_or_else(|| format!("helper vertex {v} is outside the mesh"))).collect::<Result<Vec<_>, _>>()?;
+    let groups = groups.iter().map(|(g, ids)| (g.clone(), ids.iter().map(|v| at[v]).collect())).collect();
+    Ok(b::Helpers { source, positions, groups })
+}
+
 pub fn read_obj(path: &Path, group: Option<&str>) -> Result<Polys, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut out = Polys { positions: Vec::new(), uvs: Vec::new(), faces: Vec::new() };
@@ -154,6 +196,13 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     if !pack.source.is_empty() {
         write_npy(dir.join("source.npy"), &Array1::from(pack.source.clone())).map_err(|e| e.to_string())?;
     }
+    if !pack.helpers.source.is_empty() {
+        let h = dir.join("helpers");
+        std::fs::create_dir_all(&h).map_err(|e| format!("{}: {e}", h.display()))?;
+        write_npy(h.join("source.npy"), &Array1::from(pack.helpers.source.clone())).map_err(|e| e.to_string())?;
+        write_points(&h.join("positions.npy"), &pack.helpers.positions)?;
+        std::fs::write(h.join("groups.json"), serde_json::to_string(&pack.helpers.groups).map_err(|e| e.to_string())?).map_err(|e| format!("groups.json: {e}"))?;
+    }
     for (i, lod) in pack.lods.iter().enumerate() {
         let d = Decimated { kept: lod.kept.clone(), owner: Vec::new(), triangles: lod.triangles.clone(), triangle_uvs: lod.uvs.clone(), stats: Stats::default() };
         crate::game_base::save(&dir.join(format!("lod{}", i + 1)), &d)?;
@@ -162,6 +211,10 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     m["format"] = json!(FORMAT);
     m["mode"] = json!(pack.mode);
     m["per_span"] = json!(pack.per_span);
+    if !pack.helpers.source.is_empty() {
+        m["helpers"] = json!({"vertices": pack.helpers.source.len(), "groups": pack.helpers.groups.len(), "dir": "helpers",
+                              "meaning": "every base.obj vertex the body does not keep (the joint-* helper cubes, the head the dense head replaces, the other helper geometry), in the body's frame at its base shape: a MakeHuman rig's joints are cube means, vertices or vertex means of these, so they are shaped with the body"});
+    }
     m["lods"] = json!(std::iter::once(json!({"name": "Body_LOD0", "vertices": pack.mesh.positions.len(), "triangles": pack.mesh.triangles.len()}))
         .chain(pack.lods.iter().enumerate().map(|(i, l)| {
             let kept: HashSet<u32> = l.kept.iter().copied().collect();
@@ -177,6 +230,20 @@ pub fn save(dir: &Path, pack: &BodyPack, manifest: &Value) -> Result<Value, Stri
     m["sha256"] = json!(files);
     std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?).map_err(|e| format!("manifest.json: {e}"))?;
     Ok(m)
+}
+
+fn load_helpers(dir: &Path) -> Result<b::Helpers, String> {
+    if !dir.join("source.npy").is_file() {
+        return Ok(b::Helpers::default());
+    }
+    let source = read_u32(&dir.join("source.npy"))?;
+    let positions = read_points(&dir.join("positions.npy"))?;
+    let text = std::fs::read_to_string(dir.join("groups.json")).map_err(|e| format!("helpers/groups.json: {e}"))?;
+    let groups: BTreeMap<String, Vec<u32>> = serde_json::from_str(&text).map_err(|e| format!("helpers/groups.json: {e}"))?;
+    if positions.len() != source.len() || groups.values().flatten().any(|&i| i as usize >= source.len()) {
+        return Err(format!("{}: the helper arrays disagree", dir.display()));
+    }
+    Ok(b::Helpers { source, positions, groups })
 }
 
 pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
@@ -218,6 +285,7 @@ pub fn load(dir: &Path) -> Result<(Value, BodyPack), String> {
         per_span: m["per_span"].as_u64().unwrap_or(16) as usize,
         lods,
         source: if dir.join("source.npy").is_file() { read_u32(&dir.join("source.npy"))? } else { Vec::new() },
+        helpers: load_helpers(&dir.join("helpers"))?,
     };
     if !pack.source.is_empty() && pack.source.len() != pack.mesh.positions.len() {
         return Err(format!("{}: source.npy has {} entries for {} vertices", dir.display(), pack.source.len(), pack.mesh.positions.len()));
@@ -383,7 +451,10 @@ pub fn import_makehuman(input: &MakeHumanInput, dense_dir: &Path, out: &Path) ->
     let mesh = Mesh { positions, triangles, uvs };
     let ring: Vec<RingVertex> = ring_obj.iter().enumerate().map(|(i, v)| RingVertex { vertex: local[v], param: i as f64 }).collect();
     let lods = make_lods(&mesh, input.lods, &ring.iter().map(|r| r.vertex).collect::<Vec<_>>());
-    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone() };
+    let kept: HashSet<u32> = used.iter().copied().collect();
+    let cut: Vec<u32> = (0..moved.len() as u32).filter(|v| !kept.contains(v)).collect();
+    let helpers = helpers_of(&read_obj_groups(input.obj, "joint-")?, &cut, &moved)?;
+    let pack = BodyPack { mode: "makehuman".into(), mesh, ring, ring_targets: controls, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: used.clone(), helpers };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({
@@ -518,7 +589,7 @@ pub fn import_mesh(input: &MeshInput, dense_dir: &Path, out: &Path) -> Result<Va
     if ring.windows(2).any(|w| w[1].param < w[0].param) {
         return Err("the neck ring's parameters are not monotone".into());
     }
-    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new() };
+    let pack = BodyPack { mode: "mesh".into(), mesh, ring, ring_targets: targets, seam_loop: seam.loop_ids.clone(), seam_base, per_span: seam.per_span, lods, source: Vec::new(), helpers: b::Helpers::default() };
     misfit.sort_by(f64::total_cmp);
     let obj_bytes = std::fs::read(input.obj).map_err(|e| e.to_string())?;
     let manifest = json!({

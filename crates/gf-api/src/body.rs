@@ -258,13 +258,28 @@ pub fn spec_body(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>, p
         }
     }
     let terms: Vec<(f64, &gf_core::catalog::SparseTarget)> = loaded.iter().map(|(w, t)| (*w, t)).collect();
-    let full = bs::shape(&pack.mesh.positions, &terms)?;
+    let n = pack.mesh.positions.len();
+    let helpers_shaped = targets.helpers > 0;
+    if helpers_shaped && targets.helpers != pack.helpers.positions.len() {
+        return Err(format!("body.targets carry {} helper vertices, the body has {}", targets.helpers, pack.helpers.positions.len()));
+    }
+    let mut base = pack.mesh.positions.clone();
+    if helpers_shaped {
+        base.extend_from_slice(&pack.helpers.positions);
+    }
+    let full = bs::shape(&base, &terms)?;
     let similarity = match pin {
         Some((trace, frame)) => Similarity::from_linear(&trace.coef, frame.centre),
         None => Similarity::identity(),
     };
-    pack.mesh.positions = full.iter().map(|&p| similarity.invert(p)).collect();
-    let report = json!({"pack": body.pack, "targets": body.targets, "regional": body.weights.len(), "compounds": body.compounds, "shared_with_head": shared, "macro_targets_changed": macro_changes,
+    let canonical: Vec<[f64; 3]> = full.iter().map(|&p| similarity.invert(p)).collect();
+    pack.mesh.positions = canonical[..n].to_vec();
+    if helpers_shaped {
+        pack.helpers.positions = canonical[n..].to_vec();
+    } else {
+        pack.helpers = Default::default();
+    }
+    let report = json!({"pack": body.pack, "targets": body.targets, "regional": body.weights.len(), "compounds": body.compounds, "shared_with_head": shared, "helpers_shaped": pack.helpers.positions.len(), "macro_targets_changed": macro_changes,
                         "base_sliders": targets.base_sliders,
                         "similarity": {"scale": similarity.scale, "translation_m": similarity.translation, "centre_m": similarity.centre, "rotation_quaternion": similarity.quaternion(),
                                        "meaning": "the head follows the body: the head is built in its canonical frame (the macros' similarity stripped) and the whole character is mapped to the world by this similarity; the body was mapped into the canonical frame by its inverse"}});
@@ -336,13 +351,8 @@ fn f32s(points: &[Point]) -> String {
     b64(&points.iter().flat_map(|p| p.iter().flat_map(|x| (*x as f32).to_le_bytes())).collect::<Vec<u8>>())
 }
 
-pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
-    let root = text(input, "store");
-    if !Path::new(root).join("packs").is_dir() {
-        return Err(ApiError::not_found(format!("{root} is not a store")));
-    }
-    let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
-    let spec: Spec = match (input.get("character"), text(input, "spec")) {
+fn spec_input(input: &Value, root: &str) -> Result<Spec, ApiError> {
+    Ok(match (input.get("character"), text(input, "spec")) {
         (Some(c), _) if c.is_object() && c.get("format").is_none() && c.get("pack").is_some() => {
             let mut form = c.clone();
             if form.get("store").is_none() {
@@ -358,7 +368,64 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         (Some(c), _) if c.is_object() => serde_json::from_value(c.clone()).map_err(|e| ApiError::invalid(format!("character: {e}")))?,
         (_, p) if !p.is_empty() => ch::read_spec(Path::new(p)).map_err(ApiError::invalid)?,
         _ => return Err(ApiError::invalid("pass spec (a path) or character (a spec object)")),
+    })
+}
+
+pub fn joints_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1},
+               "spec": {"type": "string", "description": "path of a spec file with a body"},
+               "character": {"type": "object", "description": "a spec object, or the designer's character, instead of spec"},
+               "macro": {"type": "string", "description": "the macro definition, for a spec with macro sliders"},
+               "rig": {"type": "string", "minLength": 1, "description": "a MakeHuman rig file (rig.<name>.json): each joint end is a helper cube's mean, a vertex or a mean of vertices of base.obj"}}),
+        &["store", "rig"],
+    )
+}
+
+pub fn joints_output() -> Value {
+    shape(json!({"bones": {"type": "array"}, "frame": {"type": "string"}, "body": {"type": "object"}}))
+}
+
+pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let root = text(input, "store");
+    let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
+    let spec = spec_input(input, root)?;
+    if spec.body.is_none() {
+        return Err(ApiError::invalid("the spec has no body"));
+    }
+    let rig_path = text(input, "rig");
+    let rig_text = std::fs::read_to_string(rig_path).map_err(|e| ApiError::not_found(format!("{rig_path}: {e}")))?;
+    let rig = gf_core::body_rig::RigDef::parse(&serde_json::from_str(&rig_text).map_err(|e| ApiError::invalid(format!("{rig_path}: {e}")))?).map_err(ApiError::invalid)?;
+    let source = match text(input, "macro") {
+        "" => None,
+        p => Some(ch::read_macro_definition(Path::new(p)).map_err(ApiError::invalid)?),
     };
+    let (_, _, _, pin) = ch::evaluate_traced(&store, &spec, source.as_ref()).map_err(ApiError::invalid)?;
+    let s = spec_body(&store, &spec, source.as_ref(), pin.as_ref()).map_err(ApiError::invalid)?;
+    if s.pack.helpers.positions.is_empty() {
+        return Err(ApiError::invalid("the body carries no shaped helper vertices: re-import the body (body.import) and its targets (body.targets) so the joints follow it"));
+    }
+    let at = gf_core::body_rig::Resolver::new(&s.pack.mesh.positions, &s.pack.source, &s.pack.helpers);
+    let ends = rig.evaluate(&at).map_err(ApiError::invalid)?;
+    let r6 = |p: Point| p.map(|x| (x * 1e6).round() / 1e6);
+    let bones: Vec<Value> = rig
+        .bones
+        .iter()
+        .zip(&ends)
+        .map(|(b, (h, t))| json!({"name": b.name, "parent": b.parent, "head": r6(s.similarity.apply(*h)), "tail": r6(s.similarity.apply(*t)), "roll": b.roll,
+                                  "head_canonical": r6(*h), "tail_canonical": r6(*t)}))
+        .collect();
+    Ok(json!({"bones": bones, "frame": "metres, z up: head/tail in the world (the character's root similarity applied), *_canonical in the head's canonical frame as the body is stored",
+              "body": s.report}))
+}
+
+pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let root = text(input, "store");
+    if !Path::new(root).join("packs").is_dir() {
+        return Err(ApiError::not_found(format!("{root} is not a store")));
+    }
+    let store = Store::open(Path::new(root)).map_err(ApiError::internal)?;
+    let spec = spec_input(input, root)?;
     if input.get("lod").and_then(Value::as_u64).unwrap_or(0) != 0 {
         return Err(ApiError::invalid("this command stitches LOD0; export-glb --body stitches every LOD"));
     }

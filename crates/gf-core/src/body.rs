@@ -1310,6 +1310,27 @@ pub struct BodyLod {
     pub uvs: Vec<[Uv; 3]>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Helpers {
+    pub source: Vec<u32>,
+    pub positions: Vec<Point>,
+    pub groups: BTreeMap<String, Vec<u32>>,
+}
+
+impl Helpers {
+    pub fn mean(&self, group: &str) -> Option<Point> {
+        let ids = self.groups.get(group).filter(|g| !g.is_empty())?;
+        let mut m = [0.0; 3];
+        for &i in ids {
+            let p = self.positions.get(i as usize)?;
+            for k in 0..3 {
+                m[k] += p[k];
+            }
+        }
+        Some(m.map(|x| x / ids.len() as f64))
+    }
+}
+
 pub struct BodyPack {
     pub mode: String,
     pub mesh: Mesh,
@@ -1320,6 +1341,7 @@ pub struct BodyPack {
     pub per_span: usize,
     pub lods: Vec<BodyLod>,
     pub source: Vec<u32>,
+    pub helpers: Helpers,
 }
 
 impl BodyPack {

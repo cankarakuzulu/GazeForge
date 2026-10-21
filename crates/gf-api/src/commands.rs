@@ -178,6 +178,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: body::targets,
     },
     CommandDef {
+        name: "body.joints",
+        kind: Kind::Query,
+        summary: "A MakeHuman rig's joints on a spec's shaped body: every bone's head and tail evaluated on the body and its joint helper cubes as the macros, regional weights and compounds shape them, in the world frame and the canonical frame.",
+        limits: "Needs a body imported with its helper vertices and targets carrying their deltas (re-import older ones). Root bones whose head is the ground cube sit on the floor, not at MPFB's armature origin.",
+        input: body::joints_input,
+        output: body::joints_output,
+        run: body::joints,
+    },
+    CommandDef {
         name: "body.sliders",
         kind: Kind::Query,
         summary: "The body's regional sliders and compound parameters: every decrease/increase pair of a body targets set (arms, legs, torso, hips, stomach, buttocks, pelvis, hands, feet, ...) grouped by family, leaving out targets the head catalog also has (the head's sliders drive those on both sides), and the compound parameters with any target they need that is missing.",

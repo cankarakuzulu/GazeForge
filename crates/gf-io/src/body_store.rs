@@ -34,9 +34,15 @@ pub struct BodyTargets {
     pub format: String,
     pub body: String,
     pub vertices: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub helpers: usize,
     pub unit_m: f64,
     pub base_sliders: BTreeMap<String, f64>,
     pub targets: BTreeMap<String, BodyTargetEntry>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 fn sparse_npz(t: &SparseTarget) -> Result<Vec<u8>, String> {
@@ -104,7 +110,8 @@ impl Store {
         if pack.source.is_empty() {
             return Err(format!("body {body} has no base.obj index per vertex (source.npy): re-import it with body.import (makehuman mode)"));
         }
-        let index: HashMap<u32, u32> = pack.source.iter().enumerate().map(|(i, &o)| (o, i as u32)).collect();
+        let n = pack.mesh.positions.len() as u32;
+        let index: HashMap<u32, u32> = pack.source.iter().enumerate().map(|(i, &o)| (o, i as u32)).chain(pack.helpers.source.iter().enumerate().map(|(j, &o)| (o, n + j as u32))).collect();
         let mut base_sliders = BTreeMap::new();
         for (k, v) in manifest["source"]["sliders"].as_object().into_iter().flatten() {
             base_sliders.insert(k.clone(), v.as_f64().ok_or_else(|| format!("body {body}: base slider {k} is not a number"))?);
@@ -130,7 +137,7 @@ impl Store {
                 targets.insert(name.to_string(), BodyTargetEntry { blob, family: family.clone(), moved: t.indices.len() as u64 });
             }
         }
-        let m = BodyTargets { format: TARGETS_FORMAT.into(), body: body.to_string(), vertices: pack.mesh.positions.len(), unit_m, base_sliders, targets };
+        let m = BodyTargets { format: TARGETS_FORMAT.into(), body: body.to_string(), vertices: pack.mesh.positions.len(), helpers: pack.helpers.source.len(), unit_m, base_sliders, targets };
         Ok((self.put_manifest("bodytargets", &m)?, m))
     }
 
@@ -145,7 +152,7 @@ impl Store {
     pub fn load_body_target(&self, m: &BodyTargets, id: &str) -> Result<SparseTarget, String> {
         let e = m.targets.get(id).ok_or_else(|| format!("body target {id} is not in the body targets"))?;
         let t = sparse_from_npz(&self.get_ref(&e.blob)?)?;
-        t.check(m.vertices)?;
+        t.check(m.vertices + m.helpers)?;
         Ok(t)
     }
 }
