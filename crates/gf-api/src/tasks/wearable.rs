@@ -732,6 +732,52 @@ pub fn layer_depth(binding: &Binding, layer: Option<f64>) -> f64 {
     layer.unwrap_or_else(|| depth_of(binding))
 }
 
+pub const OPENING_M: f64 = 0.06;
+
+pub fn opening_influences(
+    positions: &[Point],
+    triangles: &[[u32; 3]],
+    bound: &[gf_core::body_rig::Influences],
+    skin: &[(Point, &[(usize, f64)])],
+    reach: f64,
+) -> (Vec<gf_core::body_rig::Influences>, usize) {
+    if reach <= 0.0 || skin.is_empty() {
+        return (bound.to_vec(), 0);
+    }
+    let mut uses: HashMap<(u32, u32), u32> = HashMap::new();
+    for t in triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut edge: Vec<u32> = uses.iter().filter(|e| *e.1 == 1).flat_map(|e| [e.0.0, e.0.1]).collect();
+    edge.sort_unstable();
+    edge.dedup();
+    let d2 = |a: Point, b: Point| (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f64>();
+    let mut blended = 0;
+    let out = positions
+        .iter()
+        .enumerate()
+        .map(|(v, &p)| {
+            let d = edge.iter().map(|&e| d2(p, positions[e as usize])).fold(f64::INFINITY, f64::min).sqrt();
+            if d >= reach {
+                return bound[v].clone();
+            }
+            let near = skin.iter().min_by(|a, b| d2(p, a.0).total_cmp(&d2(p, b.0))).map(|s| s.1).unwrap_or(&[]);
+            let f = 1.0 - d / reach;
+            let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&[(1.0 - f, bound[v].as_slice()), (f, near)]), 4);
+            if x.is_empty() {
+                bound[v].clone()
+            } else {
+                blended += 1;
+                x
+            }
+        })
+        .collect();
+    (out, blended)
+}
+
 pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
     let mut order: Vec<usize> = (0..garments.len()).collect();
     order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));
@@ -1039,6 +1085,46 @@ pub fn check(opts: &Options) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sleeve_takes_the_hand_s_weights_only_near_its_open_cuff() {
+        let (rings, around) = (7usize, 8usize);
+        let mut positions = Vec::new();
+        for r in 0..rings {
+            for a in 0..around {
+                let t = std::f64::consts::TAU * a as f64 / around as f64;
+                positions.push([0.05 * r as f64, 0.05 * t.cos(), 0.05 * t.sin()]);
+            }
+        }
+        let mut triangles = Vec::new();
+        for r in 0..rings - 1 {
+            for a in 0..around {
+                let (p, q) = ((r * around + a) as u32, (r * around + (a + 1) % around) as u32);
+                triangles.push([p, q, q + around as u32]);
+                triangles.push([p, q + around as u32, p + around as u32]);
+            }
+        }
+        let forearm: Vec<(usize, f64)> = vec![(1, 1.0)];
+        let wrist: Vec<(f64, Vec<(usize, f64)>)> = (0..41)
+            .map(|k| -0.05 + 0.01 * k as f64)
+            .map(|x| {
+                let h = ((x - 0.2) / 0.1).clamp(0.0, 1.0);
+                (x, [(1, 1.0 - h), (2, h)].into_iter().filter(|w| w.1 > 0.0).collect())
+            })
+            .collect();
+        let skin: Vec<(Point, &[(usize, f64)])> = wrist.iter().map(|(x, w)| ([*x, 0.045, 0.0], w.as_slice())).collect();
+        let bound = vec![forearm.clone(); positions.len()];
+        let (same, n) = opening_influences(&positions, &triangles, &bound, &skin, 0.0);
+        assert_eq!((same, n), (bound.clone(), 0), "reach 0 changes nothing");
+        let (out, n) = opening_influences(&positions, &triangles, &bound, &skin, OPENING_M);
+        let hand_share = |v: usize| out[v].iter().filter(|x| x.0 == 2).map(|x| x.1).sum::<f64>();
+        let cuff = (rings - 1) * around;
+        assert!(hand_share(cuff) > 0.9, "the cuff's own ring follows the hand: {:?}", out[cuff]);
+        assert!(hand_share(cuff - around) > 0.0 && hand_share(cuff - around) < hand_share(cuff), "the next ring takes less: {:?}", out[cuff - around]);
+        assert_eq!(out[3 * around], forearm, "the middle of the sleeve keeps its binding");
+        assert_eq!(out[0], forearm, "the shoulder end is open too, but the skin there is the forearm's");
+        assert!(n >= 4 * around, "{n} blended");
+    }
 
     #[test]
     fn pins_hold_near_the_body_and_free_far_from_it() {

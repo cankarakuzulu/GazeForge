@@ -89,6 +89,15 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **Cuffs and collars follow the hand and head.** An opaque wearable fitted to the body now blends its skin weights,
+  within `opening_m` (default 6 cm, 0 to 20 cm, 0 turns it off; `body.wearables[].opening_m`) of each open edge,
+  toward the weights of the nearest body vertex: fully at the edge, fading to the binding's own weights at the reach.
+  Measured with the posed gate on a dressed character (wrists bent 45 degrees, neck turned 40): the collar goes from 5
+  body vertices through to none; the cuff from 36 (27.9 mm) to 7 (24.6 mm) at full detail and from 3 to 2 at LOD3; no
+  pose gains a failure; the rest pose cannot change. With `opening_m` 0 the gate's results are the old ones exactly,
+  and the export is byte-identical run to run. Rigid items, alpha cards and cloth are left as they were. Both clients
+  have an "Openings (cm)" number on each worn item's row; the sidecar reports per item the reach and the vertices
+  blended.
 - **A per-character layer order for wearables.** A worn item's `layer` (in the spec's `body.wearables[]`, 0 to 1000)
   replaces MakeHuman's `z_depth` for that item: lower sits closer to the skin, and each opaque item is pushed out over
   every opaque item with a lower layer. Without it the item's own `z_depth` decides as before. Both clients have an
@@ -127,7 +136,8 @@ open, with its last measurement, rather than left out.
   folds or flips and 5 on the seam angle (one character at two levels). The seams that pass stay at or under 53
   degrees.
 - Wearables: inward-facing layers (a collar's underside, cuffs) stay where the binding puts them and can sit inside a
-  heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
+  heavier neck or wrist; with the wrist bent 45 degrees a cuff still lets 7 body vertices through (up to 25 mm) after
+  the opening blend; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
   a few cards at the coarsest level; a bound garment follows the body's local shape more closely than MakeHuman's
   hand-chosen bindings (loose cloth can hug muscles); a rigid hat does not follow a head's shape (bind hats instead);
   a glb's colour texture kept outside the glb, or a CMYK JPEG, is not read (give a PNG; the binding's report names

@@ -188,6 +188,23 @@ function mount(root, api) {
         if (Number.isFinite(v) && v >= 0 && v <= 1000 && v !== w.layer) setLayer(v);
         else layer.value = String(w.layer);
       });
+      const openingM = typeof w.opening_m === 'number' ? w.opening_m : 0.06;
+      const opening = el('input', { type: 'number', min: '0', max: '20', step: '0.5', class: 'gf-wear-layer', 'data-wear-opening': w.asset, title: tr('body.wear_opening_tip') });
+      opening.value = String(Math.round(openingM * 1000) / 10);
+      opening.addEventListener('change', () => {
+        const cm = Number(opening.value);
+        const b = api.body.get();
+        if (!b || !Number.isFinite(cm) || cm < 0 || cm > 20) { opening.value = String(Math.round(openingM * 1000) / 10); return; }
+        const m = Math.round(cm * 10) / 1000;
+        if (m === openingM) return;
+        apply(withWear(b, (list) => list.map((x) => {
+          if (x.asset !== w.asset) return x;
+          const next = { ...x };
+          if (m === 0.06) delete next.opening_m;
+          else next.opening_m = m;
+          return next;
+        })), tr('body.wear_opening_line', { name: wearName(w.asset), cm: Math.round(m * 1000) / 10 }));
+      });
       const remove = el('button', { type: 'button', class: 'small', 'data-wear-remove': w.asset, text: tr('body.wear_remove') });
       remove.addEventListener('click', () => {
         const b = api.body.get();
@@ -195,7 +212,7 @@ function mount(root, api) {
       });
       return el('div', { class: 'gf-wear-item', 'data-wear': w.asset }, [
         el('div', { class: 'gf-wear-name', text: wearName(w.asset), title: wearName(w.asset) }),
-        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), remove]),
+        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), remove]),
       ]);
     }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
     const free = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable));

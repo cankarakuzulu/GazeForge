@@ -1603,6 +1603,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let mut worn: Vec<Worn> = Vec::new();
         let mut cloth_nodes: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
         let mut spring_skin: Vec<Option<Vec<gf_core::body_rig::Influences>>> = Vec::new();
+        let mut opening_rows: Vec<Value> = Vec::new();
         let mut clear0: Vec<Vec<Option<f64>>> = Vec::new();
         let mut springs: Vec<Value> = Vec::new();
         let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
@@ -1621,7 +1622,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             if w.physics == "springbone" && item.manifest.attach.is_some() {
                 return Err(format!("wearable {} is a rigid item: it cannot hang in spring-bone chains", item.manifest.name));
             }
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer,
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m,
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
@@ -1771,11 +1772,25 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 if i == 0
                     && let (Some(br), Some(rig)) = (&body_rig, body_gltf_rig.as_mut())
                 {
+                    let mut skin_points: Vec<(u32, Point)> = frame.skin_points().filter(|(o, _)| br.by_obj.contains_key(o)).collect();
+                    skin_points.sort_by_key(|x| x.0);
+                    let skin: Vec<(Point, &[(usize, f64)])> = skin_points.iter().map(|(o, p)| (*p, br.by_obj[o].as_slice())).collect();
                     for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
                         if row["physics"] != "springbone" {
-                            spring_skin.push(None);
+                            let reach = row["opening_m"].as_f64().unwrap_or(0.0);
+                            let applies = row["physics"] != "cloth" && !item.manifest.transparent && item.manifest.attach.is_none() && reach > 0.0;
+                            if !applies {
+                                opening_rows.push(Value::Null);
+                                spring_skin.push(None);
+                                continue;
+                            }
+                            let bound = binding_influences(item, &br.by_obj);
+                            let (blended, n) = super::wearable::opening_influences(positions, &ladder[0].1, &bound, &skin, reach);
+                            opening_rows.push(json!({"reach_m": reach, "vertices_blended": n}));
+                            spring_skin.push(Some(blended));
                             continue;
                         }
+                        opening_rows.push(Value::Null);
                         let tris = &ladder[0].1;
                         let pin: Vec<f32> = positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect();
                         let body = binding_influences(item, &br.by_obj);
@@ -1868,8 +1883,17 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             body_meta["physics"] = json!({"colliders": colliders.len(), "cloth": cloth_nodes.len(), "springs": springs.len(), "extension": "GAZEFORGE_physics"});
         }
         if !worn.is_empty() {
-            body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
-                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over (a wearable made of many alpha cards keeps whole cards, spread over it farthest-first from the largest, instead of collapsing them), each coarser level pushed out of its own body level (lod_pushed: vertices moved per level; an alpha-card item only where it lay outside the character at full detail, and its triangles that sag up to 1 cm under the coarse body lifted clear: lod_lifted) and layered again by z_depth; body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
+            let items: Vec<Value> = worn
+                .iter()
+                .enumerate()
+                .map(|(k, w)| {
+                    let mut row = w.4.clone();
+                    row["opening"] = opening_rows.get(k).cloned().unwrap_or(Value::Null);
+                    row
+                })
+                .collect();
+            body_meta["wearables"] = json!({"items": items, "hidden_base_vertices": covered.len(),
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over (a wearable made of many alpha cards keeps whole cards, spread over it farthest-first from the largest, instead of collapsing them), each coarser level pushed out of its own body level (lod_pushed: vertices moved per level; an alpha-card item only where it lay outside the character at full detail, and its triangles that sag up to 1 cm under the coarse body lifted clear: lod_lifted) and layered again by z_depth (or the item's layer); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked, an opaque bound item's vertices within opening_m of its open edges blending toward the nearest body vertex's weights (fully at the edge) so cuffs and collars follow the hand and head"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,

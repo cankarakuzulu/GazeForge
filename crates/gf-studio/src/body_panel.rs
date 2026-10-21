@@ -202,6 +202,25 @@ impl World {
         }))
     }
 
+    pub fn body_wear_opening(&mut self, asset: &str, metres: f64) -> Result<bool, String> {
+        if !(metres.is_finite() && (0.0..=0.2).contains(&metres)) {
+            return Err(format!("opening reach {metres} m is not a distance from 0 to 0.2 m"));
+        }
+        Ok(self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    if metres == gf_core::body_shape::OPENING_DEFAULT_M {
+                        o.remove("opening_m");
+                    } else {
+                        o.insert("opening_m".into(), json!(metres));
+                    }
+                }
+            }
+        }))
+    }
+
     pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
         self.body_edit(|b| {
             for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -323,6 +342,10 @@ impl crate::studio::Studio<'_> {
             let physics_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["physics"].as_str()).unwrap_or("none").to_string();
             let layer_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["layer"].as_f64());
             let mut layer_commit: Option<(String, Option<f64>)> = None;
+            let opening_of = |asset: &str| {
+                body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["opening_m"].as_f64()).unwrap_or(gf_core::body_shape::OPENING_DEFAULT_M)
+            };
+            let mut opening_commit: Option<(String, f64)> = None;
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.0 == asset).map_or("?", |w| w.1.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -373,6 +396,16 @@ impl crate::studio::Studio<'_> {
                                 .on_hover_text(tr("body.wear_layer_value_tip"));
                         }
                     }
+                    let key = format!("o:{asset}");
+                    let mut cm = ui_state.live.get(&key).copied().unwrap_or(opening_of(asset) * 100.0);
+                    ui.label(tr("body.wear_opening")).on_hover_text(tr("body.wear_opening_tip"));
+                    let r = ui.add(egui::DragValue::new(&mut cm).range(0.0..=20.0).speed(0.1).max_decimals(1)).on_hover_text(tr("body.wear_opening_tip"));
+                    if r.changed() {
+                        ui_state.live.insert(key.clone(), cm);
+                    }
+                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus())) && ui_state.live.remove(&key).is_some() {
+                        opening_commit = Some((asset.clone(), (cm * 10.0).round() / 1000.0));
+                    }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
                     }
@@ -406,6 +439,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((asset, layer)) = layer_commit
                 && let Err(e) = self.world.body_wear_layer(&asset, layer)
+            {
+                self.world.body_ui.error = Some(e);
+            }
+            if let Some((asset, metres)) = opening_commit
+                && let Err(e) = self.world.body_wear_opening(&asset, metres)
             {
                 self.world.body_ui.error = Some(e);
             }

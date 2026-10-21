@@ -73,6 +73,18 @@ pub struct WearableRef {
     pub physics: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<f64>,
+    #[serde(default = "opening_default", skip_serializing_if = "is_opening_default")]
+    pub opening_m: f64,
+}
+
+pub const OPENING_DEFAULT_M: f64 = 0.06;
+
+fn opening_default() -> f64 {
+    OPENING_DEFAULT_M
+}
+
+fn is_opening_default(v: &f64) -> bool {
+    *v == OPENING_DEFAULT_M
 }
 
 pub const WEARABLE_PHYSICS: &[&str] = &["cloth", "springbone"];
@@ -127,6 +139,9 @@ impl BodySpec {
                 && !(l.is_finite() && (0.0..=1000.0).contains(&l))
             {
                 out.push(format!("body.wearables[{i}].layer {l} is not a number from 0 to 1000"));
+            }
+            if !(w.opening_m.is_finite() && (0.0..=0.2).contains(&w.opening_m)) {
+                out.push(format!("body.wearables[{i}].opening_m {} is not a distance from 0 to 0.2 m", w.opening_m));
             }
             if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
                 out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
@@ -288,7 +303,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -308,6 +323,12 @@ mod tests {
         }
         let layered = serde_json::to_string(&WearableRef { layer: Some(7.5), ..worn(&r) }).unwrap();
         assert!(layered.contains("\"layer\":7.5") && !serde_json::to_string(&worn(&r)).unwrap().contains("layer"));
+        assert_eq!(read.wearables[0].opening_m, OPENING_DEFAULT_M, "no opening_m means the default reach");
+        assert!(!serde_json::to_string(&worn(&r)).unwrap().contains("opening"), "the default is not written");
+        assert!(serde_json::to_string(&WearableRef { opening_m: 0.0, ..worn(&r) }).unwrap().contains("\"opening_m\":0.0"));
+        for bad in [-0.01, 0.21, f64::INFINITY] {
+            assert!(BodySpec { wearables: vec![WearableRef { opening_m: bad, ..worn(&r) }], ..ok.clone() }.problems().iter().any(|x| x.contains("opening_m")), "{bad}");
+        }
     }
 
     #[test]

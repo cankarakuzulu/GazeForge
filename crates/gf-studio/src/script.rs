@@ -810,9 +810,10 @@ impl Offscreen {
                     "hide" => w.body_wear_hide(text("asset").ok_or("body hide needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "physics" => w.body_wear_physics(text("asset").ok_or("body physics needs asset")?, text("kind").ok_or("body physics needs kind (none, cloth or springbone)")?)?,
                     "layer" => w.body_wear_layer(text("asset").ok_or("body layer needs asset")?, num("value"))?,
+                    "opening" => w.body_wear_opening(text("asset").ok_or("body opening needs asset")?, num("metres").ok_or("body opening needs metres (0 to 0.2)")?)?,
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, opening, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;
