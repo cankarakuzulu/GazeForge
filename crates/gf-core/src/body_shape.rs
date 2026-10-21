@@ -60,20 +60,20 @@ pub struct BodySpec {
     pub tangent: f64,
 }
 
-fn round(x: f64, q: f64) -> f64 {
-    let r = (x / q).round() * q;
+fn round(x: f64, per_unit: f64) -> f64 {
+    let r = (x * per_unit).round() / per_unit;
     if r == 0.0 { 0.0 } else { r }
 }
 
 impl BodySpec {
     pub fn canonical(&self) -> BodySpec {
         BodySpec {
-            weights: self.weights.iter().map(|(k, &w)| (k.clone(), round(w, 1e-6))).filter(|(_, w)| *w != 0.0).collect(),
-            compounds: self.compounds.iter().map(|(k, &w)| (k.clone(), round(w, 1e-6))).filter(|(_, w)| *w != 0.0).collect(),
-            blend_mm: round(self.blend_mm, 1e-3),
-            neck_offset_mm: round(self.neck_offset_mm, 1e-3),
-            body_scale: round(self.body_scale, 1e-6),
-            tangent: round(self.tangent, 1e-4),
+            weights: self.weights.iter().map(|(k, &w)| (k.clone(), round(w, 1e6))).filter(|(_, w)| *w != 0.0).collect(),
+            compounds: self.compounds.iter().map(|(k, &w)| (k.clone(), round(w, 1e6))).filter(|(_, w)| *w != 0.0).collect(),
+            blend_mm: round(self.blend_mm, 1e3),
+            neck_offset_mm: round(self.neck_offset_mm, 1e3),
+            body_scale: round(self.body_scale, 1e6),
+            tangent: round(self.tangent, 1e4),
             ..self.clone()
         }
     }
@@ -226,9 +226,9 @@ mod tests {
             [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
             [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
         ];
-        for i in 0..3 {
-            for j in 0..3 {
-                assert!((m[i][j] - s.rotation[i][j]).abs() < 1e-12);
+        for (row, want) in m.iter().zip(&s.rotation) {
+            for (a, b) in row.iter().zip(want) {
+                assert!((a - b).abs() < 1e-12);
             }
         }
     }
@@ -242,6 +242,16 @@ mod tests {
         let p = bad.problems().join(" | ");
         for needle in ["body.pack", "blend", "arms/x", "wings", "athletic = 2"] {
             assert!(p.contains(needle), "{needle} not in {p}");
+        }
+    }
+
+    #[test]
+    fn canonical_values_are_the_nearest_doubles_of_their_decimals() {
+        let r = hash::reference(&"d".repeat(64));
+        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55 };
+        let s = serde_json::to_string(&b.canonical()).unwrap();
+        for needle in ["\"a\":0.8,", "\"b\":0.3}", "\"c\":-0.7}", "60.1,", "1.1,", "0.55"] {
+            assert!(s.contains(needle), "{needle} not in {s}");
         }
     }
 
