@@ -223,6 +223,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: wear::import,
     },
     CommandDef {
+        name: "wearable.attach",
+        kind: Kind::Job,
+        summary: "Make a rigid wearable (a sword, a helmet, armour plates) from an OBJ modelled on one of your characters: it rides one bone, placed by that bone's frame on any character and weighted wholly to it (argv `wearable attach`).",
+        limits: "Fields are the argv options with _ for -. The solid must be modelled on the character the spec describes, in metres with z up (world: as exported or fitted). It is not pushed out of the body or layered.",
+        input: api::attach_input,
+        output: api::argv_output,
+        run: api::attach,
+    },
+    CommandDef {
         name: "wearable.bind",
         kind: Kind::Job,
         summary: "Make a wearable from any garment OBJ modelled over one of your characters (from Blender, a generator or another tool): each vertex is bound to the nearest point of that character's body and head surface, the body it covers is listed, and the result is stored like a MakeHuman garment (argv `wearable bind`).",

@@ -124,6 +124,7 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("body-gates", &["refuse", "report"]),
     ("frame", &["world", "canonical"]),
     ("hide-under", &["on", "off"]),
+    ("scale", &["none", "bone"]),
 ];
 
 const TEXT: &[(&str, &str)] = &[
@@ -172,6 +173,9 @@ const TEXT: &[(&str, &str)] = &[
     ("compare-hidden", "a MakeHuman .mhclo whose hidden list to compare with, on the body vertices"),
     ("out-mhclo", "also write the binding to this file in MakeHuman's format"),
     ("diffuse", "path of the garment's colour texture (.png)"),
+    ("bone", "the bone a rigid item rides (a bone of the rig, e.g. hand_r, head, spine_03)"),
+    ("rig", "the rig the bone belongs to: a preset (game_engine, ...) or a MakeHuman rig file"),
+    ("scale", "none: the item keeps its modelled size; bone: it scales with the bone's length"),
     ("name", "name shown for the wearable"),
     ("seam-weight", "multiplies the collapse cost of the base's open boundary (the neck seam the body stitches to), so coarse levels keep more seam points; 1 leaves it as the weights say"),
     ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast) or the path of a MakeHuman rig .json"),
@@ -305,6 +309,16 @@ pub fn bind_input() -> Value {
 
 pub fn bind(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, super::wearable::bind)
+}
+
+pub fn attach_input() -> Value {
+    let mut s = schema(&[super::wearable::ATTACH_KEYS], &["store", "spec", "obj", "bone"]);
+    s["properties"]["obj"]["description"] = json!("path of the solid's .obj, modelled on the character the spec describes (argv --obj)");
+    s
+}
+
+pub fn attach(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, super::wearable::attach)
 }
 
 pub fn obj_input() -> Value {

@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), bind_garment(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), bind_garment(), attach_solid(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -177,6 +177,29 @@ fn bind_garment() -> Value {
                  {"name": "obj", "label": "Garment .obj", "common": true},
                  {"name": "base", "label": "MakeHuman base.obj", "common": true},
                  {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "diffuse", "label": "Colour texture (.png)"},
+                 {"name": "name", "label": "Name"},
+             ],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn attach_solid() -> Value {
+    json!({
+        "id": "attach_solid", "title": "Attach a solid to a bone", "group": "Body", "developer": false,
+        "summary": "A rigid item - a sword, a helmet, a shield, armour plates - that rides one bone of the rig on every character.",
+        "steps": [
+            {"id": "attach", "title": "Solid", "command": "wearable.attach",
+             "help": "Model the item where it belongs on a character exported from here (in the hand, on the head), in metres with z up, and export it as OBJ. Name the bone it rides (hand_r, hand_l, head, spine_03, ...). It keeps its size unless Scale says bone. Paths are on this machine.",
+             "fields": [
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "spec", "label": "The character it was modelled on (spec)", "bind": "$run.spec", "common": true},
+                 {"name": "obj", "label": "Solid .obj", "common": true},
+                 {"name": "bone", "label": "Bone", "common": true},
+                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "rig", "label": "Rig"},
+                 {"name": "scale", "label": "Scale"},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
                  {"name": "name", "label": "Name"},
              ],
