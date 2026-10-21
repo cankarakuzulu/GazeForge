@@ -82,6 +82,25 @@ pub fn parse_landmarks(raw: &[u8], dense: &[[f64; 3]]) -> Result<BTreeMap<usize,
     Ok(out)
 }
 
+pub const GRID_MM: f32 = 4.0;
+
+pub fn stamp_images(store: &Store, skin: &SkinSpec) -> Result<gf_core::skin_authored::Images, String> {
+    let mut images = gf_core::skin_authored::Images::new();
+    for stamp in skin.layers.iter().flat_map(|l| &l.marks).filter_map(|m| match m {
+        gf_core::skin_authored::Mark::Stamp(s) => Some(s),
+        gf_core::skin_authored::Mark::Stroke(_) => None,
+    }) {
+        let key = (stamp.image.clone(), stamp.channel.clone());
+        if images.contains_key(&key) {
+            continue;
+        }
+        let bytes = store.get_ref(&stamp.image).map_err(|e| format!("stamp image {}: {e}", stamp.image))?;
+        let (w, h, rgba) = gf_io::png::decode_rgba(&bytes).map_err(|e| format!("stamp image {}: {e}", stamp.image))?;
+        images.insert(key, gf_core::skin_authored::Grey::from_rgba(w, h, &rgba, &stamp.channel));
+    }
+    Ok(images)
+}
+
 pub fn head_material(store: &Store, skin: &SkinSpec, dense: &[[f64; 3]], mesh: &Decimated) -> Result<(gltf::Material, Value), String> {
     let started = Instant::now();
     let raw = store.get_ref(&skin.landmarks).map_err(|e| format!("skin.landmarks: {e}"))?;
@@ -93,11 +112,13 @@ pub fn head_material(store: &Store, skin: &SkinSpec, dense: &[[f64; 3]], mesh: &
     let mut tex = st::generate(&map, &positions, &normals, &mesh.triangles, &mesh.triangle_uvs, &regions, &skin.look);
     let surface = sl::Surface { map: &map, positions: &positions, normals: &normals, triangles: &mesh.triangles, uvs: &mesh.triangle_uvs, regions: &regions, landmarks: &landmarks };
     let texels = sl::texels(&surface);
+    let grid = gf_core::skin_authored::Grid::new(&texels, GRID_MM);
+    let images = stamp_images(store, skin)?;
     let mut live = Vec::new();
     let mut rows = Vec::new();
     for layer in &skin.layers {
         let response = layer.response().ok_or_else(|| format!("skin layer {}: no response for {} {}", layer.name, layer.kind, layer.style))?;
-        let mask = sl::mask(&surface, &texels, layer)?;
+        let mask = sl::mask(&surface, &texels, &grid, layer, &images)?;
         let reached = mask.iter().filter(|&&m| m > 0).count();
         if layer.is_live() {
             live.push(mask);
@@ -144,7 +165,7 @@ pub fn layers(_: &Ctx, _: &Value) -> Result<Value, ApiError> {
             let rows: Vec<Value> = styles
                 .iter()
                 .filter_map(|style| {
-                    let probe = sl::SkinLayer { name: "x".into(), kind: kind.to_string(), style: style.to_string(), live: None, amount: 0.0, variant: 0.0, seed: 0, colour: None };
+                    let probe = sl::SkinLayer { name: "x".into(), kind: kind.to_string(), style: style.to_string(), live: None, amount: 0.0, variant: 0.0, seed: 0, colour: None, procedural: None, marks: Vec::new() };
                     let r = probe.response()?;
                     Some(json!({"style": style, "colour": r.colour, "opacity": r.opacity, "roughness": r.roughness, "spread": r.spread,
                                 "variant": r.variant.map(|(name, colour, roughness)| json!({"name": name, "colour": colour, "roughness": roughness}))}))
@@ -153,8 +174,12 @@ pub fn layers(_: &Ctx, _: &Value) -> Result<Value, ApiError> {
             json!({"kind": kind, "styles": rows})
         })
         .collect();
-    Ok(json!({"extension": sl::EXTENSION, "kinds": kinds, "max_live": sl::MAX_LIVE, "default_size": sl::DEFAULT_SIZE,
-              "layer": "{name: [a-z][a-z0-9_]*, kind, style, live: true (default) | false, amount: 0..1 (live: the default; baked: how much is painted in), variant: 0..1 (the second state), seed, colour: optional linear rgb}"}))
+    let presets: Vec<Value> = gf_core::skin_authored::presets().into_iter().map(|(name, layers)| json!({"name": name, "layers": layers})).collect();
+    Ok(json!({"extension": sl::EXTENSION, "kinds": kinds, "presets": presets, "max_live": sl::MAX_LIVE, "default_size": sl::DEFAULT_SIZE,
+              "layer": "{name: [a-z][a-z0-9_]*, kind, style, live: true (default) | false, amount: 0..1 (live: the default; baked: how much is painted in), variant: 0..1 (the second state), seed, colour: optional linear rgb, procedural: true (default) | false, marks: [{stroke: {...}} | {stamp: {...}}, ...] in the order they apply}",
+              "stroke": "{mode: add (default) | erase, radius_mm, strength: 0..1 (default 1), hardness: 0..1 (default 0.5), points: [[x, y, z] millimetres on the neutral base]}",
+              "stamp": "{image: a reference from skin.stamp, channel: alpha (default) | luminance, at: [x, y, z] mm on the neutral base, normal: [x, y, z], angle_deg, size_mm (the image's width), strength, mode: add | erase}",
+              "mask_order": "the procedural pattern, then the marks in their order; add takes the larger value, erase multiplies by one minus its value"}))
 }
 
 pub fn landmarks_input() -> Value {
@@ -184,6 +209,30 @@ pub fn landmarks(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let hex = store.put_file(path).map_err(ApiError::internal)?;
     Ok(json!({"landmarks": gf_core::hash::reference(&hex), "count": table.len()}))
+}
+
+pub fn stamp_input() -> Value {
+    obj(
+        json!({"store": {"type": "string", "minLength": 1}, "image": {"type": "string", "minLength": 1, "description": "path of a PNG"}}),
+        &["store", "image"],
+    )
+}
+
+pub fn stamp_output() -> Value {
+    shape(json!({"image": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "alpha_mean": {"type": "number"}, "luminance_mean": {"type": "number"}}))
+}
+
+pub fn stamp(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let store = Store::open(Path::new(text(input, "store"))).map_err(ApiError::not_found)?;
+    let path = Path::new(text(input, "image"));
+    let bytes = std::fs::read(path).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+    let (w, h, rgba) = gf_io::png::decode_rgba(&bytes).map_err(|e| ApiError::invalid(format!("{}: {e}", path.display())))?;
+    let mean = |channel: &str| {
+        let g = gf_core::skin_authored::Grey::from_rgba(w, h, &rgba, channel);
+        g.values.iter().map(|&v| v as f64).sum::<f64>() / g.values.len().max(1) as f64
+    };
+    let hex = store.put_file(path).map_err(ApiError::internal)?;
+    Ok(json!({"image": gf_core::hash::reference(&hex), "width": w, "height": h, "alpha_mean": mean("alpha"), "luminance_mean": mean("luminance")}))
 }
 
 pub fn project_input() -> Value {

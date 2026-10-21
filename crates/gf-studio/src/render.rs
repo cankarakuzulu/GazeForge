@@ -167,8 +167,14 @@ enum LinePipe {
     Cap,
 }
 
+struct SkinTexture {
+    texture: wgpu::Texture,
+    bind: wgpu::BindGroup,
+    size: usize,
+}
+
 enum Draw {
-    Mesh(MeshPipe, u32, usize),
+    Mesh(MeshPipe, u32, usize, bool),
     Eyes(u32),
     EyePart(u32, usize, bool),
     Points(u32, usize),
@@ -196,6 +202,7 @@ pub struct Renderer {
     glass: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     white: Option<wgpu::BindGroup>,
+    skin: Option<SkinTexture>,
     looks: std::collections::HashMap<String, Vec<GpuLook>>,
     point: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -393,6 +400,7 @@ impl Renderer {
             glass,
             sampler,
             white: None,
+            skin: None,
             looks: std::collections::HashMap::new(),
             point,
             lines,
@@ -437,6 +445,58 @@ impl Renderer {
         }
         self.extras = kept;
         self.overlays = world.overlays.iter().map(|o| (o.segments.clone(), o.colour)).collect();
+        self.sync_skin(device, queue, &mut world.skin);
+    }
+
+    fn sync_skin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, skin: &mut crate::skin::SkinUi) {
+        if skin.spec.is_none() {
+            self.skin = None;
+            skin.dirty = None;
+            return;
+        }
+        let Some(work) = skin.work.as_ref() else {
+            if !skin.busy() {
+                self.skin = None;
+            }
+            return;
+        };
+        let Some(mut d) = skin.dirty.take() else { return };
+        let size = work.size;
+        if self.skin.as_ref().is_none_or(|t| t.size != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("skin"),
+                size: wgpu::Extent3d { width: size as u32, height: size as u32, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("skin"),
+                layout: &self.g2,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) }],
+            });
+            self.skin = Some(SkinTexture { texture, bind, size });
+            d = gf_api::skin_work::Dirty::full(size);
+        }
+        let (w, h) = (d.x1.saturating_sub(d.x0), d.y1.saturating_sub(d.y0));
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut rows = Vec::with_capacity(w * h * 4);
+        for y in d.y0..d.y1 {
+            rows.extend_from_slice(&work.albedo[(y * size + d.x0) * 4..(y * size + d.x1) * 4]);
+        }
+        let t = self.skin.as_ref().expect("made above");
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d { x: d.x0 as u32, y: d.y0 as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+            &rows,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+            wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        );
     }
 
     fn make_extra(&self, device: &wgpu::Device, e: &crate::world::Extra) -> GpuExtra {
@@ -693,7 +753,16 @@ impl Renderer {
             let mut first = PassPlan { first: true, clear_stencil: true, resolve: false, draws: Vec::new() };
             let base_chunk = chunk(base, &mut uni);
             if has_head {
-                first.draws.push(Draw::Mesh(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, base_chunk, lod));
+                let skin_on = o.skin && self.skin.is_some();
+                let head_chunk = if skin_on {
+                    let mut u = base;
+                    u[152..156].copy_from_slice(&[1.0; 4]);
+                    u[156..160].copy_from_slice(&[1.0, 0.45, 0.0, 1.0]);
+                    chunk(u, &mut uni)
+                } else {
+                    base_chunk
+                };
+                first.draws.push(Draw::Mesh(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, head_chunk, lod, skin_on));
             }
             if o.eyes && let Some(e) = self.head.as_ref().and_then(|g| g.eyes.as_ref()) {
                 let mut u = base;
@@ -754,14 +823,14 @@ impl Renderer {
                     let corner = |a: f64, b: f64| add(c0, add(mul(t1, a * s), mul(t2, b * s)));
                     let quad = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
                     let cap = line(&quad, [0.36, 0.45, 0.62], LinePipe::Cap, Some(j), &mut uni, &mut lines);
-                    passes.push(PassPlan { first: false, clear_stencil: true, resolve: false, draws: vec![Draw::Mesh(MeshPipe::Stencil, base_chunk, lod), cap] });
+                    passes.push(PassPlan { first: false, clear_stencil: true, resolve: false, draws: vec![Draw::Mesh(MeshPipe::Stencil, base_chunk, lod, false), cap] });
                 }
             }
             let mut last = PassPlan { first: false, clear_stencil: false, resolve: true, draws: Vec::new() };
             if has_head && o.wire && o.xray {
                 let mut u = base;
                 u[95] = 1.0;
-                last.draws.push(Draw::Mesh(MeshPipe::Xray, chunk(u, &mut uni), lod));
+                last.draws.push(Draw::Mesh(MeshPipe::Xray, chunk(u, &mut uni), lod, false));
             }
             if has_head && o.points {
                 let mut u = base;
@@ -851,6 +920,7 @@ impl Renderer {
         }
         let bg = background(st.opts.dark);
         let white = self.white.as_ref();
+        let skin_bind = self.skin.as_ref().map(|t| &t.bind);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         let (mut draws, mut pass_count) = (0usize, 0usize);
         for (r, passes) in &plans {
@@ -878,7 +948,7 @@ impl Renderer {
                 for d in &p.draws {
                     draws += 1;
                     match d {
-                        Draw::Mesh(pipe, c, lod) => {
+                        Draw::Mesh(pipe, c, lod, skinned) => {
                             let g = self.head.as_ref().expect("head");
                             let l = &g.lods[*lod];
                             let i = match pipe {
@@ -890,7 +960,7 @@ impl Renderer {
                             pass.set_pipeline(&self.mesh[i]);
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &l.bind, &[]);
-                            pass.set_bind_group(2, white.expect("material default"), &[]);
+                            pass.set_bind_group(2, if *skinned { skin_bind.or(white) } else { white }.expect("material default"), &[]);
                             pass.draw(0..l.tri * 3, 0..1);
                         }
                         Draw::Eyes(c) => {
@@ -993,17 +1063,28 @@ pub fn background(dark: bool) -> [f64; 3] {
     if dark { [0.11, 0.11, 0.12] } else { [0.93, 0.93, 0.92] }
 }
 
+pub struct Hit {
+    pub distance: f64,
+    pub point: V3,
+    pub triangle: [u32; 3],
+    pub bary: [f64; 3],
+}
+
 pub fn pick(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64) -> Option<(f64, V3)> {
+    pick_triangle(st, head, rect, px, py, None).map(|h| (h.distance, h.point))
+}
+
+pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64, lod: Option<usize>) -> Option<Hit> {
     let nx = (px / rect.w as f64) * 2.0 - 1.0;
     let ny = 1.0 - (py / rect.h as f64) * 2.0;
     let (o, d) = st.cams[rect.cam].ray(nx, ny, rect.w as f64 / rect.h as f64);
     let planes = viewer::planes(&st.opts, &st.bounds);
     let (lo, hi) = viewer::box_world(&st.opts, &st.bounds);
     let cut = |p: V3| planes.iter().any(|q| dot(q.n, p) > q.d) || (st.opts.clip_box.on && (0..3).all(|k| p[k] > lo[k] && p[k] < hi[k]));
-    let lod = &head.lods[st.vp[rect.slot].lod.min(head.lods.len() - 1)];
+    let lod = &head.lods[lod.unwrap_or(st.vp[rect.slot].lod).min(head.lods.len() - 1)];
     let pos = &head.positions;
     let g = |i: u32| [pos[i as usize * 3] as f64, pos[i as usize * 3 + 1] as f64, pos[i as usize * 3 + 2] as f64];
-    let mut best: Option<(f64, V3)> = None;
+    let mut best: Option<Hit> = None;
     for t in lod.indices.chunks_exact(3) {
         let (a, b, c) = (g(t[0]), g(t[1]), g(t[2]));
         let (e1, e2) = (sub(b, a), sub(c, a));
@@ -1024,14 +1105,14 @@ pub fn pick(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64) -> Opt
             continue;
         }
         let dist = dot(e2, qv) * inv;
-        if dist <= 0.0 || best.is_some_and(|(bt, _)| dist >= bt) {
+        if dist <= 0.0 || best.as_ref().is_some_and(|b| dist >= b.distance) {
             continue;
         }
         let hit = add(o, mul(d, dist));
         if cut(hit) {
             continue;
         }
-        best = Some((dist, hit));
+        best = Some(Hit { distance: dist, point: hit, triangle: [t[0], t[1], t[2]], bary: [1.0 - uu - vv, uu, vv] });
     }
     best
 }

@@ -839,6 +839,14 @@ browser's formats and keeps the panel states and viewer state it does not use. `
 `GAZEFORGE_FACE_PREFIX` play the role of the browser's `face_morphs` and `face_prefix`. The script ops `rig`, `stitch`,
 `timeline` and `project` drive them headlessly; each port's pose, body and project equal the browser's on the same input.
 
+The **Skin** panel authors the character's `skin`: create it from the base's landmark table and a look, add layers by kind
+and style or from a preset, set each one's amount, second state, colour, seed, live or baked and pattern on or off, paint
+its mask with a brush (radius, strength, hardness, erase) or place a PNG stamp, and see the result on the head in the lit
+render modes. Strokes and stamps are stored in the spec on the neutral base, in the order they were made, so a save keeps
+them and `export-glb` produces the same masks as the studio shows (measured byte for byte at the preview size).
+Ctrl+Z and Ctrl+Y walk one history of every edit - sliders, macros, eyes, skin, face rig pose, body stitch settings,
+timeline settings and project notes - in the order they were made; camera moves and timeline playback are not recorded.
+
 `--eyes` takes the same eyes file as the browser designer: its eye meshes are drawn in the built-in renderer (the `eyes`
 toggle hides them) and every settle gets it, so `f3`, `f5` and `f6` keep the eyelids outside the eyeballs. With the
 character's `eyeballs` following (a new character starts that way when the catalog has an eye rig), each settle places

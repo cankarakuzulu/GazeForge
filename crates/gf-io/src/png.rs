@@ -47,6 +47,24 @@ pub fn rgba(width: usize, height: usize, pixels: &[u8]) -> Result<Vec<u8>, Strin
     Ok(out)
 }
 
+pub fn decode_rgba(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0; reader.output_buffer_size().ok_or("the image is too large")?];
+    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let px = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => px.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Indexed => return Err("an indexed image survived the expansion to 8-bit colour".into()),
+    };
+    Ok((w, h, rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +89,13 @@ mod tests {
         assert_eq!(back.len(), 3 * (2 * 4 + 1));
         assert_eq!(&back[1..9], &px[..8]);
         assert!(rgba(2, 2, &px).is_err());
+    }
+
+    #[test]
+    fn decode_reads_back_what_rgba_wrote() {
+        let px: Vec<u8> = (0..3 * 2 * 4).map(|i| (i * 37 % 256) as u8).collect();
+        let png = rgba(3, 2, &px).unwrap();
+        assert_eq!(decode_rgba(&png).unwrap(), (3, 2, px));
+        assert!(decode_rgba(b"not a png").is_err());
     }
 }

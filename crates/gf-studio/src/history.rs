@@ -1,0 +1,193 @@
+use std::time::{Duration, Instant};
+
+use serde_json::{Map, Value, json};
+
+use crate::face_rig::{Mode, SHAPES};
+use crate::i18n::{tr, trf};
+use crate::stitch::CONTROLS;
+use crate::world::World;
+
+pub const LIMIT: usize = 300;
+const SETTLE: Duration = Duration::from_millis(400);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Domain {
+    Shape,
+    Skin,
+    Panels,
+}
+
+#[derive(Default)]
+pub struct Journal {
+    pub done: Vec<Domain>,
+    pub undone: Vec<Domain>,
+    shape_seen: u64,
+    panels_done: Vec<(Value, Value)>,
+    panels_undone: Vec<(Value, Value)>,
+    committed: Option<Value>,
+    last: Option<Value>,
+    changed_at: Option<Instant>,
+    pub pointer_down: bool,
+}
+
+impl Journal {
+    pub fn can_undo(&self) -> bool {
+        !self.done.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.undone.is_empty()
+    }
+
+    pub fn rebase_panels(&mut self) {
+        self.committed = None;
+        self.last = None;
+        self.changed_at = None;
+    }
+}
+
+impl World {
+    pub fn journal_push(&mut self, d: Domain) {
+        if d != Domain::Panels {
+            self.journal_flush();
+        }
+        let j = &mut self.journal;
+        j.done.push(d);
+        let over = j.done.len().saturating_sub(LIMIT * 3);
+        j.done.drain(..over);
+        j.undone.clear();
+        j.panels_undone.clear();
+        if let Some(shape) = self.shape.as_mut() {
+            shape.history.undone.clear();
+        }
+        self.skin.undone.clear();
+    }
+
+    fn panel_snapshot(&self) -> Value {
+        let f = &self.face;
+        let weights: Map<String, Value> = SHAPES.iter().zip(&f.weights).filter(|(_, w)| **w != 0.0).map(|(n, w)| (n.to_string(), json!(w))).collect();
+        let manual: Map<String, Value> = f.manual.iter().map(|(j, m)| (j.to_string(), json!(m))).collect();
+        let s = &self.stitch;
+        let t = &self.timeline;
+        json!({"rig": {"mode": f.mode.name(), "weights": weights, "manual": manual},
+               "stitch": {"values": s.values, "seam": s.seam, "auto": s.auto, "store": s.store, "body": s.body},
+               "timeline": {"speed": t.speed, "loop": t.looping, "apply_head": t.apply_head},
+               "notes": self.project.notes})
+    }
+
+    fn panel_apply(&mut self, v: &Value) {
+        let r = &v["rig"];
+        let rig_changed = *r != self.panel_snapshot()["rig"];
+        self.face.weights = SHAPES.iter().map(|n| r["weights"][*n].as_f64().unwrap_or(0.0)).collect();
+        self.face.mode = if r["mode"] == "joints" { Mode::Joints } else { Mode::Blend };
+        self.face.manual = r["manual"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(j, m)| Some((j.parse::<usize>().ok()?, std::array::from_fn(|c| m.get(c).and_then(Value::as_f64).unwrap_or(0.0)))))
+            .collect();
+        if rig_changed {
+            self.face_update();
+        }
+        let s = &v["stitch"];
+        let before = (self.stitch.values, self.stitch.seam);
+        for (i, c) in CONTROLS.iter().enumerate() {
+            self.stitch.values[i] = s["values"][i].as_f64().map_or(c.4, |x| x.clamp(c.1, c.2));
+        }
+        self.stitch.seam = s["seam"] != false;
+        self.stitch.auto = s["auto"] == true;
+        self.stitch.store = s["store"].as_str().unwrap_or_default().to_string();
+        self.stitch.body = s["body"].as_str().unwrap_or_default().to_string();
+        if before != (self.stitch.values, self.stitch.seam) {
+            self.stitch_changed(false);
+        }
+        let t = &v["timeline"];
+        self.timeline.speed = t["speed"].as_f64().unwrap_or(self.timeline.speed);
+        self.timeline.looping = t["loop"] != false;
+        self.timeline.apply_head = t["apply_head"] != false;
+        self.project.notes = v["notes"].as_str().unwrap_or_default().to_string();
+    }
+
+    pub fn journal_flush(&mut self) {
+        let now = self.panel_snapshot();
+        match &self.journal.committed {
+            None => self.journal.committed = Some(now),
+            Some(c) if *c != now => {
+                let before = c.clone();
+                self.journal.panels_done.push((before, now.clone()));
+                let over = self.journal.panels_done.len().saturating_sub(LIMIT);
+                self.journal.panels_done.drain(..over);
+                self.journal.committed = Some(now.clone());
+                self.journal.last = Some(now);
+                self.journal_push(Domain::Panels);
+            }
+            Some(_) => {}
+        }
+    }
+
+    pub fn journal_tick(&mut self) {
+        if let Some(shape) = &self.shape
+            && shape.history.pushes != self.journal.shape_seen
+        {
+            let grown = shape.history.pushes.saturating_sub(self.journal.shape_seen);
+            self.journal.shape_seen = shape.history.pushes;
+            for _ in 0..grown {
+                self.journal_push(Domain::Shape);
+            }
+        }
+        let now = self.panel_snapshot();
+        if self.journal.committed.is_none() {
+            self.journal.committed = Some(now.clone());
+            self.journal.last = Some(now);
+            return;
+        }
+        if self.journal.last.as_ref() != Some(&now) {
+            self.journal.last = Some(now);
+            self.journal.changed_at = Some(Instant::now());
+            return;
+        }
+        if !self.journal.pointer_down && self.journal.changed_at.is_some_and(|t| t.elapsed() >= SETTLE) {
+            self.journal.changed_at = None;
+            self.journal_flush();
+        }
+    }
+
+    pub fn journal_state(&self) -> Value {
+        let name = |d: &Domain| format!("{d:?}").to_lowercase();
+        json!({"weights": self.shape.as_ref().map(|s| s.live.weights.clone()), "skin": self.skin.spec.as_ref().map(gf_core::skin_layers::SkinSpec::canonical),
+               "panels": self.panel_snapshot(), "done": self.journal.done.iter().map(name).collect::<Vec<_>>(), "undone": self.journal.undone.iter().map(name).collect::<Vec<_>>()})
+    }
+
+    pub fn journal_reset(&mut self) {
+        let pointer_down = self.journal.pointer_down;
+        self.journal = Journal { pointer_down, shape_seen: self.shape.as_ref().map_or(0, |s| s.history.pushes), ..Journal::default() };
+    }
+
+    fn panel_step(&mut self, redo: bool) -> Option<String> {
+        let (before, after) = if redo { self.journal.panels_undone.pop()? } else { self.journal.panels_done.pop()? };
+        let target = if redo { after.clone() } else { before.clone() };
+        self.panel_apply(&target);
+        self.journal.committed = Some(target.clone());
+        self.journal.last = Some(target);
+        self.journal.changed_at = None;
+        if redo { self.journal.panels_done.push((before, after)) } else { self.journal.panels_undone.push((before, after)) }
+        Some(tr("history.panels").to_string())
+    }
+
+    pub fn undo(&mut self, redo: bool) -> Option<String> {
+        self.journal_tick();
+        self.journal_flush();
+        loop {
+            let d = if redo { self.journal.undone.pop()? } else { self.journal.done.pop()? };
+            let label = match d {
+                Domain::Shape => self.shape_step(redo),
+                Domain::Skin => self.skin_step(redo),
+                Domain::Panels => self.panel_step(redo),
+            };
+            if let Some(label) = label {
+                if redo { self.journal.done.push(d) } else { self.journal.undone.push(d) }
+                return Some(if redo { trf("designer.redone", &[("what", &label)]) } else { trf("designer.undone", &[("what", &label)]) });
+            }
+        }
+    }
+}

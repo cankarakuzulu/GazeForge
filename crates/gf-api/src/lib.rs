@@ -23,6 +23,7 @@ pub mod project;
 pub mod resources;
 pub mod schema;
 pub mod skin;
+pub mod skin_work;
 pub mod zipsafe;
 
 pub use error::{ApiError, Code};

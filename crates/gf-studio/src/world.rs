@@ -74,6 +74,8 @@ pub struct World {
     pub poses: Vec<(String, Vec<f32>)>,
     pose_dirty: bool,
     pub face: FaceRig,
+    pub skin: crate::skin::SkinUi,
+    pub journal: crate::history::Journal,
     pub extras: Vec<Extra>,
     pub overlays: Vec<Overlay>,
     extra_key: u64,
@@ -129,6 +131,8 @@ impl Default for World {
             poses: Vec::new(),
             pose_dirty: false,
             face: FaceRig::default(),
+            skin: crate::skin::SkinUi::default(),
+            journal: crate::history::Journal::default(),
             extras: Vec::new(),
             overlays: Vec::new(),
             extra_key: 0,
@@ -220,6 +224,8 @@ impl World {
             self.handle(done);
         }
         self.face_poll();
+        self.skin_poll();
+        self.journal_tick();
         self.stitch_poll();
         self.timeline_poll();
         self.project_poll();
@@ -400,6 +406,8 @@ impl World {
                         self.epoch += 1;
                         self.poses.clear();
                         self.face = FaceRig::default();
+                        self.skin_from_session();
+                        self.journal_reset();
                         self.extras.clear();
                         self.overlays.clear();
                         let old = std::mem::take(&mut self.timeline);
@@ -566,7 +574,7 @@ impl World {
         if !shape.macros_available || !macros.contains_key(name) || p.has_slope(name, &key) || self.slope_wanted.contains(&id) || (key == p.slope_key && p.sampled_for(name).is_some()) {
             return;
         }
-        let base = shape.character(&s.start, &shape.live);
+        let base = shape.character(&s.base(), &shape.live);
         let mut input = s.settle_input(&base, false);
         input["macros"] = json!({"sliders": macros, "mode": shape.macro_mode, "head_scale": shape.head_scale});
         input["slider"] = json!(name);
@@ -594,7 +602,7 @@ impl World {
         if !shape.macros_available || !p.anchor_macros.contains_key(name) {
             return None;
         }
-        let mut input = s.settle_input(&shape.character(&s.start, values), false);
+        let mut input = s.settle_input(&shape.character(&s.base(), values), false);
         input["macros"] = json!({"sliders": p.anchor_macros, "mode": shape.macro_mode, "head_scale": shape.head_scale});
         if let Some(m) = &s.macro_file {
             input["macro"] = json!(m);
@@ -688,7 +696,7 @@ impl World {
 
     pub fn request_settle(&mut self) {
         let (Some(s), Some(shape)) = (self.session.as_mut(), &self.shape) else { return };
-        let c = shape.character(&s.start, &shape.live);
+        let c = shape.character(&s.base(), &shape.live);
         let input = s.settle_input(&c, true);
         s.character = c;
         let now = Instant::now();
@@ -702,7 +710,7 @@ impl World {
 
     pub fn settle_input(&self) -> Option<Value> {
         let (s, shape) = (self.session.as_ref()?, self.shape.as_ref()?);
-        Some(s.settle_input(&shape.character(&s.start, &shape.live), true))
+        Some(s.settle_input(&shape.character(&s.base(), &shape.live), true))
     }
 
     pub fn settle_stats(&self) -> Value {
@@ -745,13 +753,13 @@ impl World {
         }
     }
 
-    pub fn undo(&mut self, redo: bool) -> Option<String> {
+    pub fn shape_step(&mut self, redo: bool) -> Option<String> {
         let shape = self.shape.as_mut()?;
         let label = if redo { shape.redo() } else { shape.undo() }?;
         self.preview_dirty = true;
         self.edit_at.get_or_insert_with(Instant::now);
         self.request_settle();
-        Some(if redo { trf("designer.redone", &[("what", &label)]) } else { trf("designer.undone", &[("what", &label)]) })
+        Some(label)
     }
 
     pub fn save(&mut self, out: &str) -> Result<(), String> {

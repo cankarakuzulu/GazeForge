@@ -33,6 +33,8 @@ pub struct UiState {
     texture: Option<egui::TextureId>,
     texture_generation: u64,
     drag: Option<(usize, bool, f32)>,
+    skin_rect: Option<viewer::Rect>,
+    pub skin_colour_layer: Option<usize>,
     pub render_ms: f64,
     pub frame_ms: f64,
     pub show_help: bool,
@@ -72,6 +74,8 @@ impl UiState {
             texture: None,
             texture_generation: 0,
             drag: None,
+            skin_rect: None,
+            skin_colour_layer: None,
             render_ms: 0.0,
             frame_ms: 0.0,
             show_help: false,
@@ -436,6 +440,7 @@ impl Studio<'_> {
         self.project_panel(ui);
         self.topology_panel(ui);
         self.face_rig_panel(ui);
+        self.skin_panel(ui);
         self.stitch_panel(ui);
         self.timeline_panel(ui);
         if let Some(s) = &self.world.session {
@@ -451,7 +456,7 @@ impl Studio<'_> {
         if self.world.shape.is_some() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let h = self.world.shape.as_ref().map_or((0, 0), |s| (s.history.done.len(), s.history.undone.len()));
+                let h = (self.world.journal.can_undo() as usize, self.world.journal.can_redo() as usize);
                 let undo_tip = self.tip(tr("action.undo"), "undo");
                 let redo_tip = self.tip(tr("action.redo"), "redo");
                 if ui.add_enabled_ui(h.0 > 0, |ui| icons::button(ui, "undo-2", false, &undo_tip)).inner.clicked() {
@@ -506,7 +511,50 @@ impl Studio<'_> {
             rects.iter().copied().find(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).unwrap_or(rects[0])
         };
         let (shift, alt, secondary, middle) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.pointer.button_down(egui::PointerButton::Secondary), i.pointer.button_down(egui::PointerButton::Middle)));
+        let local = |p: egui::Pos2, r: &viewer::Rect| (((p.x - rect.min.x) * ppp - r.x as f32) as f64, ((p.y - rect.min.y) * ppp - r.y as f32) as f64);
+        let tool = self.world.skin.tool;
+        self.world.skin.hover = match (tool, resp.hover_pos()) {
+            (crate::skin::Tool::Brush, Some(p)) => {
+                let r = at(p);
+                let (px, py) = local(p, &r);
+                self.world.skin_pick(&r, px, py).map(|h| h.2)
+            }
+            _ => None,
+        };
+        let skin_button = !(secondary || middle || shift);
+        if tool == crate::skin::Tool::Brush && skin_button {
+            if (resp.drag_started() || (resp.clicked() && !resp.double_clicked()))
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                let r = at(p);
+                let (px, py) = local(p, &r);
+                if self.world.skin_paint_begin(&r, px, py) {
+                    self.s.skin_rect = Some(r);
+                }
+            }
+            if let (true, Some(r), Some(p)) = (resp.dragged(), self.s.skin_rect, resp.interact_pointer_pos()) {
+                let (px, py) = local(p, &r);
+                self.world.skin_paint_to(&r, px, py);
+            }
+        }
+        let primary_down = ui.input(|i| i.pointer.primary_down());
+        if (self.s.skin_rect.is_some() || self.world.skin_painting()) && (resp.drag_stopped() || resp.clicked() || !primary_down || !self.world.skin_painting()) {
+            self.world.skin_paint_end();
+            self.s.skin_rect = None;
+        }
+        if tool == crate::skin::Tool::Stamp
+            && skin_button
+            && resp.clicked()
+            && !resp.double_clicked()
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            let r = at(p);
+            let (px, py) = local(p, &r);
+            self.world.skin_place_stamp(&r, px, py);
+        }
+        let skin_owns_drag = self.s.skin_rect.is_some() || self.world.skin_painting();
         if resp.drag_started()
+            && !skin_owns_drag
             && let Some(p) = resp.interact_pointer_pos()
         {
             let r = at(p);
@@ -542,6 +590,7 @@ impl Studio<'_> {
             }
         }
         if resp.double_clicked()
+            && tool == crate::skin::Tool::None
             && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), &self.world.session)
         {
             let r = at(p);
@@ -569,6 +618,7 @@ impl Studio<'_> {
         }
         self.cube_input(ui, rect, ppp, w, h);
         let moving = self.world.state.step(dt);
+        self.world.journal.pointer_down = ui.input(|i| i.pointer.any_down());
         self.world.tick();
         self.renderer.sync_world(self.gfx.device, self.gfx.queue, self.world);
         self.renderer.dpr = ppp as f64;
@@ -614,6 +664,7 @@ impl Studio<'_> {
             }
         }
         self.face_rig_paint(&painter, rect, ppp, w, h);
+        self.skin_overlay(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
         if self.world.hud.on {
             let mut lines = self.world.hud.lines();
