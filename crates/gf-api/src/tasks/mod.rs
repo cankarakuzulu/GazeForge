@@ -13,6 +13,7 @@ pub mod data;
 pub mod mesh;
 pub mod rig;
 pub mod topology;
+pub mod wearable;
 
 pub const BUILD_KEYS: &[&str] = &[
     "dense",

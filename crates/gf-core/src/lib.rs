@@ -26,5 +26,6 @@ pub mod skin_map;
 pub mod skin_regions;
 pub mod skin_texture;
 pub mod subdiv;
+pub mod wearable;
 
 pub use gf_geom;

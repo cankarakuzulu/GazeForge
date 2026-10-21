@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::process::ExitCode;
 
-use gf_api::tasks::{self, Options, data, mesh, rig, topology};
+use gf_api::tasks::{self, Options, data, mesh, rig, topology, wearable};
 use serde_json::{Value, json};
 
 mod front;
@@ -46,6 +46,7 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   character evaluate --store DIR --spec FILE --out DENSE.npy [--macro MACRO_JSON] [--precision f32|f64]
   macro weights --macro MACRO_JSON --sliders JSON|@FILE [--targets TARGETS_ROOT] [--mode gf|mpfb] [--floor 0.01|none]
   macro labels --macro MACRO_JSON --slider NAME --values VALUES.npy --out TABLE.npy [--mode gf|mpfb]
+  wearable check --base BASE_OBJ --mhclo A.mhclo,B.mhclo [--macro MACRO_JSON --targets TARGETS_ROOT --sliders JSON|@FILE]
   export-glb  --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json] [--sparse auto|always|never]
               [--lod-screen 0.25,0.1] [the options of the spec's placement, e.g. --eyes EYES.json]
   gates shell --dense DIR --before base|shape:NAME|FILE.npy --after base|shape:NAME|FILE.npy [--fold-tolerance 10]
@@ -102,6 +103,10 @@ fn run(args: &[String]) -> Result<Value, String> {
         Some("topology") => match args.get(1).map(String::as_str) {
             Some("improve") => options(&args[2..]).and_then(|o| topology::improve(&o)),
             Some("inspect") => options(&args[2..]).and_then(|o| topology::inspect(&o)),
+            _ => Err(USAGE.to_string()),
+        },
+        Some("wearable") => match args.get(1).map(String::as_str) {
+            Some("check") => options(&args[2..]).and_then(|o| wearable::check(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some(group @ ("store" | "character" | "macro")) => match args.get(1) {

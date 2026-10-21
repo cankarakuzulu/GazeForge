@@ -52,7 +52,7 @@ pub fn run(group: &str, verb: &str, opts: &Options) -> Result<Value, String> {
     }
 }
 
-fn json_arg(text: &str, key: &str) -> Result<Value, String> {
+pub(super) fn json_arg(text: &str, key: &str) -> Result<Value, String> {
     let (source, body) = match text.strip_prefix('@') {
         Some(path) => (path.to_string(), std::fs::read_to_string(path).map_err(|e| format!("--{key} {path}: {e}"))?),
         None => ("inline".to_string(), text.to_string()),
@@ -60,7 +60,7 @@ fn json_arg(text: &str, key: &str) -> Result<Value, String> {
     serde_json::from_str(&body).map_err(|e| format!("--{key} ({source}) is not JSON: {e}"))
 }
 
-fn number_map(value: &Value, key: &str) -> Result<BTreeMap<String, f64>, String> {
+pub(super) fn number_map(value: &Value, key: &str) -> Result<BTreeMap<String, f64>, String> {
     let object = value.as_object().ok_or_else(|| format!("--{key} must be a JSON object of numbers"))?;
     object
         .iter()
