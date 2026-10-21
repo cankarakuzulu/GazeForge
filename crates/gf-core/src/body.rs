@@ -1403,6 +1403,18 @@ impl Fine {
     }
 }
 
+pub struct Patch {
+    pub helpers: Vec<u32>,
+    pub quads: Vec<[u32; 4]>,
+    pub quad_uvs: Vec<[Uv; 4]>,
+}
+
+impl Patch {
+    pub fn positions(&self, helpers: &Helpers) -> Vec<Point> {
+        self.helpers.iter().map(|&h| helpers.positions[h as usize]).collect()
+    }
+}
+
 pub struct BodyPack {
     pub mode: String,
     pub mesh: Mesh,
@@ -1416,6 +1428,7 @@ pub struct BodyPack {
     pub helpers: Helpers,
     pub cage_source: Vec<u32>,
     pub fine: Option<Fine>,
+    pub genital: Option<Patch>,
 }
 
 impl BodyPack {

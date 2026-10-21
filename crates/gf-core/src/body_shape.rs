@@ -58,7 +58,11 @@ pub struct BodySpec {
     pub smooth: usize,
     #[serde(default = "half")]
     pub tangent: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub genitals: String,
 }
+
+pub const GENITALS: &[&str] = &["male"];
 
 fn round(x: f64, per_unit: f64) -> f64 {
     let r = (x * per_unit).round() / per_unit;
@@ -74,6 +78,7 @@ impl BodySpec {
             neck_offset_mm: round(self.neck_offset_mm, 1e3),
             body_scale: round(self.body_scale, 1e6),
             tangent: round(self.tangent, 1e4),
+            genitals: if self.genitals == "none" { String::new() } else { self.genitals.clone() },
             ..self.clone()
         }
     }
@@ -84,6 +89,9 @@ impl BodySpec {
 
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
+        if !(self.genitals.is_empty() || self.genitals == "none" || GENITALS.contains(&self.genitals.as_str())) {
+            out.push(format!("body.genitals {:?} is not none or one of {GENITALS:?}", self.genitals));
+        }
         for (k, v) in [("body.pack", &self.pack), ("body.targets", &self.targets)] {
             if let Err(e) = hash::parse_reference(v) {
                 out.push(format!("{k}: {e}"));
@@ -236,19 +244,21 @@ mod tests {
     #[test]
     fn a_body_spec_checks_its_references_and_ranges() {
         let r = hash::reference(&"c".repeat(64));
-        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
+        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new() };
         assert!(ok.problems().is_empty(), "{:?}", ok.problems());
-        let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), compounds: [("wings".to_string(), 0.5), ("athletic".to_string(), 2.0)].into(), ..ok };
+        let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), compounds: [("wings".to_string(), 0.5), ("athletic".to_string(), 2.0)].into(), genitals: "female".into(), ..ok.clone() };
         let p = bad.problems().join(" | ");
-        for needle in ["body.pack", "blend", "arms/x", "wings", "athletic = 2"] {
+        for needle in ["body.pack", "blend", "arms/x", "wings", "athletic = 2", "body.genitals \"female\""] {
             assert!(p.contains(needle), "{needle} not in {p}");
         }
+        assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
+        assert!(BodySpec { genitals: "male".into(), ..ok }.problems().is_empty());
     }
 
     #[test]
     fn canonical_values_are_the_nearest_doubles_of_their_decimals() {
         let r = hash::reference(&"d".repeat(64));
-        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55 };
+        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55, genitals: String::new() };
         let s = serde_json::to_string(&b.canonical()).unwrap();
         for needle in ["\"a\":0.8,", "\"b\":0.3}", "\"c\":-0.7}", "60.1,", "1.1,", "0.55"] {
             assert!(s.contains(needle), "{needle} not in {s}");
@@ -268,7 +278,7 @@ mod tests {
             }
         }
         let r = hash::reference(&"c".repeat(64));
-        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5 };
+        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new() };
         b.compounds.insert("leg_length".into(), 0.5);
         let w = b.target_weights();
         assert_eq!(w["legs/upperlegs-height-incr"], 0.75);

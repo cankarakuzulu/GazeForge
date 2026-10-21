@@ -53,6 +53,111 @@ pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-fron
 pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
 pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights"];
+const GENITAL_SINK_M: f64 = 0.002;
+
+fn face_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
+    let mut n = vec![[0.0; 3]; positions.len()];
+    for t in triangles {
+        let (a, b, c) = (positions[t[0] as usize], positions[t[1] as usize], positions[t[2] as usize]);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let f = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        for &k in t {
+            for d in 0..3 {
+                n[k as usize][d] += f[d];
+            }
+        }
+    }
+    n.into_iter().map(|p| {
+        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-30);
+        p.map(|x| x / l)
+    }).collect()
+}
+
+fn genital_lod(
+    pack: &gf_core::body::BodyPack,
+    controls: &gf_core::body::Controls,
+    level: usize,
+    body_positions: &[Point],
+    body_normals: &[Point],
+    by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>,
+    name: String,
+) -> Result<(Lod, Value), String> {
+    let g = pack.genital.as_ref().ok_or("the spec asks for genitals but the body has no helper-genital patch: re-import it (body.import)")?;
+    if pack.helpers.positions.is_empty() {
+        return Err("the body carries no helper vertices: re-import it (body.import, then body.targets)".into());
+    }
+    let control = pack.control_joint(controls);
+    let base = g.positions(&pack.helpers);
+    let l = gf_core::subdiv::subdivide(&g.quads, &g.quad_uvs, base.len(), level)?;
+    let mut positions: Vec<Point> = l.stencil.apply(&base).into_iter().map(&control).collect();
+    let (mut triangles, mut uvs) = gf_core::subdiv::triangles(&l.quads, &l.uvs);
+    let mut count: HashMap<(u32, u32), u32> = HashMap::new();
+    for q in &l.quads {
+        for k in 0..4 {
+            *count.entry((q[k].min(q[(k + 1) % 4]), q[k].max(q[(k + 1) % 4]))).or_default() += 1;
+        }
+    }
+    let mut rim: Vec<u32> = count.into_iter().filter(|e| e.1 == 1).flat_map(|e| [e.0.0, e.0.1]).collect();
+    rim.sort_unstable();
+    rim.dedup();
+    let nearest = |p: Point| -> usize {
+        let d = |q: &Point| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
+        (0..body_positions.len()).min_by(|&a, &b| d(&body_positions[a]).total_cmp(&d(&body_positions[b]))).unwrap_or(0)
+    };
+    let before = face_normals(&positions, &triangles);
+    let mut facing = 0.0;
+    let mut gap_mm: f64 = 0.0;
+    for &v in &rim {
+        let j = nearest(positions[v as usize]);
+        let (q, n) = (body_positions[j], body_normals[j]);
+        facing += before[v as usize][0] * n[0] + before[v as usize][1] * n[1] + before[v as usize][2] * n[2];
+        let p = positions[v as usize];
+        gap_mm = gap_mm.max(((p[0] - q[0]) * n[0] + (p[1] - q[1]) * n[1] + (p[2] - q[2]) * n[2]).abs() * 1000.0);
+        positions[v as usize] = [q[0] - GENITAL_SINK_M * n[0], q[1] - GENITAL_SINK_M * n[1], q[2] - GENITAL_SINK_M * n[2]];
+    }
+    let flipped = facing < 0.0;
+    if flipped {
+        for (t, u) in triangles.iter_mut().zip(uvs.iter_mut()) {
+            t.swap(1, 2);
+            u.swap(1, 2);
+        }
+    }
+    let normals = face_normals(&positions, &triangles);
+    let surface = gm::split_seams(&triangles, &uvs);
+    let skin = match by_obj {
+        Some(w) => {
+            let none: Vec<(usize, f64)> = Vec::new();
+            let infl: Vec<gf_core::body_rig::Influences> = surface
+                .source
+                .iter()
+                .map(|&v| {
+                    let parts: Vec<(f64, &[(usize, f64)])> = l.stencil.rows[v as usize]
+                        .iter()
+                        .map(|&(c, k)| (k, w.get(&pack.helpers.source[g.helpers[c as usize] as usize]).map(Vec::as_slice).unwrap_or(&none)))
+                        .collect();
+                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+                    if x.is_empty() { vec![(0, 1.0)] } else { x }
+                })
+                .collect();
+            Some(skin_data(&infl.iter().map(Vec::as_slice).collect::<Vec<_>>()))
+        }
+        None => None,
+    };
+    let report = json!({"node": name, "subdivision_level": level, "vertices": surface.source.len(), "triangles": triangles.len(), "rim_vertices": rim.len(),
+                        "rim_off_body_before_mm": gap_mm, "winding_flipped": flipped});
+    let lod = Lod {
+        name,
+        positions: surface.source.iter().map(|&v| gm::to_gltf(positions[v as usize])).collect(),
+        normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
+        uvs: surface.uvs.clone(),
+        indices: surface.indices,
+        morphs: Vec::new(),
+        skin,
+        material: None,
+    };
+    Ok((lod, report))
+}
 
 fn skin_data(influences: &[&[(usize, f64)]]) -> gltf::SkinData {
     let mut joints = Vec::with_capacity(influences.len());
@@ -1215,6 +1320,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut body_lods = Vec::new();
     let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
     let mut body_meta = Value::Null;
+    let genitals = spec.body.as_ref().is_some_and(|b| b.canonical().genitals == "male");
+    let mut genital_rows: Vec<Value> = Vec::new();
     if let Some((pack, pack_manifest, controls)) = &body {
         crate::jobs::progress("body", 0, 1, "");
         use gf_core::body as gb;
@@ -1278,6 +1385,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 })),
                 material: None,
             });
+            if genitals {
+                let level = pack.fine.as_ref().map_or(2, |f| f.level).saturating_sub(i);
+                let (lod, report) = genital_lod(pack, controls, level, &st.positions, &normals, body_rig.as_ref().map(|br| &br.by_obj), format!("Genitals_LOD{i}"))?;
+                genital_rows.push(report);
+                body_lods.push(lod);
+            }
         }
         if !failures.is_empty() {
             return Err(format!("body stitch gates failed: {}", failures.join("; ")));
@@ -1285,6 +1398,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         body_meta = json!({"mode": pack.mode, "pack": opts.get("body"), "source": pack_manifest["source"], "controls": controls, "lods": rows,
                            "mesh": "one mesh node per body LOD (Body_LODn beside Head_LODn), its own material slot and the body's UV layout; the seam vertices are copies of the head's with the same position, normal and skin weights",
                            "skin": if let Some(br) = &body_rig { br.meta.clone() } else if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+        if genitals {
+            body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
+                                           "method": "MakeHuman's helper-genital patch, shaped with the body's helpers (macros and the genital targets), refined by Catmull-Clark (one level less per LOD), its rim set on that LOD's body surface 2 mm inside along the body normal; one mesh per LOD (Genitals_LODn), skinned like the body when a rig is asked"});
+        }
     }
     let mut lods = Vec::new();
     let mut lod_meta = Vec::new();
