@@ -8,6 +8,34 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Bodies shaped by the macros.** A spec's `body` (a MakeHuman body pack and its targets in the store) is shaped live
+  by the macro sliders in the designer, the studio and `export-glb`; the head follows it (built in its canonical frame,
+  the character mapped to the world by one `Character` root). Measured: a live body equals a fresh MakeHuman import to
+  0.0002 mm; heights within 0.4 % of MakeHuman's own.
+- **Regional body sliders and compound parameters.** `body.weights` (MakeHuman's regional targets, 117 sliders by family,
+  `body.sliders`) and `body.compounds` (15 named mixes: leg and arm length, shoulder and hip width, torso length, waist,
+  chest, athletic, curvy, belly, hand and foot size, arm and leg muscle, breasts natural / implanted); a Body shape panel
+  in the studio and the browser, one undo step per change. A target the head's catalog also has drives both sides.
+- **A finer body.** The body is shaped on its cage and refined by Catmull-Clark (level 2 by default, equal to Blender's
+  own subdivision to 4e-7 m) before it is stitched; its game levels of detail are decimations of the refined body.
+- **Rigs.** `export-glb --body-rig game_engine` (or `game_engine_with_breast`, `default`, `mixamo`, `mixamo_unity`,
+  `cmu_mb`, `openpose`; MakeHuman's rigs and weights bundled, CC0) skins the whole character; `body.joints` returns a
+  rig's joints on any shaped body. Measured: joints equal MakeHuman's rule to 0.001 mm on all eight rigs; in Godot 4.7
+  the rest pose reproduces to 0.07 mm and the neck seam stays closed with the spine, neck and head rotated.
+- **Genitals (male).** `body.genitals: "male"` exports MakeHuman's genital patch per level of detail, shaped by the macros
+  and three sliders, skinned with the body.
+- `export-glb --body-gates report` exports a body whose stitch gates fail, listing the failures in the sidecar.
+
+### Open (bodies)
+
+- The neck seam on the finer body: 116 of the 128 characters of the macro grid pass the stitch gates (107 before the
+  finer body); the worst seam angle is 46.1 degrees against a 40 degree limit, at the coarsest level of detail, on
+  heavily muscled characters.
+- Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.
+- With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
+  (MakeHuman ships no geometry for one).
+- The face rig cannot yet be combined with a body rig; no humanoid retargeting presets yet.
+
 - **Topology improvement.** `topology improve` / `topology.improve` (a job) re-cuts a game base's triangles by edge
   flips over the same vertices, scored over the shape range the base serves (the rest shape, every catalog target, seeded
   combinations, optionally the dense pack's shapes), and stores the result as a new game base (its levels of detail too);
