@@ -8,7 +8,10 @@ extends SceneTree
 # the collider's centre, when turning the first chain's parent bone makes the chain's tip lag behind it with the simulator
 # on and follow it rigidly with it off, and when the capsules hold the chains: turning the head both ways, the joints go
 # deeper into the body than at rest by less than half as much with the capsules as with them removed. Removed, not
-# switched off: a setting's "all child collisions" turned off at run time does not take effect.
+# switched off: a setting's "all child collisions" turned off at run time does not take effect. The turns ramp over
+# half a second (a turn in one frame teleports the capsules through the chains), and joints within 3 cm of their
+# chain's root are left out of the depth (a root fixed to a bone that enters a capsule drags them in; the report keeps
+# their depth as with_joints_near_a_root_mm).
 # The tip is sampled inside Skeleton3D.skeleton_updated: a SkeletonModifier3D's result exists only during that update and
 # is restored afterwards, so a read from outside sees the unmodified pose and reports a still chain.
 
@@ -17,6 +20,8 @@ const TURN_DEG := 60.0
 const SETTLE_FRAMES := 60
 const SWING_FRAMES := 90
 const CONTACT_MM := 5.0
+const RAMP_FRAMES := 30.0
+const ROOT_ZONE_M := 0.03
 
 
 func _initialize() -> void:
@@ -113,7 +118,8 @@ func run() -> void:
 		var off_: Dictionary = await contact(skeleton, sim, names, springs, turn, false)
 		var with_colliders: float = on_["mm"]
 		var without: float = off_["mm"]
-		depth["%+d" % int(turn)] = {"colliders_on_mm": with_colliders, "on_where": on_["where"], "colliders_off_mm": without, "off_where": off_["where"]}
+		depth["%+d" % int(turn)] = {"colliders_on_mm": with_colliders, "on_where": on_["where"], "colliders_off_mm": without, "off_where": off_["where"],
+				"with_joints_near_a_root_mm": on_["all_joints_mm"]}
 		if without > CONTACT_MM and with_colliders > without * 0.5:
 			problems.append("turning %+d deg the chains go %.1f mm deeper into the body than at rest with colliders and %.1f mm without: the colliders do not hold them" % [int(turn), with_colliders, without])
 	report["deepest_joint_in_a_capsule"] = depth
@@ -142,11 +148,15 @@ func contact(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStri
 	await process_frame
 	sim.reset()
 	var bones := []
+	var free := {}
 	for s in springs:
+		var root_at := skeleton.get_bone_global_rest(skeleton.find_bone(names[int(s["joints"][0])])).origin
 		for j in s["joints"].slice(1):
-			bones.append(skeleton.find_bone(names[int(j)]))
+			var b := skeleton.find_bone(names[int(j)])
+			bones.append(b)
+			free[b] = skeleton.get_bone_global_rest(b).origin.distance_to(root_at) >= ROOT_ZONE_M
 	var scale := Extension.world_scale(get_root(), skeleton)
-	var worst := {"depth": 0.0, "rest": {}, "capsule": ""}
+	var worst := {"depth": 0.0, "rest": {}, "capsule": "", "all_joints": 0.0}
 	var measure := func() -> void:
 		var inv := skeleton.global_transform.affine_inverse()
 		for b in bones:
@@ -164,7 +174,8 @@ func contact(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStri
 					which = str(cap.bone_name)
 			if not worst["rest"].has(b):
 				worst["rest"][b] = maxf(deepest, 0.0)
-			if deepest - worst["rest"][b] > worst["depth"]:
+			worst["all_joints"] = maxf(worst["all_joints"], deepest - worst["rest"][b])
+			if free[b] and deepest - worst["rest"][b] > worst["depth"]:
 				worst["depth"] = deepest - worst["rest"][b]
 				worst["capsule"] = "%s into %s" % [skeleton.get_bone_name(b), which]
 	var parent := skeleton.get_bone_parent(skeleton.find_bone(names[int(springs[0]["joints"][0])]))
@@ -173,8 +184,8 @@ func contact(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStri
 		await process_frame
 	skeleton.skeleton_updated.connect(measure)
 	await process_frame
-	skeleton.set_bone_pose_rotation(parent, rest_rotation * Quaternion(Vector3.RIGHT, deg_to_rad(turn_deg)))
 	for k in SWING_FRAMES:
+		skeleton.set_bone_pose_rotation(parent, rest_rotation * Quaternion(Vector3.RIGHT, deg_to_rad(turn_deg) * minf(1.0, float(k + 1) / RAMP_FRAMES)))
 		await process_frame
 	skeleton.skeleton_updated.disconnect(measure)
 	skeleton.set_bone_pose_rotation(parent, rest_rotation)
@@ -183,7 +194,7 @@ func contact(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStri
 	if not collide:
 		for cap in capsules:
 			sim.add_child(cap)
-	return {"mm": worst["depth"] * 1000.0, "where": worst["capsule"]}
+	return {"mm": worst["depth"] * 1000.0, "where": worst["capsule"], "all_joints_mm": worst["all_joints"] * 1000.0}
 
 
 func swing(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStringArray, spring: Dictionary, active: bool) -> Dictionary:

@@ -61,10 +61,15 @@ open, with its last measurement, rather than left out.
   cloth vertex, and for spring bones chains of extra joints built from the item's own mesh (rooted where it rests on the
   anchor bone, the head for hair) with the item skinned along them. Measured: MakeHuman's ponytail becomes one chain
   that bends as one piece, its long hair five strands that bend as a sheet. **A Godot reader:** the addon
-  `gazeforge_physics` builds a `SpringBoneSimulator3D` with the colliders as capsules (editor import and run time);
-  measured in Godot 4.7.2, the chains swing with the head and the capsules hold them out of the body (long hair: 0 mm
-  into it with them, up to 97 mm without). Open: the ponytail's short tie chain still reaches 48 mm into the neck
-  capsule with the head tipped back; cloth is not read in Godot yet.
+  `gazeforge_physics` builds a `SpringBoneSimulator3D` with the colliders as capsules, and a `SoftBody3D` for each cloth
+  item whose pinned vertices (`_PIN` >= 0.5) follow the skin (up to four bones each) while the free cloth collides with
+  the capsules as moving bodies (editor import and run time). Measured in Godot 4.7.2 with movements ramped over half a
+  second: long hair 0 mm into the body with the capsules, up to 49 mm without; a test cape's collar stays on the skin to
+  0.05 mm and its free cloth 0 mm into the body with the spine bent 35 degrees either way, up to 78 mm without.
+  Collider radii are the 10th-percentile distance (were the median: a round torso capsule stood out of the back by about
+  10 cm). Open: the ponytail's 4 cm tie chain still reaches 13 mm into the neck capsule with the head tipped back 60
+  degrees (29 mm counting the joints within 3 cm of its root); the cape sags about 11 cm as it settles (Godot's soft
+  body at stiffness 1); the reader drives pins from a script, about 4 bone transforms per pinned vertex per frame.
 
 ### Changed
 

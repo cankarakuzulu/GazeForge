@@ -5,6 +5,8 @@ extends GLTFDocumentExtension
 const EXTENSION := "GAZEFORGE_physics"
 const SIMULATOR := "GazeForgeSprings"
 const FRAME_NODE := "Character"
+const PIN_LIMIT := 0.5
+const Cloth := preload("res://addons/gazeforge_physics/gazeforge_cloth.gd")
 
 
 func _get_supported_extensions() -> PackedStringArray:
@@ -15,10 +17,35 @@ func _import_post(state: GLTFState, root: Node) -> Error:
 	var ext = (state.json.get("extensions", {}) as Dictionary).get(EXTENSION)
 	if not ext is Dictionary:
 		return OK
-	var result := build(root, ext, joint_names(state.json))
+	var pins := {}
+	for c in ext.get("cloth", []):
+		var nodes: Array = c.get("nodes", [])
+		if not nodes.is_empty():
+			pins[str(nodes[0])] = float_attribute(state, str(nodes[0]), str(c.get("pin", "_PIN")))
+	var result := build(root, ext, joint_names(state.json), pins)
 	if result.has("error"):
-		push_error("%s: %s; the character imports without spring bones" % [EXTENSION, result["error"]])
+		push_error("%s: %s; the character imports without its physics" % [EXTENSION, result["error"]])
 	return OK
+
+
+static func float_attribute(state: GLTFState, node_name: String, attribute: String) -> PackedFloat32Array:
+	var json: Dictionary = state.json
+	var out := PackedFloat32Array()
+	for node in json.get("nodes", []):
+		if str(node.get("name", "")) != node_name or not node.has("mesh"):
+			continue
+		var prim: Dictionary = json["meshes"][int(node["mesh"])]["primitives"][0]
+		if not prim.get("attributes", {}).has(attribute):
+			return out
+		var acc: Dictionary = json["accessors"][int(prim["attributes"][attribute])]
+		var view: Dictionary = json["bufferViews"][int(acc["bufferView"])]
+		var buf: PackedByteArray = state.buffers[int(view.get("buffer", 0))]
+		var base := int(view.get("byteOffset", 0)) + int(acc.get("byteOffset", 0))
+		var stride := int(view.get("byteStride", 4))
+		for i in int(acc["count"]):
+			out.append(buf.decode_float(base + i * stride))
+		return out
+	return out
 
 
 static func joint_names(json: Dictionary) -> PackedStringArray:
@@ -32,10 +59,69 @@ static func joint_names(json: Dictionary) -> PackedStringArray:
 	return out
 
 
-static func build(root: Node, ext: Dictionary, names: PackedStringArray) -> Dictionary:
+static func build(root: Node, ext: Dictionary, names: PackedStringArray, pins := {}) -> Dictionary:
+	var out := {}
+	if not (ext.get("springs", []) as Array).is_empty():
+		out = build_springs(root, ext, names)
+		if out.has("error"):
+			return out
+	if not (ext.get("cloth", []) as Array).is_empty():
+		var cloth := build_cloth(root, ext, pins)
+		if cloth.has("error"):
+			return cloth
+		out.merge(cloth)
+	return out
+
+
+static func build_cloth(root: Node, ext: Dictionary, pins: Dictionary) -> Dictionary:
+	var colliders: Array = ext.get("colliders", [])
+	var made := []
+	for c in ext.get("cloth", []):
+		var nodes: Array = c.get("nodes", [])
+		if nodes.is_empty():
+			continue
+		var mi := root.find_child(str(nodes[0]), true, false) as Node3D
+		var source := mesh_of(mi)
+		if source.is_empty():
+			return {"error": "cloth %s: no mesh node %s" % [str(c.get("wearable")), str(nodes[0])]}
+		var array_mesh: ArrayMesh = source["mesh"]
+		var skeleton := mi.get_node_or_null(source["skeleton"]) as Skeleton3D
+		if skeleton == null:
+			skeleton = mi.get_parent() as Skeleton3D
+		var pin: PackedFloat32Array = pins.get(str(nodes[0]), PackedFloat32Array())
+		if skeleton == null or source["skin"] == null or pin.size() != array_mesh.surface_get_array_len(0):
+			return {"error": "cloth %s: needs a skinned mesh under a skeleton and one pin weight per vertex (%d weights, %d vertices)" % [str(c.get("wearable")), pin.size(), array_mesh.surface_get_array_len(0)]}
+		var pinned := PackedInt32Array()
+		for i in pin.size():
+			if pin[i] >= PIN_LIMIT:
+				pinned.append(i)
+		var to_skeleton := frame_to_skeleton(root, skeleton)
+		var bodies := []
+		for k in colliders:
+			var bone := skeleton.find_bone(str(k.get("bone", "")))
+			if bone < 0:
+				continue
+			var rest := skeleton.get_bone_global_rest(bone).affine_inverse()
+			bodies.append({"bone": str(k["bone"]), "radius": float(k.get("radius", 0.05)),
+					"head": rest * (to_skeleton * vec(k.get("head"))), "tail": rest * (to_skeleton * vec(k.get("tail")))})
+		var cloth := Cloth.new()
+		cloth.name = "%s_Cloth" % str(c.get("wearable", mi.name))
+		cloth.cloth_mesh = array_mesh
+		cloth.mesh_transform = mi.transform
+		cloth.transform = mi.transform
+		cloth.skin_source = source["skin"]
+		cloth.pinned = pinned
+		cloth.colliders = bodies
+		mi.get_parent().add_child(cloth)
+		cloth.owner = root
+		cloth.skeleton_path = NodePath("..") if mi.get_parent() == skeleton else cloth.get_path_to(skeleton)
+		mi.visible = false
+		made.append(cloth)
+	return {"cloth": made}
+
+
+static func build_springs(root: Node, ext: Dictionary, names: PackedStringArray) -> Dictionary:
 	var springs: Array = ext.get("springs", [])
-	if springs.is_empty():
-		return {}
 	var chains := []
 	for s in springs:
 		var joints: Array = s.get("joints", [])
@@ -100,6 +186,16 @@ static func build(root: Node, ext: Dictionary, names: PackedStringArray) -> Dict
 	if not skipped.is_empty():
 		push_warning("%s: no bone for colliders %s" % [EXTENSION, ", ".join(skipped)])
 	return {"simulator": sim, "chains": chains.size(), "colliders": made}
+
+
+# The editor import hands _import_post ImporterMeshInstance3D nodes (they become MeshInstance3D later); a run-time
+# GLTFDocument scene has MeshInstance3D already.
+static func mesh_of(node: Node) -> Dictionary:
+	if node is MeshInstance3D and node.mesh is ArrayMesh:
+		return {"mesh": node.mesh, "skin": node.skin, "skeleton": node.skeleton}
+	if node is ImporterMeshInstance3D and node.mesh != null:
+		return {"mesh": node.mesh.get_mesh(), "skin": node.skin, "skeleton": node.skeleton_path}
+	return {}
 
 
 static func find_skeleton(node: Node, bone: String) -> Skeleton3D:
