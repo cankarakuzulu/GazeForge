@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use gf_core::game_mesh::Point;
@@ -11,7 +11,7 @@ use super::data::{json_arg, number_map};
 use super::{Options, need, only};
 
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
-pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out"];
+pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out", "hide"];
 const INSIDE_TOLERANCE_M: f64 = 0.001;
 
 struct BaseFrame {
@@ -44,6 +44,22 @@ impl BaseFrame {
         }
         Ok(binding.evaluate(&mh)?.into_iter().map(|q| [q[0] * self.unit, -q[2] * self.unit, q[1] * self.unit]).collect())
     }
+}
+
+fn hidden_body(pack: &gf_core::body::BodyPack, st: &gf_core::body::Stitched, covered: &HashSet<u32>) -> Result<Vec<bool>, String> {
+    let (_, kept) = pack.lod_mesh(0)?;
+    let cage = |c: u32| pack.source.get(c as usize).is_some_and(|o| covered.contains(o));
+    st.source
+        .iter()
+        .map(|s| {
+            let Some(u) = s else { return Ok(false) };
+            let k = *kept.get(*u as usize).ok_or_else(|| format!("body vertex {u} is outside LOD0"))?;
+            Ok(match &pack.fine {
+                Some(f) => f.stencil.rows[k as usize].iter().all(|&(c, _)| cage(c)),
+                None => cage(k),
+            })
+        })
+        .collect()
 }
 
 fn vertex_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
@@ -110,9 +126,13 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     for t in &base.triangles {
         obj.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
     }
-    for t in &st.triangles {
-        obj.push_str(&format!("f {} {} {}\n", t[0] + h + 1, t[1] + h + 1, t[2] + h + 1));
-    }
+    let hide = match opts.get("hide").map(String::as_str).unwrap_or("on") {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("--hide takes on or off, got {other}")),
+    };
+    let mut garments = String::new();
+    let mut covered: HashSet<u32> = HashSet::new();
     let mut offset = head.len() + st.positions.len();
     let mut rows = Vec::new();
     for file in need(opts, "mhclo")?.split(',') {
@@ -137,23 +157,36 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
         }
         depths.sort_by(f64::total_cmp);
         let name = binding.keys.get("name").cloned().unwrap_or_else(|| file.to_string());
-        obj.push_str(&format!("o {name}\n"));
+        garments.push_str(&format!("o {name}\n"));
         for p in &positions {
             let w = world(*p);
-            obj.push_str(&format!("v {} {} {}\n", w[0], w[1], w[2]));
+            garments.push_str(&format!("v {} {} {}\n", w[0], w[1], w[2]));
         }
         for f in &faces {
             let ids: Vec<String> = f.iter().map(|c| (c.0 as usize + offset + 1).to_string()).collect();
-            obj.push_str(&format!("f {}\n", ids.join(" ")));
+            garments.push_str(&format!("f {}\n", ids.join(" ")));
         }
+        covered.extend(&binding.hidden);
         offset += positions.len();
         rows.push(json!({"name": name, "file": file, "vertices": positions.len(), "faces": faces.len(), "hides_base_vertices": binding.hidden.len(),
                          "inside_body": {"vertices": depths.len(), "share": depths.len() as f64 / positions.len() as f64,
                                          "max_mm": depths.last().copied().unwrap_or(0.0), "p95_mm": depths.get((depths.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0),
                                          "deepest_world": deepest.1}}));
     }
+    let hidden = if hide { hidden_body(pack, &st, &covered)? } else { vec![false; st.positions.len()] };
+    let mut dropped = 0;
+    for t in &st.triangles {
+        if t.iter().all(|&v| hidden[v as usize]) {
+            dropped += 1;
+            continue;
+        }
+        obj.push_str(&format!("f {} {} {}\n", t[0] + h + 1, t[1] + h + 1, t[2] + h + 1));
+    }
+    obj.push_str(&garments);
     std::fs::write(out, obj).map_err(|e| format!("{}: {e}", out.display()))?;
-    Ok(json!({"ok": true, "command": "wearable fit", "out": out.display().to_string(), "body": {"vertices": st.positions.len(), "head_vertices": head.len()},
+    Ok(json!({"ok": true, "command": "wearable fit", "out": out.display().to_string(),
+              "body": {"vertices": st.positions.len(), "head_vertices": head.len(), "triangles": st.triangles.len(), "hidden_triangles": dropped, "hide": hide,
+                       "hide_meaning": "a body triangle is left out when all three corners are covered: every cage vertex a corner is refined from is in some garment's hidden list"},
               "garments": rows, "frame": "world: metres, z up, the character's root similarity applied",
               "inside_meaning": format!("garment vertices more than {} mm on the inner side of the nearest vertex of the stitched LOD0 character (head and body), along that vertex's normal", INSIDE_TOLERANCE_M * 1000.0)}))
 }
