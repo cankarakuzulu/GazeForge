@@ -43,6 +43,7 @@ fn source_mesh(store: &gf_io::store::Store, path: &Path, diffuse: Option<&String
 pub const PIN_NEAR_M: f64 = 0.005;
 pub const PIN_FAR_M: f64 = 0.03;
 const COLLIDER_SKIP: &[&str] = &["index", "middle", "ring", "pinky", "thumb", "ball", "toe", "Root"];
+pub const COLLIDER_PERCENTILE: f64 = 0.1;
 
 pub fn pin_weight(distance_out: f64) -> f32 {
     let t = ((distance_out - PIN_NEAR_M) / (PIN_FAR_M - PIN_NEAR_M)).clamp(0.0, 1.0);
@@ -83,7 +84,8 @@ pub fn capsules(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Contro
         let (h, t) = (control(ends[j].0), control(ends[j].1));
         let mut d: Vec<f64> = owned[j].iter().map(|&p| segment_distance(p, h, t)).collect();
         d.sort_by(f64::total_cmp);
-        out.push(Capsule { joint: j, name: bone.name.clone(), head: h, tail: t, radius: d[d.len() / 2], vertices: d.len() });
+        let radius = d[((d.len() as f64 * COLLIDER_PERCENTILE) as usize).min(d.len() - 1)];
+        out.push(Capsule { joint: j, name: bone.name.clone(), head: h, tail: t, radius, vertices: d.len() });
     }
     Ok(out)
 }

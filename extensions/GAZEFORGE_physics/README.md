@@ -6,7 +6,7 @@ extension shows the wearables skinned to the body, as exported.
 
 Status: version 1. Written by GazeForge's `export-glb` for wearables worn with `"physics": "cloth"` or
 `"physics": "springbone"`. Readers: the Godot 4 addon `clients/godot-addon/addons/gazeforge_physics` (spring-bone
-chains and colliders; cloth is not read yet).
+chains, cloth and colliders).
 
 ## Placement
 
@@ -77,8 +77,10 @@ Capsules for the body, one per bone (fingers and toes left out), in the Characte
 
 - `joint` - the index of the bone in the skin's `joints` (the order of the rig's bones), `bone` its name.
 - `head`, `tail` - the capsule's segment, the bone's own head and tail on this character.
-- `radius` - the median distance from that segment of the body and head vertices the bone drives most (its strongest
-  weight), so a heavy character gets fat capsules and a thin one thin capsules.
+- `radius` - the 10th-percentile distance from that segment of the body and head vertices the bone drives most (its
+  strongest weight), so a heavy character gets fat capsules and a thin one thin capsules, and a capsule stays inside
+  its body part. (Until the first reader the median was used; on a flat torso a round capsule that size stood out of
+  the back by about 10 cm, and a cape hung over it started inside it.)
 - `from_vertices` - how many vertices the radius was measured over.
 
 A reader attaches each capsule to its joint and moves it with the skeleton.
