@@ -423,6 +423,12 @@ eight standard rigs; in Godot 4.7 the rest pose reproduces to 0.07 mm and the se
 neck and head rotated. Not yet: the face rig together with a body rig, head-region joints that follow the head's own
 sliders and sculpt, humanoid retargeting presets.
 
+**Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
+(`Genitals_LODn`), shaped by the macros and the genital sliders (penis length and girth, testicle size), its rim set
+just inside the body surface, and skinned with the body when a rig is asked. There is no female option yet: MakeHuman
+ships no female genital geometry (only a texture mask of the region), so one would have to be authored; the field takes
+a kind, so a contributed asset can be added as `"female"` without changing existing specs.
+
 In the glb the body is its own mesh per LOD (`Body_LODn` beside `Head_LODn`): the head carries the morphs and its own UV
 layout, the body has none of the morphs and the body's UVs, so they need separate materials anyway. The seam vertices
 of both meshes share position, normal (the two sides' average) and skin weights (1.0 on the neck joint), so they stay
