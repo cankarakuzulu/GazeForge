@@ -14,6 +14,7 @@ pub mod eye_texture;
 pub mod eyerig;
 pub mod hash;
 pub mod head;
+pub mod humanoid;
 pub mod macros;
 pub mod measure;
 pub mod placement;

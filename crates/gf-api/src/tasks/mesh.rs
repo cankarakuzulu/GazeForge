@@ -2025,6 +2025,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_physics", ext)?,
         None => bytes,
     };
+    let humanoid = body_rig.as_ref().filter(|_| rig_data.is_none()).and_then(|br| br.meta["source"]["preset"].as_str()).and_then(|preset| {
+        let table = |rows: Vec<(String, String)>| rows.into_iter().map(|(p, b)| (p, Value::String(b))).collect::<serde_json::Map<String, Value>>();
+        let godot = gf_core::humanoid::godot(preset)?.into_iter().map(|(p, b)| (p.to_string(), b)).collect();
+        Some(json!({"version": 1, "preset": preset, "godot": table(godot), "unity": table(gf_core::humanoid::unity(preset)?)}))
+    });
+    let bytes = match &humanoid {
+        Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_humanoid", ext.clone())?,
+        None => bytes,
+    };
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -2071,6 +2080,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if !body_meta.is_null() {
         sidecar["body"] = body_meta.clone();
+        if let Some(h) = &humanoid {
+            sidecar["body"]["humanoid"] = json!({"extension": "GAZEFORGE_humanoid", "preset": h["preset"], "godot_bones": h["godot"].as_object().map_or(0, |m| m.len()),
+                                                "unity_bones": h["unity"].as_object().map_or(0, |m| m.len())});
+        }
         if !shaped_report.is_null() {
             sidecar["body"]["shaped"] = shaped_report.clone();
             sidecar["body"]["root"] = json!(root.as_ref().map(|r| json!({"node": r.name, "translation_gltf": r.translation, "rotation_gltf": r.rotation, "scale": r.scale})));
