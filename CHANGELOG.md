@@ -41,7 +41,7 @@ open, with its last measurement, rather than left out.
   `body.wearables: [{asset, hide_body}]`. Each garment's binding fits it to the shaped character (head items on the
   head, the rest on the body, through every macro, slider and compound), it is pushed out of the body (opaque items),
   layered over lower garments (MakeHuman's `z_depth`), the body it covers is left out (per garment, `hide_body`), and
-  `export-glb` writes it textured (alpha cards as a mask) on every level of detail - decimated per level to the body's
+  `export-glb` writes it textured (colour, normal and occlusion maps; alpha cards as a mask) on every level of detail - decimated per level to the body's
   ratio, cards kept whole - and skinned with the body rig. The Body shape panel (studio and browser) wears, hides and
   takes off wearables, with undo; the stitch preview draws them. `wearable fit` writes a lookdev OBJ with fit and
   cover measures; `wearable check` compares a binding with its own mesh. Measured: the binding reading is exact (to
@@ -68,7 +68,7 @@ open, with its last measurement, rather than left out.
   degrees.
 - Wearables: inward-facing layers (a collar's underside, cuffs) stay where the binding puts them and can sit inside a
   heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
-  a few cards at the coarsest level; the occlusion map is not exported yet; only MakeHuman clothes files can be imported.
+  a few cards at the coarsest level; only MakeHuman clothes files can be imported.
 - Body and genital UVs reach glTF in the OBJ convention (V up), so a body texture would map upside down; garments are
   flipped to glTF's convention.
 - Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.

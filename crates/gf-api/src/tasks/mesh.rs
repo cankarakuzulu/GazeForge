@@ -177,16 +177,26 @@ fn genital_lod(
     Ok((lod, report))
 }
 
+const WEARABLE_ROUGHNESS: f32 = 0.85;
+
+fn occlusion_orm(ao_png: &[u8]) -> Result<Vec<u8>, String> {
+    let (w, h, px) = gf_io::png::decode_rgba(ao_png)?;
+    let rough = (WEARABLE_ROUGHNESS * 255.0).round() as u8;
+    let orm: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[0], rough, 0, 255]).collect();
+    gf_io::png::rgba(w, h, &orm)
+}
+
 fn wearable_material(store: &Store, item: &gf_io::wearable_store::Wearable) -> Result<gltf::Material, String> {
     let texture = |slot: &str| item.manifest.material.get(slot).map(|r| store.get_ref(r)).transpose();
+    let orm = texture("occlusion")?.map(|ao| occlusion_orm(&ao)).transpose()?;
     Ok(gltf::Material {
         name: item.manifest.name.clone(),
         base_color: [1.0, 1.0, 1.0, 1.0],
         base_texture: texture("diffuse")?,
         normal_texture: texture("normal")?,
-        orm_texture: None,
+        roughness: if orm.is_some() { 1.0 } else { WEARABLE_ROUGHNESS },
+        orm_texture: orm,
         metallic: 0.0,
-        roughness: 0.85,
         transmission: None,
         ior: None,
         blend: false,
