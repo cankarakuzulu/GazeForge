@@ -54,6 +54,7 @@ pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
 pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates"];
 const GENITAL_SINK_M: f64 = 0.002;
+const GENITAL_MIN_BODY_VERTICES: usize = 2500;
 
 fn face_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
     let mut n = vec![[0.0; 3]; positions.len()];
@@ -959,7 +960,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let screens: Vec<f64> = match opts.get("lod-screen") {
         _ if measured => Vec::new(),
         Some(text) => text.split(',').map(|s| s.trim().parse::<f64>().map_err(|_| format!("--lod-screen takes numbers, got {text}"))).collect::<Result<_, _>>()?,
-        None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or(0.02)).collect(),
+        None => (0..manifest.lods.len()).map(|i| [0.25, 0.1, 0.04].get(i).copied().unwrap_or_else(|| 0.04 * 0.4f64.powi(i as i32 - 2))).collect(),
     };
     if !measured && (screens.len() != manifest.lods.len() || screens.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s >= 1.0)) {
         return Err(format!("--lod-screen needs {} numbers in (0, 1), one per LOD below the finest", manifest.lods.len()));
@@ -1385,7 +1386,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 })),
                 material: None,
             });
-            if genitals {
+            if genitals && st.positions.len() >= GENITAL_MIN_BODY_VERTICES {
                 let level = pack.fine.as_ref().map_or(2, |f| f.level).saturating_sub(i);
                 let (lod, report) = genital_lod(pack, controls, level, &st.positions, &normals, body_rig.as_ref().map(|br| &br.by_obj), format!("Genitals_LOD{i}"))?;
                 genital_rows.push(report);
@@ -1408,7 +1409,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
-                                           "method": "MakeHuman's helper-genital patch, shaped with the body's helpers (macros and the genital targets), refined by Catmull-Clark (one level less per LOD), its rim set on that LOD's body surface 2 mm inside along the body normal; one mesh per LOD (Genitals_LODn), skinned like the body when a rig is asked"});
+                                           "method": "MakeHuman's helper-genital patch, shaped with the body's helpers (macros and the genital targets), refined by Catmull-Clark (one level less per LOD), its rim set on that LOD's body surface 2 mm inside along the body normal; one mesh per LOD (Genitals_LODn) on every LOD whose body keeps at least 2500 vertices (coarser LODs carry none), skinned like the body when a rig is asked"});
         }
     }
     let mut lods = Vec::new();
