@@ -12,7 +12,36 @@ use super::{Options, need, only};
 
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
 pub const IMPORT_KEYS: &[&str] = &["store", "mhclo"];
-pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo"];
+pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo", "hide-under", "compare-hidden"];
+const HIDE_REACH_M: f64 = 0.15;
+
+fn covered_base(base: &std::collections::BTreeMap<u32, Point>, body: &HashMap<u32, Point>, faces: &[[u32; 3]], garment: &[Point], garment_tris: &[[u32; 3]], unit: f64) -> Vec<u32> {
+    let mut normals: std::collections::BTreeMap<u32, Point> = std::collections::BTreeMap::new();
+    for f in faces {
+        let Some(p) = f.iter().map(|v| base.get(v).copied()).collect::<Option<Vec<Point>>>() else { continue };
+        let n = cross(sub(p[1], p[0]), sub(p[2], p[0]));
+        for v in f {
+            let e = normals.entry(*v).or_insert([0.0; 3]);
+            for k in 0..3 {
+                e[k] += n[k];
+            }
+        }
+    }
+    let tris: Vec<[Point; 3]> = garment_tris.iter().map(|t| t.map(|v| garment[v as usize])).collect();
+    let reach = HIDE_REACH_M / unit;
+    let behind = 0.005 / unit;
+    let mut out: Vec<u32> = normals
+        .iter()
+        .filter(|(v, _)| body.contains_key(v))
+        .filter(|(v, n)| {
+            let (o, d) = (base[v], normalized(**n));
+            tris.iter().any(|t| ray_hits(o, d, t).is_some_and(|x| (-behind..=reach).contains(&x)))
+        })
+        .map(|(v, _)| *v)
+        .collect();
+    out.sort_unstable();
+    out
+}
 const SCALE_PAIRS: [(u32, u32); 3] = [(5399, 11998), (791, 881), (962, 5320)];
 
 pub fn bind(opts: &Options) -> Result<Value, String> {
@@ -44,6 +73,27 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
     let name = opts.get("name").cloned().unwrap_or_else(|| obj_path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "wearable".into()));
     binding.keys.insert("name".into(), name.clone());
     binding.keys.insert("obj_file".into(), obj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    let hide = match opts.get("hide-under").map(String::as_str).unwrap_or("on") {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("--hide-under takes on or off, got {other}")),
+    };
+    if hide {
+        let tris = triangles_of(&garment.faces);
+        binding.hidden = covered_base(&base, &frame.body, &faces, &mh, &tris, frame.unit);
+    }
+    let compared = match opts.get("compare-hidden") {
+        Some(path) => {
+            let theirs = Binding::parse(&std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?)?.hidden;
+            let (a, b): (std::collections::BTreeSet<u32>, std::collections::BTreeSet<u32>) = (binding.hidden.iter().copied().collect(), theirs.iter().copied().collect());
+            let b: std::collections::BTreeSet<u32> = b.into_iter().filter(|v| frame.body.contains_key(v)).collect();
+            let both = a.intersection(&b).count();
+            json!({"ours": a.len(), "theirs_on_the_body": b.len(), "theirs_all": theirs.len(), "both": both, "only_ours": a.len() - both, "only_theirs": b.len() - both,
+                   "jaccard": both as f64 / a.union(&b).count().max(1) as f64,
+                   "meaning": "MakeHuman's lists also hide helper geometry (tights, skirt, hair, tongue, eyes); only their body vertices are compared"})
+        }
+        None => Value::Null,
+    };
     let back = frame.evaluate(&binding)?;
     let worst = back.iter().zip(&canonical).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0f64, f64::max);
     let offsets: Vec<f64> = binding.bound.iter().map(|b| (b.offset[0].powi(2) + b.offset[1].powi(2) + b.offset[2].powi(2)).sqrt() * frame.unit * 1000.0).collect();
@@ -52,7 +102,7 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
     }
     let (reference, m) = store.import_generated(&binding, obj_path, opts.get("diffuse").map(Path::new), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
     Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent,
-              "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max),
+              "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared,
               "meaning": "each garment vertex bound to the nearest point of the character's base surface (body and head), with its offset; the reprojection is the binding evaluated back on that character against the garment"}))
 }
 
