@@ -18,7 +18,7 @@ window/vsync/vsync_mode=0
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/gazeforge_skin/plugin.cfg", "res://addons/gazeforge_physics/plugin.cfg")
+enabled=PackedStringArray("res://addons/gazeforge_skin/plugin.cfg", "res://addons/gazeforge_physics/plugin.cfg", "res://addons/gazeforge_humanoid/plugin.cfg")
 
 [rendering]
 

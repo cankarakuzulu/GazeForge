@@ -22,6 +22,13 @@ open, with its last measurement, rather than left out.
   `cmu_mb`, `openpose`; MakeHuman's rigs and weights bundled, CC0) skins the whole character; `body.joints` returns a
   rig's joints on any shaped body. Measured: joints equal MakeHuman's rule to 0.001 mm on all eight rigs; in Godot 4.7
   the rest pose reproduces to 0.07 mm and the neck seam stays closed with the spine, neck and head rotated.
+- **Humanoid maps.** Each rig preset but `openpose` maps to Godot's humanoid profile and Unity's humanoid, written into
+  the glb as the root extension `GAZEFORGE_humanoid` (`extensions/GAZEFORGE_humanoid/README.md`). Tested in the core
+  for every preset: all required bones mapped, each under the bone its profile parent maps to, every Left bone on the
+  character's left (a swapped side and a misplaced chest were planted and caught). Godot addon `gazeforge_humanoid`:
+  the map attached to the skeleton on import, and a ready retarget bone map per preset; through Godot 4.7.2's own
+  retargeter the bones take the humanoid names and an animation of `LeftUpperArm` moves the left hand 364 mm and the
+  right hand 0 mm (`mixamo`, `default`); a wrong map fails the test.
 - **Genitals (male).** `body.genitals: "male"` exports MakeHuman's genital patch per level of detail, shaped by the macros
   and three sliders, skinned with the body.
 - `export-glb --body-gates report` exports a body whose stitch gates fail, listing the failures in the sidecar.

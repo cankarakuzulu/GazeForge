@@ -422,8 +422,13 @@ and the seam vertices of both meshes share theirs, so the neck stays closed in a
 `body.joints` returns the joints alone. Bodies need their helper vertices: import them (`body.import`, `body.targets`)
 with this version. Measured: every joint equals an independent evaluation of MakeHuman's rule to 0.001 mm on all
 eight standard rigs; in Godot 4.7 the rest pose reproduces to 0.07 mm and the seam stays shut (gap 0) with the spine,
-neck and head rotated. Not yet: the face rig together with a body rig, head-region joints that follow the head's own
-sliders and sculpt, humanoid retargeting presets.
+neck and head rotated. **Humanoid maps:** every preset but `openpose` (a joint set) comes with a humanoid map, written
+into the glb as `GAZEFORGE_humanoid` ([contract](extensions/GAZEFORGE_humanoid/README.md)): Godot's humanoid profile
+names and Unity's to the preset's bones. The Godot addon `clients/godot-addon/addons/gazeforge_humanoid` attaches the
+map to the skeleton on import and ships a ready retarget bone map per preset; through Godot's own retargeter the bones
+take the humanoid names and an animation made on them plays (tested on `mixamo` and `default`: turning `LeftUpperArm`
+moves the left hand 36 cm and the right hand not at all). Not yet: the face rig together with a body rig, head-region
+joints that follow the head's own sliders and sculpt.
 
 **Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
 (`Genitals_LODn`), shaped by the macros and the genital sliders (penis length and girth, testicle size), its rim set
