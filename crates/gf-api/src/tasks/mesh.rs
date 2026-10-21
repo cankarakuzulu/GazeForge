@@ -52,7 +52,7 @@ pub const GLB_KEYS: &[&str] = &[
 pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
 pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
-pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights"];
+pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates"];
 const GENITAL_SINK_M: f64 = 0.002;
 
 fn face_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
@@ -1392,12 +1392,20 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 body_lods.push(lod);
             }
         }
-        if !failures.is_empty() {
+        let report_only = match opts.get("body-gates").map(String::as_str).unwrap_or("refuse") {
+            "refuse" => false,
+            "report" => true,
+            other => return Err(format!("--body-gates must be refuse or report, got {other}")),
+        };
+        if !failures.is_empty() && !report_only {
             return Err(format!("body stitch gates failed: {}", failures.join("; ")));
         }
         body_meta = json!({"mode": pack.mode, "pack": opts.get("body"), "source": pack_manifest["source"], "controls": controls, "lods": rows,
                            "mesh": "one mesh node per body LOD (Body_LODn beside Head_LODn), its own material slot and the body's UV layout; the seam vertices are copies of the head's with the same position, normal and skin weights",
                            "skin": if let Some(br) = &body_rig { br.meta.clone() } else if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
+        if !failures.is_empty() {
+            body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
+        }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
                                            "method": "MakeHuman's helper-genital patch, shaped with the body's helpers (macros and the genital targets), refined by Catmull-Clark (one level less per LOD), its rim set on that LOD's body surface 2 mm inside along the body normal; one mesh per LOD (Genitals_LODn), skinned like the body when a rig is asked"});
