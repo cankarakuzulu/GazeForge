@@ -365,7 +365,9 @@ placement's own re-derived UVs at weight 1 sit from the neutral ones (`uv_slip_l
 #### Bodies
 
 A head joins a body at its neck seam. `body.import` builds a body pack (positions, triangles, UVs, the neck ring with a
-seam parameter per ring vertex, and two coarser LODs whose collar keeps every ring vertex):
+seam parameter per ring vertex, and its levels of detail with the neck band kept fine: in makehuman mode the body is
+refined by Catmull-Clark, `subdivide` 2 by default, and `fine_lods` gives one vertex count per head level, finest first,
+800 the recommended floor; without refinement, two coarser LODs whose collar keeps every ring vertex):
 
 ```
 gazeforge call body.import --input '{"mode":"makehuman","obj":"base.obj","dense":"data/dense","out":"bodies/makehuman",
@@ -437,6 +439,42 @@ open, non-manifold or mis-oriented seam edges, the angle between the head and bo
 deg), flipped or folded triangles in the band, and head or body vertices behind the other surface near the neck. The
 `plant` input of `character.stitch` (`gap`, `crack`, `crease`, `flip`, `penetrate`) puts a defect in on purpose; each
 makes the gates fail.
+
+#### Wearables
+
+Clothes, shoes, hats, hair, beards and rigid items live in the store as wearables, and a spec wears them:
+
+```
+gazeforge wearable import --store DIR --mhclo A.mhclo,B.mhclo
+gazeforge wearable bind   --store DIR --spec FILE --obj GARMENT.obj|.glb --base BASE_OBJ [--name N] [--diffuse PNG]
+gazeforge wearable attach --store DIR --spec FILE --obj SOLID.obj|.glb --bone NAME [--rig game_engine] [--scale none|bone]
+```
+
+```json
+"body": {"wearables": [{"asset": "sha256:...", "hide_body": true}, {"asset": "sha256:...", "physics": "springbone"}]}
+```
+
+- **MakeHuman clothes** (`wearable import`, the "Import a garment" task): a `.mhclo` file with its mesh, material and
+  textures, content-addressed. Its binding (each vertex as a point on three base-mesh vertices plus an offset) fits it
+  to any shaped character, head items on the head and the rest on the body, through every macro, slider and compound.
+- **Any garment** (`wearable bind`, the "Fit a garment made on a character" task): an OBJ or glb modelled over one of
+  your exported characters; each vertex is bound to the nearest point of that character's body and head, and the body
+  it covers is listed, so from then on it behaves like MakeHuman clothes.
+- **Rigid items** (`wearable attach`, the "Attach a solid to a bone" task): a sword or a helmet kept in one bone's
+  frame, placed on any character at its modelled size (or scaled with the bone), weighted wholly to that bone.
+
+When worn, each item is pushed out of the body (opaque items), layered over the items under it (MakeHuman's `z_depth`),
+and the body it covers is left out unless `hide_body` is false. `export-glb` writes every item textured (colour,
+normal, occlusion packed into the metallic-roughness texture; alpha cards as a mask) on every level of detail, decimated
+to the body's ratio (hair and beard cards kept whole), and skinned with the body rig. The Body shape panel (studio and
+browser) wears, hides, takes off and sets the physics of each item, with undo; the stitch preview draws them.
+
+**Physics** (`physics`, needs `--body-rig`): `cloth` writes a `_PIN` weight per vertex (1 where the item lies on the
+body, 0 where it hangs free); `springbone` builds chains of extra joints from the item's own mesh, rooted where it rests
+on its anchor bone (the head for hair), and skins the item along them. Both come with capsule colliders measured on the
+character, under the root glTF extension `GAZEFORGE_physics` ([contract](extensions/GAZEFORGE_physics/README.md)), for
+an engine's own solver. Measured: MakeHuman's ponytail becomes one chain that bends as one piece, its long hair five
+strands that bend as a sheet. Not yet: a reader in Godot or a VRM export of the chains, baked animation.
 
 #### Gates
 
@@ -1363,6 +1401,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
+| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items and the physics data done; engine readers and bakes not yet |
 | Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development
