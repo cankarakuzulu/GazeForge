@@ -1352,6 +1352,14 @@ function gridApi() {
   };
 }
 
+function setBody(spec) {
+  if (spec) D.start.body = JSON.parse(JSON.stringify(spec));
+  else delete D.start.body;
+  notify("body");
+  scheduleDirty();
+  scheduleSettle();
+}
+
 function setPose(id, positions) {
   if (positions == null) {
     D.poses.delete(id);
@@ -1378,6 +1386,7 @@ function makeApi(panelId) {
     grid: gridApi(),
     eyes: { get: () => (D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null), set: setEyeballs, rig: () => D.eyerig, placed: () => D.eyesPlaced, hasEyes: () => !!D.eyeBase?.length,
             onChange: (cb) => { if (typeof cb === "function") D.eyeListeners.push(cb); } },
+    body: { get: () => (D.start.body ? JSON.parse(JSON.stringify(D.start.body)) : null), set: setBody },
     panel: panelId,
   };
 }
