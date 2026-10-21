@@ -1,6 +1,7 @@
 pub mod body;
 pub mod body_rig;
 pub mod body_shape;
+pub mod cage;
 pub mod catalog;
 pub mod face_rig;
 pub mod face_rig2;

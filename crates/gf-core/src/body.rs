@@ -1342,6 +1342,7 @@ pub struct BodyPack {
     pub lods: Vec<BodyLod>,
     pub source: Vec<u32>,
     pub helpers: Helpers,
+    pub cage_source: Vec<u32>,
 }
 
 impl BodyPack {

@@ -371,6 +371,43 @@ fn spec_input(input: &Value, root: &str) -> Result<Spec, ApiError> {
     })
 }
 
+pub fn cage_input() -> Value {
+    obj(
+        json!({"dense": {"type": "string", "minLength": 1, "description": "the dense base directory (face_sizes, corner_vertices, positions)"},
+               "out": {"type": "string", "minLength": 1, "description": "path prefix: writes <out>_corners.npy (n x 4 int32, -1 unused) and <out>_coefs.npy (n x 4 float64)"}}),
+        &["dense", "out"],
+    )
+}
+
+pub fn cage_output() -> Value {
+    shape(json!({"vertices": {"type": "integer"}, "corners": {"type": "integer"}, "edge_points": {"type": "integer"}, "face_points": {"type": "integer"}}))
+}
+
+pub fn cage(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    let dense = gf_io::body::read_dense_quads(Path::new(text(input, "dense"))).map_err(ApiError::not_found)?;
+    let points = gf_core::cage::cage_points(&dense.quads, dense.positions.len(), 256).map_err(ApiError::invalid)?;
+    let mut ids = Vec::with_capacity(points.len() * 4);
+    let mut coefs = Vec::with_capacity(points.len() * 4);
+    let mut counts = [0usize; 3];
+    for p in &points {
+        counts[match p {
+            gf_core::cage::CagePoint::Corner(_) => 0,
+            gf_core::cage::CagePoint::Edge(..) => 1,
+            gf_core::cage::CagePoint::Face(..) => 2,
+        }] += 1;
+        let terms = p.terms();
+        for k in 0..4 {
+            let (c, w) = terms.get(k).copied().map_or((-1, 0.0), |(c, w)| (c as i32, w));
+            ids.push(c);
+            coefs.push(w);
+        }
+    }
+    let out = text(input, "out");
+    gf_io::write_table_i32(Path::new(&format!("{out}_corners.npy")), points.len(), 4, ids).map_err(ApiError::internal)?;
+    gf_io::write_table(Path::new(&format!("{out}_coefs.npy")), points.len(), 4, coefs).map_err(ApiError::internal)?;
+    Ok(json!({"vertices": points.len(), "corners": counts[0], "edge_points": counts[1], "face_points": counts[2]}))
+}
+
 pub fn joints_input() -> Value {
     obj(
         json!({"store": {"type": "string", "minLength": 1},

@@ -178,6 +178,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: body::targets,
     },
     CommandDef {
+        name: "body.cage",
+        kind: Kind::Query,
+        summary: "Every dense vertex's place on the head cage, from topology alone: a cage corner, a point along a cage edge, or a point inside a cage face, as up to four cage corners and bilinear coefficients (how a per-cage-vertex value such as a skin weight reaches the dense head).",
+        limits: "Diagnostic; needs the dense base's patches of 16 x 16 quads per cage face.",
+        input: body::cage_input,
+        output: body::cage_output,
+        run: body::cage,
+    },
+    CommandDef {
         name: "body.joints",
         kind: Kind::Query,
         summary: "A MakeHuman rig's joints on a spec's shaped body: every bone's head and tail evaluated on the body and its joint helper cubes as the macros, regional weights and compounds shape them, in the world frame and the canonical frame.",
