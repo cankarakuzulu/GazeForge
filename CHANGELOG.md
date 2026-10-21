@@ -101,6 +101,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- The eye model choice showed the eye inventory's names and raw family ids ("brown", "amber") in both clients, and its
+  undo step showed the model's id; all of them are UI text now (`eyes.model.<id>`, `eyes.family.<family>`), and a test
+  fails when an inventory row has no text.
 - A glb wearable whose colour image is kept outside the glb was reported as having no colour texture; the binding now
   names the file. The `--body-rig` help and the export wizard's body skeleton field named 2 of the 7 rig presets; they
   name all of them, and a test fails when a preset is added without them.

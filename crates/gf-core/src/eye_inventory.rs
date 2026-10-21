@@ -133,6 +133,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_model_and_family_has_its_ui_text() {
+        let en: serde_json::Value = serde_json::from_str(include_str!("../../../web/locales/en.json")).unwrap();
+        for m in models() {
+            for key in [format!("eyes.model.{}", m.id), format!("eyes.family.{}", m.family)] {
+                assert!(en[&key].as_str().is_some_and(|s| !s.is_empty()), "web/locales/en.json has no {key}");
+            }
+        }
+    }
+
+    #[test]
     fn the_inventory_is_unique_valid_and_has_the_default() {
         let all = models();
         let mut ids: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();

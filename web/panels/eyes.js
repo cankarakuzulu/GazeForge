@@ -67,7 +67,7 @@ window.GF.registerPanel({
         if (e.target.value) { after.model = { id: e.target.value, radius_mm: after.model?.radius_mm ?? 12 }; after.rig = rig; }
         else delete after.model;
         E.set(after, "eyes-panel");
-        commit(e.target.value ? tr("eyes.undo_model", { id: e.target.value }) : tr("eyes.undo_no_model"), before, after);
+        commit(e.target.value ? tr("eyes.undo_model", { name: tr(`eyes.model.${e.target.value}`, null, e.target.value) }) : tr("eyes.undo_no_model"), before, after);
         render();
       });
       const radius = root.querySelector(".radius");

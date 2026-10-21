@@ -189,7 +189,7 @@ impl SliderPanel {
                 let radius_mm = live.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
                 let s = EyeballSpec { model: picked.clone().map(|id| er::EyeModelChoice { id, radius_mm }), rig: Some(rig.clone()), ..live.clone() };
                 out.push(ShapeEvent::Preview(vec![Edit::Eyes(Some(s))]));
-                out.push(ShapeEvent::Commit(picked.map_or(tr("eyes.undo_no_model").into(), |id| trf("eyes.undo_model", &[("id", &id)]))));
+                out.push(ShapeEvent::Commit(picked.map_or(tr("eyes.undo_no_model").into(), |id| trf("eyes.undo_model", &[("name", &tr_or(&format!("eyes.model.{id}"), &id))]))));
             }
             if let Some(m) = &live.model {
                 let start_r = start.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
