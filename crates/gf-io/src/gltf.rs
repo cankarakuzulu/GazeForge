@@ -723,6 +723,121 @@ pub fn read_plain(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<f32>, Strin
     }
 }
 
+pub struct SceneMesh {
+    pub positions: Vec<[f64; 3]>,
+    pub uvs: Vec<[f64; 2]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub base_color: Option<(String, Vec<u8>)>,
+}
+
+type Mat4 = [[f64; 4]; 4];
+
+fn mat_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut m = [[0.0; 4]; 4];
+    for (i, row) in m.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
+            *x = (0..4).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    m
+}
+
+fn node_matrix(node: &Value) -> Mat4 {
+    if let Some(m) = node["matrix"].as_array().filter(|m| m.len() == 16) {
+        let f = |k: usize| m[k].as_f64().unwrap_or(0.0);
+        return std::array::from_fn(|i| std::array::from_fn(|j| f(j * 4 + i)));
+    }
+    let v = |key: &str, d: &[f64]| -> Vec<f64> { node[key].as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect()).unwrap_or_else(|| d.to_vec()) };
+    let (t, r, sc) = (v("translation", &[0.0, 0.0, 0.0]), v("rotation", &[0.0, 0.0, 0.0, 1.0]), v("scale", &[1.0, 1.0, 1.0]));
+    let (x, y, z, w) = (r[0], r[1], r[2], r[3]);
+    let rot = [
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+    ];
+    let mut m = [[0.0; 4]; 4];
+    for i in 0..3 {
+        for j in 0..3 {
+            m[i][j] = rot[i][j] * sc[j];
+        }
+        m[i][3] = t[i];
+    }
+    m[3][3] = 1.0;
+    m
+}
+
+pub fn read_glb_scene(bytes: &[u8]) -> Result<SceneMesh, String> {
+    let (doc, bin) = chunks(bytes)?;
+    let mut out = SceneMesh { positions: Vec::new(), uvs: Vec::new(), triangles: Vec::new(), base_color: None };
+    let scene = doc["scene"].as_u64().unwrap_or(0) as usize;
+    let roots: Vec<u64> = match doc["scenes"][scene]["nodes"].as_array() {
+        Some(n) => n.iter().filter_map(Value::as_u64).collect(),
+        None => (0..doc["nodes"].as_array().map_or(0, Vec::len) as u64).collect(),
+    };
+    let identity: Mat4 = std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1.0 } else { 0.0 }));
+    let mut stack: Vec<(u64, Mat4)> = roots.into_iter().map(|n| (n, identity)).collect();
+    while let Some((n, parent)) = stack.pop() {
+        let node = &doc["nodes"][n as usize];
+        let world = mat_mul(&parent, &node_matrix(node));
+        for c in node["children"].as_array().into_iter().flatten().filter_map(Value::as_u64) {
+            stack.push((c, world));
+        }
+        let Some(mesh) = node["mesh"].as_u64() else { continue };
+        for primitive in doc["meshes"][mesh as usize]["primitives"].as_array().into_iter().flatten() {
+            if primitive["mode"].as_u64().unwrap_or(4) != 4 {
+                continue;
+            }
+            let attributes = &primitive["attributes"];
+            let p = read_vec3(&doc, bin, attributes["POSITION"].as_u64().ok_or("a primitive has no POSITION")?)?;
+            let uv: Vec<f32> = match attributes["TEXCOORD_0"].as_u64() {
+                Some(i) => read_plain(&doc, bin, i)?,
+                None => Vec::new(),
+            };
+            let offset = out.positions.len() as u32;
+            for (k, q) in p.iter().enumerate() {
+                let v = [q[0] as f64, q[1] as f64, q[2] as f64];
+                let w: [f64; 3] = std::array::from_fn(|i| world[i][0] * v[0] + world[i][1] * v[1] + world[i][2] * v[2] + world[i][3]);
+                out.positions.push([w[0], -w[2], w[1]]);
+                out.uvs.push(if uv.len() >= 2 * (k + 1) { [uv[2 * k] as f64, 1.0 - uv[2 * k + 1] as f64] } else { [0.0, 0.0] });
+            }
+            let idx = match primitive["indices"].as_u64() {
+                Some(i) => read_indices(&doc, bin, i)?,
+                None => (0..p.len() as u32).collect(),
+            };
+            out.triangles.extend(idx.chunks_exact(3).map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]));
+            if out.base_color.is_none()
+                && let Some(t) = primitive["material"].as_u64().and_then(|m| doc["materials"][m as usize]["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64())
+                && let Some(img) = doc["textures"][t as usize]["source"].as_u64()
+            {
+                let image = &doc["images"][img as usize];
+                if let Some(view) = image["bufferView"].as_u64() {
+                    let v = &doc["bufferViews"][view as usize];
+                    let data = accessor_bytes(&doc, bin, v, 0, v["byteLength"].as_u64().unwrap_or(0) as usize)?;
+                    out.base_color = Some((image["mimeType"].as_str().unwrap_or("").to_string(), data.to_vec()));
+                }
+            }
+        }
+    }
+    if out.triangles.is_empty() {
+        return Err("the glb has no triangle meshes in its scene".into());
+    }
+    Ok(out)
+}
+
+pub fn scene_obj_text(m: &SceneMesh) -> String {
+    let mut s = String::new();
+    for p in &m.positions {
+        s.push_str(&format!("v {} {} {}\n", p[0], p[1], p[2]));
+    }
+    for t in &m.uvs {
+        s.push_str(&format!("vt {} {}\n", t[0], t[1]));
+    }
+    for t in &m.triangles {
+        s.push_str(&format!("f {}/{} {}/{} {}/{}\n", t[0] + 1, t[0] + 1, t[1] + 1, t[1] + 1, t[2] + 1, t[2] + 1));
+    }
+    s
+}
+
 pub fn read_glb(bytes: &[u8]) -> Result<(Value, Vec<ReadMesh>), String> {
     let word = |at: usize| -> Result<u32, String> {
         Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or("the file is shorter than a glb header")?.try_into().unwrap()))

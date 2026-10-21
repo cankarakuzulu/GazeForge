@@ -14,6 +14,32 @@ pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"
 pub const IMPORT_KEYS: &[&str] = &["store", "mhclo"];
 pub const ATTACH_KEYS: &[&str] = &["store", "spec", "macro", "obj", "bone", "rig", "name", "diffuse", "frame", "scale"];
 
+fn source_mesh(store: &gf_io::store::Store, path: &Path, diffuse: Option<&String>) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>, Value), String> {
+    let given = diffuse.map(std::path::PathBuf::from);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("glb")) {
+        return Ok((path.to_path_buf(), given, Value::Null));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let scene = gf_io::gltf::read_glb_scene(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let dir = store.root.join("cache").join("glb").join(gf_core::hash::sha256_hex(&bytes));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let stem = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "glb".into());
+    let obj = dir.join(format!("{stem}.obj"));
+    std::fs::write(&obj, gf_io::gltf::scene_obj_text(&scene)).map_err(|e| format!("{}: {e}", obj.display()))?;
+    let (texture, note) = match (&given, &scene.base_color) {
+        (Some(_), _) => (given.clone(), "the colour texture given".to_string()),
+        (None, Some((mime, data))) if mime == "image/png" => {
+            let png = dir.join(format!("{stem}_color.png"));
+            std::fs::write(&png, data).map_err(|e| format!("{}: {e}", png.display()))?;
+            (Some(png), "the glb's PNG colour texture".to_string())
+        }
+        (None, Some((mime, _))) => (None, format!("the glb's colour texture is {mime}, which is not read yet: give a PNG with diffuse")),
+        (None, None) => (None, "the glb has no colour texture".to_string()),
+    };
+    Ok((obj, texture, json!({"glb": path.display().to_string(), "vertices": scene.positions.len(), "triangles": scene.triangles.len(), "texture": note,
+                             "frame": "glTF y up converted to z up; node transforms applied"})))
+}
+
 pub struct BoneFrame {
     pub origin: Point,
     pub axes: [Point; 3],
@@ -78,7 +104,8 @@ pub fn attach(opts: &Options) -> Result<Value, String> {
     let rig = opts.get("rig").map(String::as_str).unwrap_or("game_engine");
     let bone = need(opts, "bone")?;
     let bf = bone_frame(&shaped.pack, &shaped.controls, rig, bone)?;
-    let obj_path = Path::new(need(opts, "obj")?);
+    let (obj_buf, texture, from_glb) = source_mesh(&store, Path::new(need(opts, "obj")?), opts.get("diffuse"))?;
+    let obj_path = obj_buf.as_path();
     let mesh = gf_io::body::read_obj(obj_path, None)?;
     let world = match opts.get("frame").map(String::as_str).unwrap_or("world") {
         "world" => true,
@@ -93,8 +120,8 @@ pub fn attach(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--scale takes none (the item keeps its size) or bone (it scales with the bone's length), got {other}")),
     };
     let a = gf_io::wearable_store::Attach { bone: bone.to_string(), rig: rig.to_string(), length_m: bf.length, scale_with_bone };
-    let (reference, m) = store.import_attached(&name, a, &local, obj_path, opts.get("diffuse").map(Path::new), vec![format!("attached to {bone} ({rig}) of {}", spec.name)])?;
-    Ok(json!({"ok": true, "command": "wearable attach", "wearable": reference, "name": m.name, "vertices": m.vertices, "bone": bone, "rig": rig, "bone_length_m": bf.length,
+    let (reference, m) = store.import_attached(&name, a, &local, obj_path, texture.as_deref(), vec![format!("attached to {bone} ({rig}) of {}", spec.name)])?;
+    Ok(json!({"ok": true, "command": "wearable attach", "wearable": reference, "name": m.name, "vertices": m.vertices, "bone": bone, "rig": rig, "bone_length_m": bf.length, "from_glb": from_glb,
               "meaning": "a rigid item: its vertices are kept in the bone's frame on the character it was modelled on (origin at the bone's head, y along the bone, x from the character's forward) and placed by the same frame on any character - at its modelled size, or scaled with the bone's length with --scale bone; skinned wholly to that bone", "scale": if scale_with_bone { "bone" } else { "none" }}))
 }
 pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo", "hide-under", "compare-hidden"];
@@ -145,7 +172,8 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
         let (pa, pb) = (base.get(a).ok_or(format!("scale vertex {a} is not on the character"))?, base.get(b).ok_or(format!("scale vertex {b} is not on the character"))?);
         scales.push(gf_core::wearable::Scale { a: *a, b: *b, reference: (pa[axis] - pb[axis]).abs() });
     }
-    let obj_path = Path::new(need(opts, "obj")?);
+    let (obj_buf, texture, from_glb) = source_mesh(&store, Path::new(need(opts, "obj")?), opts.get("diffuse"))?;
+    let obj_path = obj_buf.as_path();
     let garment = gf_io::body::read_obj(obj_path, None)?;
     let world = match opts.get("frame").map(String::as_str).unwrap_or("world") {
         "world" => true,
@@ -185,9 +213,9 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
     if let Some(path) = opts.get("out-mhclo") {
         std::fs::write(path, binding.to_text()).map_err(|e| format!("{path}: {e}"))?;
     }
-    let (reference, m) = store.import_generated(&binding, obj_path, opts.get("diffuse").map(Path::new), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
+    let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
     Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent,
-              "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared,
+              "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared, "from_glb": from_glb,
               "meaning": "each garment vertex bound to the nearest point of the character's base surface (body and head), with its offset; the reprojection is the binding evaluated back on that character against the garment"}))
 }
 
