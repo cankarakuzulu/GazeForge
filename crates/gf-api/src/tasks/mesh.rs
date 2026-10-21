@@ -1572,6 +1572,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let mut worn: Vec<Worn> = Vec::new();
         let mut cloth_nodes: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
         let mut spring_skin: Vec<Option<Vec<gf_core::body_rig::Influences>>> = Vec::new();
+        let mut clear0: Vec<Vec<Option<f64>>> = Vec::new();
         let mut springs: Vec<Value> = Vec::new();
         let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
         let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -1696,13 +1697,28 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let tris: Vec<[u32; 3]> = level.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
                 let surface = super::wearable::Surface::new(points, &tris);
                 let mut placed: Vec<Vec<Point>> = Vec::with_capacity(worn.len());
-                for (item, garment, _, ladder, row) in worn.iter_mut() {
+                if i == 0 {
+                    clear0 = worn.iter().map(|(item, garment, ..)| if item.manifest.transparent && item.manifest.attach.is_none() { super::wearable::clearances(garment, &surface) } else { Vec::new() }).collect();
+                }
+                for (w, (item, garment, _, ladder, row)) in worn.iter_mut().enumerate() {
                     let (kept, tris, _) = &ladder[i.min(ladder.len() - 1)];
                     let mut positions: Vec<Point> = kept.iter().map(|&k| garment[k as usize]).collect();
-                    if i > 0 && !item.manifest.transparent && item.manifest.attach.is_none() {
-                        let pushed = super::wearable::push_out(&mut positions, tris, &surface, super::wearable::CLEARANCE_M);
+                    if i > 0 && item.manifest.attach.is_none() {
+                        let pushed = if item.manifest.transparent {
+                            super::wearable::keep_outside(&mut positions, kept, tris, &surface, &clear0[w])
+                        } else {
+                            super::wearable::push_out(&mut positions, tris, &surface, super::wearable::CLEARANCE_M)
+                        };
                         if let Some(list) = row["lod_pushed"].as_array_mut() {
                             list.push(pushed["moved"].clone());
+                        }
+                        if pushed.get("lifted").is_some() {
+                            if !row["lod_lifted"].is_array() {
+                                row["lod_lifted"] = json!([]);
+                            }
+                            if let Some(list) = row["lod_lifted"].as_array_mut() {
+                                list.push(pushed["lifted"].clone());
+                            }
                         }
                     }
                     placed.push(positions);
@@ -1821,7 +1837,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         if !worn.is_empty() {
             body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
-                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over (a wearable made of many alpha cards keeps whole cards, spread over it farthest-first from the largest, instead of collapsing them), each coarser level pushed out of its own body level (lod_pushed: vertices moved per level) and layered again by z_depth; body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over (a wearable made of many alpha cards keeps whole cards, spread over it farthest-first from the largest, instead of collapsing them), each coarser level pushed out of its own body level (lod_pushed: vertices moved per level; an alpha-card item only where it lay outside the character at full detail, and its triangles that sag up to 1 cm under the coarse body lifted clear: lod_lifted) and layered again by z_depth; body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,

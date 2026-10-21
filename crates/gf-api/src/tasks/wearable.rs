@@ -546,6 +546,8 @@ impl BaseFrame {
 pub const CLEARANCE_M: f64 = 0.002;
 const PUSH_REACH_M: f64 = 0.1;
 const PUSH_SPREAD_PASSES: usize = 2;
+const LIFT_ROUNDS: usize = 4;
+const LIFT_MAX_M: f64 = 0.01;
 
 pub struct Surface {
     pub points: Vec<Point>,
@@ -606,22 +608,72 @@ fn key(p: Point, cell: f64) -> (i64, i64, i64) {
 }
 
 pub fn push_out(garment: &mut [Point], triangles: &[[u32; 3]], surface: &Surface, clearance: f64) -> Value {
+    let mut report = push_out_to(garment, triangles, surface, &vec![Some(clearance); garment.len()], true);
+    report["clearance_mm"] = json!(clearance * 1000.0);
+    report
+}
+
+pub fn clearances(garment: &[Point], surface: &Surface) -> Vec<Option<f64>> {
+    garment.iter().map(|&p| surface.nearest(p, PUSH_REACH_M).map(|j| surface.signed(p, j))).collect()
+}
+
+pub fn keep_outside(garment: &mut [Point], kept: &[u32], triangles: &[[u32; 3]], surface: &Surface, clear0: &[Option<f64>]) -> Value {
+    let target: Vec<Option<f64>> = kept.iter().map(|&k| clear0[k as usize].filter(|&s| s > 0.0).map(|s| s.min(CLEARANCE_M))).collect();
+    let mut report = push_out_to(garment, triangles, surface, &target, false);
+    let mut lifted = 0usize;
+    for _ in 0..LIFT_ROUNDS {
+        let mut lift = vec![0.0f64; garment.len()];
+        for t in triangles {
+            let Some(want) = t.iter().map(|&v| target[v as usize]).try_fold(f64::INFINITY, |m, x| x.map(|x| m.min(x))) else { continue };
+            let [a, b, c] = t.map(|v| garment[v as usize]);
+            let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
+            let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
+            let dip = [centre, mid(a, b), mid(b, c), mid(c, a)]
+                .into_iter()
+                .filter_map(|p| surface.nearest(p, PUSH_REACH_M).map(|j| want - surface.signed(p, j)))
+                .fold(0.0f64, f64::max);
+            if dip > 0.0 && dip <= LIFT_MAX_M {
+                for &v in t {
+                    lift[v as usize] = lift[v as usize].max(dip);
+                }
+            }
+        }
+        let moved: Vec<usize> = (0..garment.len()).filter(|&v| lift[v] > 0.0).collect();
+        if moved.is_empty() {
+            break;
+        }
+        lifted += moved.len();
+        for v in moved {
+            if let Some(j) = surface.nearest(garment[v], PUSH_REACH_M) {
+                let n = surface.normals[j];
+                for k in 0..3 {
+                    garment[v][k] += lift[v] * n[k];
+                }
+            }
+        }
+    }
+    report["lifted"] = json!(lifted);
+    report
+}
+
+fn push_out_to(garment: &mut [Point], triangles: &[[u32; 3]], surface: &Surface, target: &[Option<f64>], skip_inner: bool) -> Value {
     let normals = vertex_normals(garment, triangles);
     let mut push = vec![0.0f64; garment.len()];
     let mut dir = vec![[0.0f64; 3]; garment.len()];
     let mut inner = 0usize;
     for (i, p) in garment.iter().enumerate() {
+        let Some(want) = target[i] else { continue };
         let Some(j) = surface.nearest(*p, PUSH_REACH_M) else { continue };
         let s = surface.signed(*p, j);
-        if s >= clearance {
+        if s >= want {
             continue;
         }
         let n = surface.normals[j];
-        if normals[i][0] * n[0] + normals[i][1] * n[1] + normals[i][2] * n[2] <= 0.0 {
+        if skip_inner && normals[i][0] * n[0] + normals[i][1] * n[1] + normals[i][2] * n[2] <= 0.0 {
             inner += 1;
             continue;
         }
-        push[i] = clearance - s;
+        push[i] = want - s;
         dir[i] = n;
     }
     let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); garment.len()];
@@ -651,7 +703,7 @@ pub fn push_out(garment: &mut [Point], triangles: &[[u32; 3]], surface: &Surface
             p[k] += d * n[k];
         }
     }
-    json!({"moved": moved, "max_mm": max * 1000.0, "inner_faces_left": inner, "clearance_mm": clearance * 1000.0})
+    json!({"moved": moved, "max_mm": max * 1000.0, "inner_faces_left": inner})
 }
 
 pub struct Layered<'a> {
@@ -989,6 +1041,58 @@ mod tests {
         }
     }
 
+    fn dome() -> Surface {
+        let h = |x: f64| 0.03 - 3.0 * x * x;
+        let n = 41;
+        let points: Vec<Point> = (0..n * n).map(|i| {
+            let (x, y) = (-0.1 + 0.005 * (i % n) as f64, -0.1 + 0.005 * (i / n) as f64);
+            [x, y, h(x)]
+        }).collect();
+        let mut tris = Vec::new();
+        for r in 0..n - 1 {
+            for c in 0..n - 1 {
+                let a = (r * n + c) as u32;
+                tris.push([a, a + 1, a + n as u32]);
+                tris.push([a + 1, a + n as u32 + 1, a + n as u32]);
+            }
+        }
+        Surface::new(points, &tris)
+    }
+
+    fn lowest_sample(garment: &[Point], surface: &Surface) -> f64 {
+        let [a, b, c] = [garment[0], garment[1], garment[2]];
+        let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
+        [mid(a, b), mid(b, c), mid(c, a), [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0]]
+            .into_iter()
+            .map(|p| surface.signed(p, surface.nearest(p, 0.1).unwrap()))
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn a_coarse_cap_triangle_sagging_under_the_head_is_lifted_clear_but_a_deep_chord_is_left() {
+        let surface = dome();
+        let h = |x: f64| 0.03 - 3.0 * x * x;
+        let cap = |w: f64| vec![[-w, -0.01, h(w) + 0.003], [w, -0.01, h(w) + 0.003], [0.0, 0.02, h(0.0) + 0.003]];
+        let mut shallow = cap(0.05);
+        let clear0 = clearances(&shallow, &surface);
+        assert!(clear0.iter().all(|c| c.is_some_and(|s| s > 0.0)), "every corner starts outside: {clear0:?}");
+        assert!(lowest_sample(&shallow, &surface) < -0.003, "the chord dips under the dome before the lift");
+        let report = keep_outside(&mut shallow, &[0, 1, 2], &[[0, 1, 2]], &surface, &clear0);
+        assert!(report["lifted"].as_u64().unwrap() > 0);
+        assert!(lowest_sample(&shallow, &surface) > -0.0005, "lifted clear: {}", lowest_sample(&shallow, &surface));
+        let mut deep = cap(0.09);
+        let before = deep.clone();
+        let clear0 = clearances(&deep, &surface);
+        keep_outside(&mut deep, &[0, 1, 2], &[[0, 1, 2]], &surface, &clear0);
+        assert_eq!(deep, before, "a chord deeper than the lift cap is a decimation limit, not something a lift should hide");
+        let mut rooted = cap(0.05);
+        rooted[0][2] = h(0.05) - 0.002;
+        let before = rooted.clone();
+        let clear0 = clearances(&rooted, &surface);
+        keep_outside(&mut rooted, &[0, 1, 2], &[[0, 1, 2]], &surface, &clear0);
+        assert_eq!(rooted, before, "a card rooted in the skin at full detail (a beard) is not lifted");
+    }
+
     #[test]
     fn a_hanging_strip_becomes_one_chain_from_its_pinned_top() {
         let mut garment = Vec::new();
@@ -1024,7 +1128,7 @@ mod tests {
     #[test]
     fn only_the_anchor_bone_roots_a_chain_not_what_the_hair_rests_on() {
         let garment: Vec<Point> = (0..40).map(|v| [0.0, 0.0, -(v as f64) * 0.01]).collect();
-        let pin: Vec<f32> = (0..40).map(|v| if v < 4 || v >= 30 { 1.0 } else { 0.0 }).collect();
+        let pin: Vec<f32> = (0..40).map(|v| if !(4..30).contains(&v) { 1.0 } else { 0.0 }).collect();
         let dominant: Vec<usize> = (0..40).map(|v| if v < 10 { 7 } else { 3 }).collect();
         let (seed, anchor) = spring_seeds(&garment, &pin, &dominant);
         assert_eq!(anchor, Some(7));
