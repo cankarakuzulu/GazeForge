@@ -196,9 +196,13 @@ fn wearable_material(store: &Store, item: &gf_io::wearable_store::Wearable) -> R
     })
 }
 
-fn wearable_lod(item: &gf_io::wearable_store::Wearable, garment: &[Point], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, material: usize) -> Lod {
+const WEARABLE_MIN_VERTICES: usize = 32;
+
+type GarmentLevel = (Vec<u32>, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
+
+fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize]) -> Vec<GarmentLevel> {
     let mut triangles = Vec::new();
-    let mut uvs = Vec::new();
+    let mut uvs: Vec<[gf_geom::Uv; 3]> = Vec::new();
     let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
     for f in &item.faces {
         for k in 1..f.len().saturating_sub(1) {
@@ -206,15 +210,47 @@ fn wearable_lod(item: &gf_io::wearable_store::Wearable, garment: &[Point], by_ob
             uvs.push([uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)]);
         }
     }
-    let normals = super::wearable::vertex_normals(garment, &triangles);
-    let surface = gm::split_seams(&triangles, &uvs);
+    let n = garment.len();
+    let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
+    if body_counts.len() > 1 && body_counts[0] > 0 {
+        let mut targets = Vec::new();
+        let mut above = n;
+        for &b in &body_counts[1..] {
+            let t = ((n as f64 * b as f64 / body_counts[0] as f64).round() as usize).max(WEARABLE_MIN_VERTICES).min(above.saturating_sub(1));
+            if t < WEARABLE_MIN_VERTICES {
+                break;
+            }
+            targets.push(t);
+            above = t;
+        }
+        if !targets.is_empty() {
+            let settings = gf_geom::decimate::Settings {
+                target_vertices: targets[0],
+                min_angle_deg: 4.0,
+                max_angle_deg: 170.0,
+                max_normal_turn_deg: 45.0,
+                boundary_weight: 100.0,
+                improve_below_deg: 20.0,
+                flip_flat_deg: 15.0,
+            };
+            for level in gf_geom::decimate::decimate_levels(vec![garment.to_vec()], &triangles, &uvs, &settings, None, &targets[1..], None) {
+                out.push((level.kept, level.triangles, level.triangle_uvs));
+            }
+        }
+    }
+    out
+}
+
+fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, material: usize) -> Lod {
+    let normals = super::wearable::vertex_normals(&positions, triangles);
+    let surface = gm::split_seams(triangles, uvs);
     let skin = by_obj.map(|w| {
         let none: Vec<(usize, f64)> = Vec::new();
         let infl: Vec<gf_core::body_rig::Influences> = surface
             .source
             .iter()
             .map(|&v| {
-                let b = &item.binding.bound[v as usize];
+                let b = &item.binding.bound[kept[v as usize] as usize];
                 let parts: Vec<(f64, &[(usize, f64)])> = (0..3).map(|k| (b.weights[k], w.get(&b.vertices[k]).map(Vec::as_slice).unwrap_or(&none))).collect();
                 let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
                 if x.is_empty() { vec![(0, 1.0)] } else { x }
@@ -225,7 +261,7 @@ fn wearable_lod(item: &gf_io::wearable_store::Wearable, garment: &[Point], by_ob
     let name: String = item.manifest.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     Lod {
         name,
-        positions: surface.source.iter().map(|&v| gm::to_gltf(garment[v as usize])).collect(),
+        positions: surface.source.iter().map(|&v| gm::to_gltf(positions[v as usize])).collect(),
         normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
         uvs: surface.uvs.clone(),
         indices: surface.indices,
@@ -1411,7 +1447,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         let frame = super::wearable::BaseFrame::new(pack, controls, pack_manifest, &positions);
         let mut pending: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Value)> = Vec::new();
-        let mut worn: Vec<(Lod, Value)> = Vec::new();
+        let mut worn: Vec<(gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value)> = Vec::new();
+        let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
         let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for w in &worn_refs {
             let item = store.load_wearable(&w.asset)?;
@@ -1455,7 +1492,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 };
                 for ((item, garment, slot, mut row), layered) in dressed.into_iter().zip(reports) {
                     row["layered"] = layered;
-                    worn.push((wearable_lod(&item, &garment, body_rig.as_ref().map(|br| &br.by_obj), slot), row));
+                    let ladder = wearable_ladder(&item, &garment, &body_counts);
+                    row["lod_vertices"] = json!(ladder.iter().map(|l| l.0.len()).collect::<Vec<_>>());
+                    row["lod_pushed"] = json!([]);
+                    worn.push((item, garment, slot, ladder, row));
                 }
             }
             let (body_triangles, body_uvs): (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) = if covered.is_empty() {
@@ -1517,10 +1557,25 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 genital_rows.push(report);
                 body_lods.push(lod);
             }
-            for (lod, _) in &worn {
-                let slot = lod.material.unwrap_or(0);
-                wear_slots.push((body_lods.len(), slot));
-                body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod.clone() });
+            if !worn.is_empty() {
+                let mut points = game.clone();
+                points.extend_from_slice(&st.positions);
+                let h = game.len() as u32;
+                let tris: Vec<[u32; 3]> = level.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+                let surface = super::wearable::Surface::new(points, &tris);
+                for (item, garment, slot, ladder, row) in worn.iter_mut() {
+                    let (kept, tris, uvs) = &ladder[i.min(ladder.len() - 1)];
+                    let mut positions: Vec<Point> = kept.iter().map(|&k| garment[k as usize]).collect();
+                    if i > 0 && !item.manifest.transparent {
+                        let pushed = super::wearable::push_out(&mut positions, tris, &surface, super::wearable::CLEARANCE_M);
+                        if let Some(list) = row["lod_pushed"].as_array_mut() {
+                            list.push(pushed["moved"].clone());
+                        }
+                    }
+                    let lod = garment_lod(item, &positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), *slot);
+                    wear_slots.push((body_lods.len(), *slot));
+                    body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod });
+                }
             }
         }
         let report_only = match opts.get("body-gates").map(String::as_str).unwrap_or("refuse") {
@@ -1538,8 +1593,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
         }
         if !worn.is_empty() {
-            body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.1.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
-                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn, the full garment on every level for now); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
+            body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.4.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn): LOD0 the full garment, each coarser level a nested decimation sized by the body level's vertex ratio (at least 32 vertices), every kept vertex an original one so the binding and skin carry over, each coarser level pushed out of its own body level (lod_pushed: vertices moved per level); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
