@@ -1442,8 +1442,19 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let h = game.len() as u32;
                 let tris: Vec<[u32; 3]> = level.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
                 let surface = super::wearable::Surface::new(points, &tris);
-                for (item, mut garment, slot, mut row) in std::mem::take(&mut pending) {
-                    row["pushed"] = if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(&mut garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
+                let mut dressed = std::mem::take(&mut pending);
+                for (item, garment, _, row) in dressed.iter_mut() {
+                    row["pushed"] = if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
+                }
+                let reports = {
+                    let mut layers: Vec<super::wearable::Layered> = dressed
+                        .iter_mut()
+                        .map(|(item, garment, _, _)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: super::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent, positions: garment })
+                        .collect();
+                    super::wearable::layer(&mut layers)
+                };
+                for ((item, garment, slot, mut row), layered) in dressed.into_iter().zip(reports) {
+                    row["layered"] = layered;
                     worn.push((wearable_lod(&item, &garment, body_rig.as_ref().map(|br| &br.by_obj), slot), row));
                 }
             }
@@ -1528,7 +1539,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         if !worn.is_empty() {
             body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.1.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
-                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are); one node per wearable per LOD (<name>_LODn, the full garment on every level for now); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls), outward-facing vertices of opaque wearables inside or within 2 mm of the stitched LOD0 character pushed out along its normal (alpha cards are left as they are), then each opaque wearable pushed out of the opaque ones with a lower z_depth (shoes 5 under trousers 50); one node per wearable per LOD (<name>_LODn, the full garment on every level for now); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,

@@ -187,6 +187,45 @@ pub fn push_out(garment: &mut [Point], triangles: &[[u32; 3]], surface: &Surface
     json!({"moved": moved, "max_mm": max * 1000.0, "inner_faces_left": inner, "clearance_mm": clearance * 1000.0})
 }
 
+pub struct Layered<'a> {
+    pub positions: &'a mut Vec<Point>,
+    pub triangles: Vec<[u32; 3]>,
+    pub depth: f64,
+    pub opaque: bool,
+}
+
+pub fn depth_of(binding: &Binding) -> f64 {
+    binding.keys.get("z_depth").and_then(|z| z.parse().ok()).unwrap_or(50.0)
+}
+
+pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
+    let mut order: Vec<usize> = (0..garments.len()).collect();
+    order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));
+    let mut reports = vec![Value::Null; garments.len()];
+    for &g in &order {
+        if !garments[g].opaque {
+            continue;
+        }
+        let inner: Vec<usize> = order.iter().copied().filter(|&k| garments[k].opaque && garments[k].depth < garments[g].depth).collect();
+        if inner.is_empty() {
+            continue;
+        }
+        let mut points: Vec<Point> = Vec::new();
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        for &k in &inner {
+            let offset = points.len() as u32;
+            points.extend_from_slice(garments[k].positions);
+            tris.extend(garments[k].triangles.iter().map(|t| t.map(|v| v + offset)));
+        }
+        let surface = Surface::new(points, &tris);
+        let triangles = garments[g].triangles.clone();
+        let mut report = push_out(garments[g].positions, &triangles, &surface, CLEARANCE_M);
+        report["over"] = json!(inner.len());
+        reports[g] = report;
+    }
+    reports
+}
+
 pub fn triangles_of(faces: &[Vec<(u32, Option<u32>)>]) -> Vec<[u32; 3]> {
     faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0].0, f[k].0, f[k + 1].0])).collect()
 }

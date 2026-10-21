@@ -626,7 +626,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
                 let surface = crate::tasks::wearable::Surface::new(points, &tris);
                 let mut covered = std::collections::HashSet::new();
-                let mut meshes = Vec::new();
+                let mut dressed = Vec::new();
                 for w in &b.wearables {
                     let item = store.load_wearable(&w.asset).map_err(ApiError::not_found)?;
                     let mut p = frame.evaluate(&item.binding).map_err(ApiError::invalid)?;
@@ -637,10 +637,21 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     if !item.manifest.transparent {
                         crate::tasks::wearable::push_out(&mut p, &tris, &surface, crate::tasks::wearable::CLEARANCE_M);
                     }
-                    let n = crate::tasks::wearable::vertex_normals(&p, &tris);
+                    dressed.push((w, item, p, tris));
+                }
+                {
+                    let mut layers: Vec<crate::tasks::wearable::Layered> = dressed
+                        .iter_mut()
+                        .map(|(_, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::depth_of(&item.binding), opaque: !item.manifest.transparent, positions: p })
+                        .collect();
+                    crate::tasks::wearable::layer(&mut layers);
+                }
+                let mut meshes = Vec::new();
+                for (w, item, p, tris) in &dressed {
+                    let n = crate::tasks::wearable::vertex_normals(p, tris);
                     let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
                     meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": item.manifest.transparent,
-                                       "positions": f32s(&p), "normals": f32s(&n), "indices": b64(&idx), "vertices": p.len(), "triangles": tris.len()}));
+                                       "positions": f32s(p), "normals": f32s(&n), "indices": b64(&idx), "vertices": p.len(), "triangles": tris.len()}));
                 }
                 if !covered.is_empty() {
                     let hidden = crate::tasks::wearable::hidden_body(&pack, 0, &st, &covered).map_err(ApiError::invalid)?;
