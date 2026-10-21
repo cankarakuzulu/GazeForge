@@ -24,6 +24,12 @@ func _ready() -> void:
 		mesh = cloth_mesh
 		linear_stiffness = 1.0
 		simulation_precision = 10
+		for s in cloth_mesh.get_surface_count():
+			var m := cloth_mesh.surface_get_material(s)
+			if m is BaseMaterial3D and (m as BaseMaterial3D).cull_mode != BaseMaterial3D.CULL_DISABLED:
+				var both := (m as BaseMaterial3D).duplicate() as BaseMaterial3D
+				both.cull_mode = BaseMaterial3D.CULL_DISABLED
+				set_surface_override_material(s, both)
 		_reenter.call_deferred()
 	var arrays := cloth_mesh.surface_get_arrays(0)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]

@@ -13,7 +13,8 @@ For each cloth item, the addon adds a `GazeForgeCloth` (a `SoftBody3D`) beside t
 mesh. Its pinned points are the vertices whose `_PIN` is at least 0.5; every physics frame it moves them to their
 skinned positions (the vertex's own bone weights, up to four bones), so the pinned cloth follows the body exactly and the
 rest hangs. The body's colliders become capsule `AnimatableBody3D`s the cloth collides with, moved with their bones.
-Coarser levels of the item stay as imported (skinned, not simulated). Nothing else in the scene changes; a character
+Coarser levels of the item stay as imported (skinned, not simulated). The cloth renders both sides of its faces (a
+duplicate of the item's material with culling off): simulated cloth folds and shows its back. Nothing else in the scene changes; a character
 without the extension imports exactly as before.
 
 Tested with Godot 4.7.2 (Forward+), through the editor import and through `GLTFDocument` at run time.
@@ -80,3 +81,6 @@ points sit on their vertices at rest (1 mm) and on their skinned positions while
 stays finite and within 0.5 m of rest, and with the capsule bodies the free cloth reaches less than half as deep into
 the body as with them removed (cloth within 10 cm of a pin is left out: the pins hold it). Bends ramp over half a
 second; a bend in one frame teleports the capsules through the cloth.
+
+`tests/cloth_render.gd` renders the same character (Forward+, a window, no `--headless`) at rest and bent, for an eye:
+a gate cannot see a cape that is culled from behind, which is how the double-sided material above was found.
