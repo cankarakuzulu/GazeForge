@@ -47,6 +47,14 @@ open, with its last measurement, rather than left out.
   cover measures; `wearable check` compares a binding with its own mesh. Measured: the binding reading is exact (to
   0.00015 MakeHuman units) for the items authored on a known body; most shipped garment meshes were authored on other
   bodies, so the binding, not the mesh, is the asset.
+- **Any garment, and rigid items.** `wearable bind` / `wearable.bind` (the "Fit a garment made on a character" task)
+  turns any OBJ modelled over one of your characters into a wearable: each vertex bound to the nearest point of that
+  character's body and head, the body it covers listed for hide-body; from then on it behaves like MakeHuman clothes.
+  Measured on MakeHuman's own casual suit, cut out and bound again: on a heavy, muscular second character it lands a
+  median 14 mm from MakeHuman's binding with less skin showing through, and its hidden list matches MakeHuman's on the
+  body (Jaccard 0.92; shoes 0.98). `wearable attach` / `wearable.attach` (the "Attach a solid to a bone" task) keeps a
+  rigid item - a sword, a helmet - in one bone's frame and places it on any character, at its modelled size, weighted
+  wholly to that bone.
 
 ### Changed
 
@@ -68,7 +76,9 @@ open, with its last measurement, rather than left out.
   degrees.
 - Wearables: inward-facing layers (a collar's underside, cuffs) stay where the binding puts them and can sit inside a
   heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
-  a few cards at the coarsest level; only MakeHuman clothes files can be imported.
+  a few cards at the coarsest level; a bound garment follows the body's local shape more closely than MakeHuman's
+  hand-chosen bindings (loose cloth can hug muscles); a rigid hat does not follow a head's shape (bind hats instead);
+  OBJ only for now (no glb input).
 - Body and genital UVs reach glTF in the OBJ convention (V up), so a body texture would map upside down; garments are
   flipped to glTF's convention.
 - Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.
