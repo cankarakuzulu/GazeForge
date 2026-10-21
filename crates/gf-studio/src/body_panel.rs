@@ -309,8 +309,8 @@ impl crate::studio::Studio<'_> {
                 ui.label(egui::RichText::new(tr("body.wear_none")).weak());
             }
             for (asset, hide) in &worn {
+                ui.label(label(asset));
                 ui.horizontal(|ui| {
-                    ui.label(label(asset));
                     let mut h = *hide;
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
                         wear_commit = Some((asset.clone(), Some(h)));
