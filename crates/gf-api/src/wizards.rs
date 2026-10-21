@@ -355,7 +355,7 @@ fn export() -> Value {
                  {"name": "morphs", "label": "Morph targets", "widget": "targets"},
                  {"name": "eyes", "label": "Eyes file", "widget": "file_open", "ext": ".json"},
                  {"name": "body", "label": "Body pack", "widget": "folder"},
-                 {"name": "body_rig", "label": "Body skeleton (game_engine, game_engine_with_breast or a rig .json)"},
+                 {"name": "body_rig", "label": "Body skeleton (a rig preset: game_engine, game_engine_with_breast, default, mixamo, mixamo_unity, cmu_mb, openpose; or a rig .json)"},
                  {"name": "body_gates", "label": "When the body's stitch gates fail"},
                  {"name": "lids", "label": "Eyelid fitting"},
                  {"name": "rig", "label": "Face rig"},
@@ -751,6 +751,16 @@ mod tests {
 
     fn props(name: &str) -> Value {
         (find(name).unwrap().input)()["properties"].clone()
+    }
+
+    #[test]
+    fn body_rig_label_names_every_rig_preset() {
+        let defs = serde_json::to_string(&definitions()).unwrap();
+        let start = defs.find("Body skeleton (").unwrap();
+        let label = &defs[start..start + defs[start..].find(')').unwrap()];
+        for name in gf_core::rig_presets::names() {
+            assert!(label.contains(&format!(" {name},")) || label.contains(&format!(" {name};")), "{name} missing from: {label}");
+        }
     }
 
     #[test]

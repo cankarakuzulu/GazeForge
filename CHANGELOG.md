@@ -95,6 +95,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- A glb wearable whose colour image is kept outside the glb was reported as having no colour texture; the binding now
+  names the file. The `--body-rig` help and the export wizard's body skeleton field named 2 of the 7 rig presets; they
+  name all of them, and a test fails when a preset is added without them.
 - The Stitch, Body shape and Eyes panels of the browser designer laid every row into the next one; they now line up
   label, slider and value.
 
@@ -109,13 +112,15 @@ open, with its last measurement, rather than left out.
   heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
   a few cards at the coarsest level; a bound garment follows the body's local shape more closely than MakeHuman's
   hand-chosen bindings (loose cloth can hug muscles); a rigid hat does not follow a head's shape (bind hats instead);
-  a glb's JPEG colour texture is not read yet (give a PNG).
+  a glb's JPEG colour texture, or one kept outside the glb, is not read yet (give a PNG; the binding's report names
+  which).
 - Body and genital UVs reach glTF in the OBJ convention (V up), so a body texture would map upside down; garments are
   flipped to glTF's convention.
-- Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.
+- Head joints follow the head by a local fit (above): on an unchanged head they sit 0.4 mm further from the eyeball
+  centres than before.
 - With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
   (MakeHuman ships no geometry for one).
-- The face rig cannot yet be combined with a body rig; no humanoid retargeting presets yet.
+- The face rig cannot yet be combined with a body rig. `openpose` has no humanoid map.
 
 - **Topology improvement.** `topology improve` / `topology.improve` (a job) re-cuts a game base's triangles by edge
   flips over the same vertices, scored over the shape range the base serves (the rest shape, every catalog target, seeded

@@ -178,7 +178,7 @@ const TEXT: &[(&str, &str)] = &[
     ("scale", "none: the item keeps its modelled size; bone: it scales with the bone's length"),
     ("name", "name shown for the wearable"),
     ("seam-weight", "multiplies the collapse cost of the base's open boundary (the neck seam the body stitches to), so coarse levels keep more seam points; 1 leaves it as the weights say"),
-    ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast) or the path of a MakeHuman rig .json"),
+    ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast, default, mixamo, mixamo_unity, cmu_mb, openpose) or the path of a MakeHuman rig .json"),
     ("body-weights", "path of the MakeHuman weights .json that goes with a --body-rig path (a preset carries its own)"),
     ("body-gates", "refuse: a body whose stitch gates fail is not exported; report: it is exported and the failures go in the sidecar"),
     ("shape-targets", "catalog targets scored one at a time: all, head (designer categories, expressions and macro keys) or none"),
@@ -456,6 +456,14 @@ mod tests {
             topology_improve_input(),
             topology_inspect_input(),
         ]
+    }
+
+    #[test]
+    fn body_rig_help_names_every_rig_preset() {
+        let help = TEXT.iter().find(|(k, _)| *k == "body-rig").unwrap().1;
+        for name in gf_core::rig_presets::names() {
+            assert!(help.contains(&format!(" {name},")) || help.contains(&format!(" {name})")) || help.contains(&format!("({name},")), "{name} missing from: {help}");
+        }
     }
 
     #[test]

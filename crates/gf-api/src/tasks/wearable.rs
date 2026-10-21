@@ -34,7 +34,10 @@ fn source_mesh(store: &gf_io::store::Store, path: &Path, diffuse: Option<&String
             (Some(png), "the glb's PNG colour texture".to_string())
         }
         (None, Some((mime, _))) => (None, format!("the glb's colour texture is {mime}, which is not read yet: give a PNG with diffuse")),
-        (None, None) => (None, "the glb has no colour texture".to_string()),
+        (None, None) => match &scene.base_color_uri {
+            Some(uri) => (None, format!("the glb's colour texture is outside the glb ({uri}), which is not read: give it with diffuse")),
+            None => (None, "the glb has no colour texture".to_string()),
+        },
     };
     Ok((obj, texture, json!({"glb": path.display().to_string(), "vertices": scene.positions.len(), "triangles": scene.triangles.len(), "texture": note,
                              "frame": "glTF y up converted to z up; node transforms applied"})))

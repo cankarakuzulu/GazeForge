@@ -736,6 +736,7 @@ pub struct SceneMesh {
     pub uvs: Vec<[f64; 2]>,
     pub triangles: Vec<[u32; 3]>,
     pub base_color: Option<(String, Vec<u8>)>,
+    pub base_color_uri: Option<String>,
 }
 
 type Mat4 = [[f64; 4]; 4];
@@ -776,7 +777,7 @@ fn node_matrix(node: &Value) -> Mat4 {
 
 pub fn read_glb_scene(bytes: &[u8]) -> Result<SceneMesh, String> {
     let (doc, bin) = chunks(bytes)?;
-    let mut out = SceneMesh { positions: Vec::new(), uvs: Vec::new(), triangles: Vec::new(), base_color: None };
+    let mut out = SceneMesh { positions: Vec::new(), uvs: Vec::new(), triangles: Vec::new(), base_color: None, base_color_uri: None };
     let scene = doc["scene"].as_u64().unwrap_or(0) as usize;
     let roots: Vec<u64> = match doc["scenes"][scene]["nodes"].as_array() {
         Some(n) => n.iter().filter_map(Value::as_u64).collect(),
@@ -822,6 +823,10 @@ pub fn read_glb_scene(bytes: &[u8]) -> Result<SceneMesh, String> {
                     let v = &doc["bufferViews"][view as usize];
                     let data = accessor_bytes(&doc, bin, v, 0, v["byteLength"].as_u64().unwrap_or(0) as usize)?;
                     out.base_color = Some((image["mimeType"].as_str().unwrap_or("").to_string(), data.to_vec()));
+                } else if let Some(uri) = image["uri"].as_str()
+                    && out.base_color_uri.is_none()
+                {
+                    out.base_color_uri = Some(if uri.starts_with("data:") { "a data URI".into() } else { uri.to_string() });
                 }
             }
         }
@@ -1081,6 +1086,42 @@ mod tests {
         assert!(glb_with_parts(&[head], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(None)]).is_err());
         let ext = MaterialExtension { name: "GAZEFORGE_skin", value: json!({"live": [{"mask": {"index": 2}}]}), textures: vec![vec![1]] };
         assert!(glb_with_parts(&[lod(vec![[0.0; 3]; 4])], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(Some(ext))]).is_err());
+    }
+
+    fn repack(doc: &Value, bin: &[u8]) -> Vec<u8> {
+        let mut json = serde_json::to_vec(doc).unwrap();
+        json.resize(json.len().div_ceil(4) * 4, b' ');
+        let mut bin = bin.to_vec();
+        bin.resize(bin.len().div_ceil(4) * 4, 0);
+        let mut out = Vec::new();
+        out.extend(0x4654_6C67u32.to_le_bytes());
+        out.extend(2u32.to_le_bytes());
+        out.extend(((12 + 8 + json.len() + 8 + bin.len()) as u32).to_le_bytes());
+        out.extend((json.len() as u32).to_le_bytes());
+        out.extend(0x4E4F_534Au32.to_le_bytes());
+        out.extend(json);
+        out.extend((bin.len() as u32).to_le_bytes());
+        out.extend(0x004E_4942u32.to_le_bytes());
+        out.extend(bin);
+        out
+    }
+
+    #[test]
+    fn a_colour_image_outside_the_glb_is_named_not_mistaken_for_none() {
+        let mut head = lod(vec![[0.0; 3]; 4]);
+        head.material = Some(0);
+        let (bytes, _) = glb_with_parts(&[head], &[], &["m".into()], Sparse::Auto, json!({}), "test", None, &[], &[material(None)]).unwrap();
+        let inside = read_glb_scene(&bytes).unwrap();
+        assert!(inside.base_color.is_some() && inside.base_color_uri.is_none());
+        let (mut doc, bin) = chunks(&bytes).unwrap();
+        let base = doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64().unwrap() as usize;
+        let image = doc["textures"][base]["source"].as_u64().unwrap() as usize;
+        doc["images"][image] = json!({"uri": "skin_color.jpg"});
+        let outside = read_glb_scene(&repack(&doc, bin)).unwrap();
+        assert!(outside.base_color.is_none());
+        assert_eq!(outside.base_color_uri.as_deref(), Some("skin_color.jpg"));
+        doc["images"][image] = json!({"uri": "data:image/png;base64,AAAA"});
+        assert_eq!(read_glb_scene(&repack(&doc, bin)).unwrap().base_color_uri.as_deref(), Some("a data URI"));
     }
 
     #[test]
