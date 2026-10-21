@@ -7,6 +7,7 @@ pub mod gltf;
 pub mod obj;
 pub mod png;
 pub mod store;
+pub mod wearable_store;
 
 use std::collections::BTreeSet;
 use std::path::Path;

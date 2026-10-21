@@ -93,9 +93,13 @@ pub fn patch_of(obj: &Path, group: &str, helpers: &b::Helpers) -> Result<Option<
 
 pub fn read_obj(path: &Path, group: Option<&str>) -> Result<Polys, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_obj(&text, group).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub fn parse_obj(text: &str, group: Option<&str>) -> Result<Polys, String> {
     let mut out = Polys { positions: Vec::new(), uvs: Vec::new(), faces: Vec::new() };
     let mut current: Option<String> = None;
-    let bad = |n: usize, what: &str| format!("{} line {}: {what}", path.display(), n + 1);
+    let bad = |n: usize, what: &str| format!("line {}: {what}", n + 1);
     for (n, line) in text.lines().enumerate() {
         let mut parts = line.split_whitespace();
         match parts.next() {
@@ -138,7 +142,7 @@ pub fn read_obj(path: &Path, group: Option<&str>) -> Result<Polys, String> {
         }
     }
     if out.faces.is_empty() {
-        return Err(format!("{}: no faces{}", path.display(), group.map(|g| format!(" in group {g}")).unwrap_or_default()));
+        return Err(format!("no faces{}", group.map(|g| format!(" in group {g}")).unwrap_or_default()));
     }
     Ok(out)
 }

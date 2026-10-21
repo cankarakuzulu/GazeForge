@@ -177,6 +177,64 @@ fn genital_lod(
     Ok((lod, report))
 }
 
+fn wearable_material(store: &Store, item: &gf_io::wearable_store::Wearable) -> Result<gltf::Material, String> {
+    let texture = |slot: &str| item.manifest.material.get(slot).map(|r| store.get_ref(r)).transpose();
+    Ok(gltf::Material {
+        name: item.manifest.name.clone(),
+        base_color: [1.0, 1.0, 1.0, 1.0],
+        base_texture: texture("diffuse")?,
+        normal_texture: texture("normal")?,
+        orm_texture: None,
+        metallic: 0.0,
+        roughness: 0.85,
+        transmission: None,
+        ior: None,
+        blend: false,
+        alpha_cutoff: item.manifest.transparent.then_some(0.5),
+        double_sided: item.manifest.double_sided,
+        extension: None,
+    })
+}
+
+fn wearable_lod(item: &gf_io::wearable_store::Wearable, garment: &[Point], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, material: usize) -> Lod {
+    let mut triangles = Vec::new();
+    let mut uvs = Vec::new();
+    let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
+    for f in &item.faces {
+        for k in 1..f.len().saturating_sub(1) {
+            triangles.push([f[0].0, f[k].0, f[k + 1].0]);
+            uvs.push([uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)]);
+        }
+    }
+    let normals = super::wearable::vertex_normals(garment, &triangles);
+    let surface = gm::split_seams(&triangles, &uvs);
+    let skin = by_obj.map(|w| {
+        let none: Vec<(usize, f64)> = Vec::new();
+        let infl: Vec<gf_core::body_rig::Influences> = surface
+            .source
+            .iter()
+            .map(|&v| {
+                let b = &item.binding.bound[v as usize];
+                let parts: Vec<(f64, &[(usize, f64)])> = (0..3).map(|k| (b.weights[k], w.get(&b.vertices[k]).map(Vec::as_slice).unwrap_or(&none))).collect();
+                let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+                if x.is_empty() { vec![(0, 1.0)] } else { x }
+            })
+            .collect();
+        skin_data(&infl.iter().map(Vec::as_slice).collect::<Vec<_>>())
+    });
+    let name: String = item.manifest.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    Lod {
+        name,
+        positions: surface.source.iter().map(|&v| gm::to_gltf(garment[v as usize])).collect(),
+        normals: surface.source.iter().map(|&v| gm::to_gltf(normals[v as usize])).collect(),
+        uvs: surface.uvs.clone(),
+        indices: surface.indices,
+        morphs: Vec::new(),
+        skin,
+        material: Some(material),
+    }
+}
+
 fn skin_data(influences: &[&[(usize, f64)]]) -> gltf::SkinData {
     let mut joints = Vec::with_capacity(influences.len());
     let mut weights = Vec::with_capacity(influences.len());
@@ -779,6 +837,7 @@ fn eye_materials(m: &gf_core::eye_inventory::EyeModel) -> Result<Vec<gltf::Mater
                 transmission: p.transmission,
                 ior: p.ior,
                 blend: p.blend,
+                alpha_cutoff: None,
                 double_sided: false,
                 extension: None,
             })
@@ -1340,10 +1399,30 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut body_meta = Value::Null;
     let genitals = spec.body.as_ref().is_some_and(|b| b.canonical().genitals == "male");
     let mut genital_rows: Vec<Value> = Vec::new();
+    let mut wear_slots: Vec<(usize, usize)> = Vec::new();
+    let mut wear_materials: Vec<gltf::Material> = Vec::new();
     if let Some((pack, pack_manifest, controls)) = &body {
         crate::jobs::progress("body", 0, 1, "");
         use gf_core::body as gb;
         let limits = if pack.mode == "makehuman" { gb::Limits::exact() } else { gb::Limits::any_body() };
+        let worn_refs = spec.body.as_ref().map(|b| b.wearables.clone()).unwrap_or_default();
+        if !worn_refs.is_empty() && world.is_none() {
+            return Err("body.wearables need the spec's own body (a makehuman-mode body in the spec), not --body".into());
+        }
+        let frame = super::wearable::BaseFrame::new(pack, controls, pack_manifest, &positions);
+        let mut worn: Vec<(Lod, Value)> = Vec::new();
+        let mut covered: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for w in &worn_refs {
+            let item = store.load_wearable(&w.asset)?;
+            let garment = frame.evaluate(&item.binding).map_err(|e| format!("wearable {}: {e}", w.asset))?;
+            if w.hide_body {
+                covered.extend(item.binding.hidden.iter().copied());
+            }
+            let slot = wear_materials.len();
+            wear_materials.push(wearable_material(&store, &item)?);
+            let lod = wearable_lod(&item, &garment, body_rig.as_ref().map(|br| &br.by_obj), slot);
+            worn.push((lod, json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()})));
+        }
         let mut rows = Vec::new();
         let mut failures = Vec::new();
         for (i, level) in levels.iter().enumerate() {
@@ -1356,7 +1435,13 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             failures.extend(failed.into_iter().map(|f| format!("{}: {f}", level.name)));
             let (shared, normals) = gb::two_sided_normals(&game, &level.triangles, &st);
             seam_normals.push(shared.into_iter().collect());
-            let surface = gm::split_seams(&st.triangles, &st.uvs);
+            let (body_triangles, body_uvs): (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) = if covered.is_empty() {
+                (st.triangles.clone(), st.uvs.clone())
+            } else {
+                let hidden = super::wearable::hidden_body(pack, body_lod, &st, &covered)?;
+                st.triangles.iter().zip(&st.uvs).filter(|(t, _)| !t.iter().all(|&v| hidden[v as usize])).map(|(t, u)| (*t, *u)).unzip()
+            };
+            let surface = gm::split_seams(&body_triangles, &body_uvs);
             let name = format!("Body_LOD{i}");
             let body_skin = match (&body_rig, &head_influences) {
                 (Some(br), Some(hi)) => {
@@ -1409,6 +1494,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 genital_rows.push(report);
                 body_lods.push(lod);
             }
+            for (lod, _) in &worn {
+                let slot = lod.material.unwrap_or(0);
+                wear_slots.push((body_lods.len(), slot));
+                body_lods.push(Lod { name: format!("{}_LOD{i}", lod.name), ..lod.clone() });
+            }
         }
         let report_only = match opts.get("body-gates").map(String::as_str).unwrap_or("refuse") {
             "refuse" => false,
@@ -1423,6 +1513,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                            "skin": if let Some(br) = &body_rig { br.meta.clone() } else if rig_data.is_some() { json!("every body vertex weighted 1.0 to the neck joint, like the head's seam vertices") } else { Value::Null }});
         if !failures.is_empty() {
             body_meta["gates_failed"] = json!({"exported_anyway": "--body-gates report", "failures": failures});
+        }
+        if !worn.is_empty() {
+            body_meta["wearables"] = json!({"items": worn.iter().map(|w| w.1.clone()).collect::<Vec<_>>(), "hidden_base_vertices": covered.len(),
+                                            "method": "MakeHuman clothes bindings evaluated on the character (head cage on the dense head, body and helpers on the shaped body with its controls); one node per wearable per LOD (<name>_LODn, the full garment on every level for now); body triangles whose corners are all covered by a hide_body wearable are left out of every body LOD; skinned through the binding's base vertices when a rig is asked"});
         }
         if genitals {
             body_meta["genitals"] = json!({"kind": "male", "lods": genital_rows,
@@ -1580,6 +1674,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(m) if !eye_parts.is_empty() => eye_materials(m)?,
         _ => Vec::new(),
     };
+    let first_wear = materials.len();
+    for (index, slot) in wear_slots {
+        body_lods[index].material = Some(first_wear + slot);
+    }
+    materials.extend(wear_materials);
     let skin_report = match &spec.skin {
         Some(skin) => {
             crate::jobs::progress("skin", 0, 1, "textures and layers");

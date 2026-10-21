@@ -60,6 +60,19 @@ pub struct BodySpec {
     pub tangent: f64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub genitals: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wearables: Vec<WearableRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WearableRef {
+    pub asset: String,
+    #[serde(default = "yes")]
+    pub hide_body: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 pub const GENITALS: &[&str] = &["male"];
@@ -95,6 +108,14 @@ impl BodySpec {
         for (k, v) in [("body.pack", &self.pack), ("body.targets", &self.targets)] {
             if let Err(e) = hash::parse_reference(v) {
                 out.push(format!("{k}: {e}"));
+            }
+        }
+        for (i, w) in self.wearables.iter().enumerate() {
+            if let Err(e) = hash::parse_reference(&w.asset) {
+                out.push(format!("body.wearables[{i}].asset: {e}"));
+            }
+            if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
+                out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
             }
         }
         if let Err(e) = self.controls().check() {
@@ -244,7 +265,7 @@ mod tests {
     #[test]
     fn a_body_spec_checks_its_references_and_ranges() {
         let r = hash::reference(&"c".repeat(64));
-        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new() };
+        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new() };
         assert!(ok.problems().is_empty(), "{:?}", ok.problems());
         let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), compounds: [("wings".to_string(), 0.5), ("athletic".to_string(), 2.0)].into(), genitals: "female".into(), ..ok.clone() };
         let p = bad.problems().join(" | ");
@@ -252,13 +273,22 @@ mod tests {
             assert!(p.contains(needle), "{needle} not in {p}");
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
-        assert!(BodySpec { genitals: "male".into(), ..ok }.problems().is_empty());
+        assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true };
+        let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
+        let p = dressed.problems();
+        assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
+        assert!(BodySpec { wearables: vec![worn(&r), worn(&r)], ..ok.clone() }.problems().iter().any(|x| x.contains("worn twice")));
+        let text = serde_json::to_string(&ok).unwrap();
+        assert!(!text.contains("wearables"), "an undressed body keeps its bytes: {text}");
+        let read: BodySpec = serde_json::from_str(&format!("{}, \"wearables\": [{{\"asset\": \"{r}\"}}]}}", text.trim_end_matches('}'))).unwrap();
+        assert!(read.wearables[0].hide_body, "hide_body defaults to true");
     }
 
     #[test]
     fn canonical_values_are_the_nearest_doubles_of_their_decimals() {
         let r = hash::reference(&"d".repeat(64));
-        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55, genitals: String::new() };
+        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55, genitals: String::new(), wearables: Vec::new() };
         let s = serde_json::to_string(&b.canonical()).unwrap();
         for needle in ["\"a\":0.8,", "\"b\":0.3}", "\"c\":-0.7}", "60.1,", "1.1,", "0.55"] {
             assert!(s.contains(needle), "{needle} not in {s}");
@@ -283,7 +313,7 @@ mod tests {
             }
         }
         let r = hash::reference(&"c".repeat(64));
-        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new() };
+        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new() };
         b.compounds.insert("leg_length".into(), 0.5);
         let w = b.target_weights();
         assert_eq!(w["legs/upperlegs-height-incr"], 0.75);

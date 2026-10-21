@@ -11,12 +11,27 @@ use super::data::{json_arg, number_map};
 use super::{Options, need, only};
 
 pub const CHECK_KEYS: &[&str] = &["base", "mhclo", "macro", "targets", "sliders"];
+pub const IMPORT_KEYS: &[&str] = &["store", "mhclo"];
+
+pub fn import(opts: &Options) -> Result<Value, String> {
+    only(opts, "wearable import", &[IMPORT_KEYS])?;
+    let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
+    let mut rows = Vec::new();
+    for file in need(opts, "mhclo")?.split(',') {
+        let (reference, m) = store.import_mhclo(Path::new(file))?;
+        rows.push(json!({"wearable": reference, "name": m.name, "file": file, "vertices": m.vertices, "hides_base_vertices": m.hidden,
+                         "material": m.material.keys().collect::<Vec<_>>(), "transparent": m.transparent, "notes": m.notes}));
+    }
+    Ok(json!({"ok": true, "command": "wearable import", "wearables": rows,
+              "meaning": "each MakeHuman clothes binding with its mesh and material maps, content-addressed in the store; wear one with body.wearables: [{\"asset\": REF, \"hide_body\": true}] in a character spec"}))
+}
+
 pub const FIT_KEYS: &[&str] = &["store", "spec", "macro", "mhclo", "out", "hide"];
 const INSIDE_TOLERANCE_M: f64 = 0.001;
 const COVER_REACH_M: f64 = 0.15;
 const COVER_BEHIND_M: f64 = 0.005;
 
-struct BaseFrame {
+pub struct BaseFrame {
     body: HashMap<u32, Point>,
     helpers: HashMap<u32, Point>,
     head: HashMap<u32, Point>,
@@ -28,7 +43,20 @@ impl BaseFrame {
         self.head.get(&v).or_else(|| self.body.get(&v)).or_else(|| self.helpers.get(&v)).copied()
     }
 
-    fn evaluate(&self, binding: &Binding) -> Result<Vec<Point>, String> {
+    pub fn new(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, pack_manifest: &Value, dense: &[Point]) -> BaseFrame {
+        let control = pack.control(controls);
+        let control_joint = pack.control_joint(controls);
+        let mut head = dense.to_vec();
+        gf_core::body::scale_about(&mut head, pack.pivot(), controls.head_scale);
+        BaseFrame {
+            body: pack.source.iter().enumerate().map(|(i, &o)| (o, control(pack.mesh.positions[i]))).collect(),
+            helpers: pack.helpers.source.iter().zip(&pack.helpers.positions).map(|(&o, &p)| (o, control_joint(p))).collect(),
+            head: pack.cage_source.iter().enumerate().filter_map(|(d, &o)| head.get(d).map(|p| (o, *p))).collect(),
+            unit: pack_unit(pack_manifest),
+        }
+    }
+
+    pub fn evaluate(&self, binding: &Binding) -> Result<Vec<Point>, String> {
         let top = binding.highest_vertex() as usize;
         let mut mh = vec![[0.0; 3]; top + 1];
         let mut missing = Vec::new();
@@ -48,14 +76,14 @@ impl BaseFrame {
     }
 }
 
-fn hidden_body(pack: &gf_core::body::BodyPack, st: &gf_core::body::Stitched, covered: &HashSet<u32>) -> Result<Vec<bool>, String> {
-    let (_, kept) = pack.lod_mesh(0)?;
+pub fn hidden_body(pack: &gf_core::body::BodyPack, lod: usize, st: &gf_core::body::Stitched, covered: &HashSet<u32>) -> Result<Vec<bool>, String> {
+    let (_, kept) = pack.lod_mesh(lod)?;
     let cage = |c: u32| pack.source.get(c as usize).is_some_and(|o| covered.contains(o));
     st.source
         .iter()
         .map(|s| {
             let Some(u) = s else { return Ok(false) };
-            let k = *kept.get(*u as usize).ok_or_else(|| format!("body vertex {u} is outside LOD0"))?;
+            let k = *kept.get(*u as usize).ok_or_else(|| format!("body vertex {u} is outside LOD{lod}"))?;
             Ok(match &pack.fine {
                 Some(f) => f.stencil.rows[k as usize].iter().all(|&(c, _)| cage(c)),
                 None => cage(k),
@@ -64,7 +92,7 @@ fn hidden_body(pack: &gf_core::body::BodyPack, st: &gf_core::body::Stitched, cov
         .collect()
 }
 
-fn vertex_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
+pub fn vertex_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
     let mut n = vec![[0.0; 3]; positions.len()];
     for t in triangles {
         let (a, b, c) = (positions[t[0] as usize], positions[t[1] as usize], positions[t[2] as usize]);
@@ -144,17 +172,7 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     let h = head.len() as u32;
     let surface_triangles: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
     let normals = vertex_normals(&surface, &surface_triangles);
-    let control = pack.control(&shaped.controls);
-    let control_joint = pack.control_joint(&shaped.controls);
-    let mut dense_head = dense.clone();
-    gf_core::body::scale_about(&mut dense_head, pack.pivot(), shaped.controls.head_scale);
-    let unit = pack_unit(&shaped.manifest);
-    let frame = BaseFrame {
-        body: pack.source.iter().enumerate().map(|(i, &o)| (o, control(pack.mesh.positions[i]))).collect(),
-        helpers: pack.helpers.source.iter().zip(&pack.helpers.positions).map(|(&o, &p)| (o, control_joint(p))).collect(),
-        head: pack.cage_source.iter().enumerate().map(|(d, &o)| (o, dense_head[d])).collect(),
-        unit,
-    };
+    let frame = BaseFrame::new(pack, &shaped.controls, &shaped.manifest, &dense);
     let world = |p: Point| shaped.similarity.apply(p);
     let out = Path::new(need(opts, "out")?);
     let mut obj = String::from("o body\n");
@@ -218,7 +236,7 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
                                          "max_mm": depths.last().copied().unwrap_or(0.0), "p95_mm": depths.get((depths.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0),
                                          "deepest_world": deepest.1}}));
     }
-    let hidden = if hide { hidden_body(pack, &st, &covered)? } else { vec![false; st.positions.len()] };
+    let hidden = if hide { hidden_body(pack, 0, &st, &covered)? } else { vec![false; st.positions.len()] };
     let mut dropped = 0;
     let mut uncovered: Vec<[u32; 3]> = Vec::new();
     for t in &st.triangles {

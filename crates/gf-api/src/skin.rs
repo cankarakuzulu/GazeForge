@@ -142,6 +142,7 @@ pub fn head_material(store: &Store, skin: &SkinSpec, dense: &[[f64; 3]], mesh: &
         transmission: None,
         ior: None,
         blend: false,
+        alpha_cutoff: None,
         double_sided: false,
         extension: Some(gltf::MaterialExtension { name: sl::EXTENSION, value: sl::extension(skin), textures: masks }),
     };

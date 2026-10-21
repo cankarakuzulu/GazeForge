@@ -18,11 +18,13 @@ impl Sparse {
     }
 }
 
+#[derive(Clone)]
 pub struct MorphData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
 }
 
+#[derive(Clone)]
 pub struct SkinData {
     pub joints: Vec<[u8; 4]>,
     pub weights: Vec<[f32; 4]>,
@@ -30,6 +32,7 @@ pub struct SkinData {
     pub weights_1: Vec<[f32; 4]>,
 }
 
+#[derive(Clone)]
 pub struct Lod {
     pub name: String,
     pub positions: Vec<[f32; 3]>,
@@ -221,6 +224,7 @@ pub struct Material {
     pub transmission: Option<f32>,
     pub ior: Option<f32>,
     pub blend: bool,
+    pub alpha_cutoff: Option<f32>,
     pub double_sided: bool,
     pub extension: Option<MaterialExtension>,
 }
@@ -280,7 +284,10 @@ fn material_json(b: &mut Builder, m: &Material, textures: &mut Vec<Value>, image
     if m.double_sided {
         out["doubleSided"] = json!(true);
     }
-    if m.blend {
+    if let Some(cutoff) = m.alpha_cutoff {
+        out["alphaMode"] = json!("MASK");
+        out["alphaCutoff"] = json!(cutoff);
+    } else if m.blend {
         out["alphaMode"] = json!("BLEND");
     }
     let mut ext = serde_json::Map::new();
@@ -867,6 +874,7 @@ mod tests {
             transmission: None,
             ior: None,
             blend: false,
+            alpha_cutoff: None,
             double_sided: false,
             extension,
         }

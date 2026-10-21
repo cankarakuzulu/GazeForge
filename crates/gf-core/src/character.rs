@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(spec().head_weights(|_| true), spec().canonical().weights);
         let r = hash::reference(&"b".repeat(64));
         let mut s = spec();
-        let mut body = crate::body_shape::BodySpec { pack: r.clone(), targets: r, weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new() };
+        let mut body = crate::body_shape::BodySpec { pack: r.clone(), targets: r, weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new() };
         body.compounds.insert("shoulder_width".into(), 0.5);
         body.weights.insert("legs/l-upperleg-fat-incr".into(), 0.3);
         body.weights.insert("nose/x".into(), 0.2);
