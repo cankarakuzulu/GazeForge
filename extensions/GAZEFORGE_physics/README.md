@@ -5,7 +5,8 @@ body they move against looks like, so any engine can simulate them with its own 
 extension shows the wearables skinned to the body, as exported.
 
 Status: version 1. Written by GazeForge's `export-glb` for wearables worn with `"physics": "cloth"` or
-`"physics": "springbone"`. No reader ships yet.
+`"physics": "springbone"`. Readers: the Godot 4 addon `clients/godot-addon/addons/gazeforge_physics` (spring-bone
+chains and colliders; cloth is not read yet).
 
 ## Placement
 

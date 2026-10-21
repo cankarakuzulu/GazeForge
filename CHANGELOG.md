@@ -60,7 +60,11 @@ open, with its last measurement, rather than left out.
   (`extensions/GAZEFORGE_physics/README.md`): capsule colliders per bone measured on the character, a `_PIN` weight per
   cloth vertex, and for spring bones chains of extra joints built from the item's own mesh (rooted where it rests on the
   anchor bone, the head for hair) with the item skinned along them. Measured: MakeHuman's ponytail becomes one chain
-  that bends as one piece, its long hair five strands that bend as a sheet. No engine reader ships yet.
+  that bends as one piece, its long hair five strands that bend as a sheet. **A Godot reader:** the addon
+  `gazeforge_physics` builds a `SpringBoneSimulator3D` with the colliders as capsules (editor import and run time);
+  measured in Godot 4.7.2, the chains swing with the head and the capsules hold them out of the body (long hair: 0 mm
+  into it with them, up to 97 mm without). Open: the ponytail's short tie chain still reaches 48 mm into the neck
+  capsule with the head tipped back; cloth is not read in Godot yet.
 
 ### Changed
 

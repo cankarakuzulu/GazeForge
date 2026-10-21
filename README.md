@@ -474,7 +474,10 @@ body, 0 where it hangs free); `springbone` builds chains of extra joints from th
 on its anchor bone (the head for hair), and skins the item along them. Both come with capsule colliders measured on the
 character, under the root glTF extension `GAZEFORGE_physics` ([contract](extensions/GAZEFORGE_physics/README.md)), for
 an engine's own solver. Measured: MakeHuman's ponytail becomes one chain that bends as one piece, its long hair five
-strands that bend as a sheet. Not yet: a reader in Godot or a VRM export of the chains, baked animation.
+strands that bend as a sheet. **Godot:** the addon `clients/godot-addon/addons/gazeforge_physics` turns the chains into a
+`SpringBoneSimulator3D` with the colliders as capsules, on editor import and at run time; turning the head 60 degrees, the
+long hair swings up to 44 cm and the capsules keep it out of the body (without them its joints go up to 97 mm into the
+spine; with them, 0). Not yet: cloth in Godot, a VRM export of the chains, baked animation.
 
 #### Gates
 
@@ -1401,7 +1404,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
-| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items and the physics data done; engine readers and bakes not yet |
+| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items, the physics data and the Godot spring-bone reader done; cloth in Godot, VRM and bakes not yet |
 | Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development
