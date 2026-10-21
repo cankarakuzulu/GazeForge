@@ -25,12 +25,35 @@ open, with its last measurement, rather than left out.
 - **Genitals (male).** `body.genitals: "male"` exports MakeHuman's genital patch per level of detail, shaped by the macros
   and three sliders, skinned with the body.
 - `export-glb --body-gates report` exports a body whose stitch gates fail, listing the failures in the sidecar.
+- **Levels of detail on demand.** `derive-lods` / `base.derive_lods` (and the "Add levels of detail" task) makes a new
+  game base from a stored one: its finest level unchanged byte for byte, any number of coarser levels decimated from
+  it, so characters keep their head and a ladder can grow later; `--seam-weight` keeps more neck seam points on coarse
+  levels. The same inputs give the same reference. A body import takes one level of detail per head level
+  (`fine_lods`), each refined and decimated to its size. Recommended ladder: head 20000 / 10000 / 5000 / 2500 / 1200 /
+  800, body 24000 / 12000 / 6000 / 3000 / 1500 / 800; 800 vertices is the floor.
+- **Genitals, rig and gates in the clients.** The Body shape panel (studio and browser) has a Genitals choice when the
+  body can wear one, undone and redone like every edit; the stitch preview draws it. The body import task takes the
+  targets, the macro definition, the subdivision and the body levels of detail, with a Targets step; the export task
+  takes the body skeleton and the gates choice.
+
+### Changed
+
+- **Stitch gates on coarse levels of detail.** On LOD1 and coarser, the seam's normal-continuity limit is the larger of
+  40 degrees and the sharpest angle inside either side at that level (the body's blend band, the head's seam row); LOD0
+  and the stitch preview keep 40 degrees. The sidecar reports each level's limit.
+
+### Fixed
+
+- The Stitch, Body shape and Eyes panels of the browser designer laid every row into the next one; they now line up
+  label, slider and value.
 
 ### Open (bodies)
 
-- The neck seam on the finer body: 116 of the 128 characters of the macro grid pass the stitch gates (107 before the
-  finer body); the worst seam angle is 46.1 degrees against a 40 degree limit, at the coarsest level of detail, on
-  heavily muscled characters.
+- The neck seam with six levels of detail (ladder above, 800-vertex floor): 119 of the 128 characters of the macro grid
+  pass the stitch gates at every level (116 with the earlier three levels); the 9 left carry 10 failures, 5 on band
+  folds or flips and 5 on the seam angle (one character at two levels). The relative limit can rise far above 40
+  degrees where a side has one sharp edge (up to 117 at LOD5 in the grid) - the seams that pass stay at or under 53
+  degrees.
 - Head, jaw and eye joints follow the body's shaping, not the head's own sliders or sculpt.
 - With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
   (MakeHuman ships no geometry for one).
