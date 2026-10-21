@@ -214,10 +214,16 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
     let mut triangles = Vec::new();
     let mut uvs: Vec<[gf_geom::Uv; 3]> = Vec::new();
     let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
+    let centre = garment.iter().fold([0.0; 3], |a, p| [a[0] + p[0], a[1] + p[1], a[2] + p[2]]).map(|x| x / garment.len().max(1) as f64);
+    let stand_in = |v: u32| {
+        let p = garment[v as usize];
+        [((p[1] - centre[1]).atan2(p[0] - centre[0]) / std::f64::consts::TAU + 0.5) as f32, p[2] as f32]
+    };
+    let textured = item.faces.iter().all(|f| f.iter().all(|c| c.1.is_some())) && !item.uvs.is_empty();
     for f in &item.faces {
         for k in 1..f.len().saturating_sub(1) {
             triangles.push([f[0].0, f[k].0, f[k + 1].0]);
-            uvs.push([uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)]);
+            uvs.push(if textured { [uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)] } else { [stand_in(f[0].0), stand_in(f[k].0), stand_in(f[k + 1].0)] });
         }
     }
     let n = garment.len();

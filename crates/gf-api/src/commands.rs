@@ -223,6 +223,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: wear::import,
     },
     CommandDef {
+        name: "wearable.bind",
+        kind: Kind::Job,
+        summary: "Make a wearable from any garment OBJ modelled over one of your characters (from Blender, a generator or another tool): each vertex is bound to the nearest point of that character's body and head surface, the body it covers is listed, and the result is stored like a MakeHuman garment (argv `wearable bind`).",
+        limits: "Fields are the argv options with _ for -. The garment must be modelled on the character the spec describes, in metres with z up (world: as exported or fitted). One garment per call; give its colour texture with diffuse.",
+        input: api::bind_input,
+        output: api::argv_output,
+        run: api::bind,
+    },
+    CommandDef {
         name: "body.sliders",
         kind: Kind::Query,
         summary: "The body's regional sliders and compound parameters: every decrease/increase pair of a body targets set (arms, legs, torso, hips, stomach, buttocks, pelvis, hands, feet, ...) grouped by family, leaving out targets the head catalog also has (the head's sliders drive those on both sides), and the compound parameters with any target they need that is missing.",

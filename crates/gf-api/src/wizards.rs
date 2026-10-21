@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), bind_garment(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -158,6 +158,27 @@ fn wearable() -> Value {
              "fields": [
                  {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "mhclo", "label": "MakeHuman clothes file (.mhclo)", "common": true},
+             ],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn bind_garment() -> Value {
+    json!({
+        "id": "bind_garment", "title": "Fit a garment made on a character", "group": "Body", "developer": false,
+        "summary": "Any garment mesh modelled over one of your characters (Blender, a generator, another tool) into the store, ready to wear on every body.",
+        "steps": [
+            {"id": "bind", "title": "Garment", "command": "wearable.bind",
+             "help": "Model the garment over a character exported from here (export-glb or a fit lookdev), in metres with z up, and export it as OBJ. Give the spec of that character: each garment vertex is bound to the nearest point of its body and head, so it follows every shape like MakeHuman clothes do. The body it covers is listed for Hide body. Paths are on this machine.",
+             "fields": [
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "spec", "label": "The character it was modelled on (spec)", "bind": "$run.spec", "common": true},
+                 {"name": "obj", "label": "Garment .obj", "common": true},
+                 {"name": "base", "label": "MakeHuman base.obj", "common": true},
+                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "diffuse", "label": "Colour texture (.png)"},
+                 {"name": "name", "label": "Name"},
              ],
              "shows": [{"kind": "report"}]},
         ],

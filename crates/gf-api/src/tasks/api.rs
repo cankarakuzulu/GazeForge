@@ -122,6 +122,8 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("levels", &["all", "finest"]),
     ("quads", &["on", "off"]),
     ("body-gates", &["refuse", "report"]),
+    ("frame", &["world", "canonical"]),
+    ("hide-under", &["on", "off"]),
 ];
 
 const TEXT: &[(&str, &str)] = &[
@@ -165,6 +167,12 @@ const TEXT: &[(&str, &str)] = &[
     ("f5-eye-depth", "pair: a,b"),
     ("f6-sliver-eye", "pair: a,b"),
     ("game", "game base reference, sha256:<hex>, as store.list prints it"),
+    ("frame", "world: the garment was modelled on the character as exported or fitted (its root transform applied); canonical: on the stored body frame"),
+    ("hide-under", "on: list the body vertices the garment covers (a line along each body normal meets it within 15 cm), so hide_body can leave them out"),
+    ("compare-hidden", "a MakeHuman .mhclo whose hidden list to compare with, on the body vertices"),
+    ("out-mhclo", "also write the binding to this file in MakeHuman's format"),
+    ("diffuse", "path of the garment's colour texture (.png)"),
+    ("name", "name shown for the wearable"),
     ("seam-weight", "multiplies the collapse cost of the base's open boundary (the neck seam the body stitches to), so coarse levels keep more seam points; 1 leaves it as the weights say"),
     ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast) or the path of a MakeHuman rig .json"),
     ("body-weights", "path of the MakeHuman weights .json that goes with a --body-rig path (a preset carries its own)"),
@@ -286,6 +294,17 @@ pub fn derive_input() -> Value {
 
 pub fn derive(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, super::derive_lods)
+}
+
+pub fn bind_input() -> Value {
+    let mut s = schema(&[super::wearable::BIND_KEYS], &["store", "spec", "obj", "base"]);
+    s["properties"]["obj"]["description"] = json!("path of the garment .obj, modelled over the character the spec describes (argv --obj)");
+    s["properties"]["base"]["description"] = json!("path of MakeHuman's base.obj (its body group is the surface the garment is bound to) (argv --base)");
+    s
+}
+
+pub fn bind(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, super::wearable::bind)
 }
 
 pub fn obj_input() -> Value {
