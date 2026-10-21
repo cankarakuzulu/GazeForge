@@ -46,6 +46,24 @@ impl BaseFrame {
     }
 }
 
+fn vertex_normals(positions: &[Point], triangles: &[[u32; 3]]) -> Vec<Point> {
+    let mut n = vec![[0.0; 3]; positions.len()];
+    for t in triangles {
+        let (a, b, c) = (positions[t[0] as usize], positions[t[1] as usize], positions[t[2] as usize]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let f = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        for &k in t {
+            for d in 0..3 {
+                n[k as usize][d] += f[d];
+            }
+        }
+    }
+    n.into_iter().map(|p| {
+        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-30);
+        p.map(|x| x / l)
+    }).collect()
+}
+
 fn nearest(points: &[Point], p: Point) -> usize {
     let d = |q: &Point| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2);
     (0..points.len()).min_by(|&a, &b| d(&points[a]).total_cmp(&d(&points[b]))).unwrap_or(0)
@@ -66,7 +84,11 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     gf_core::body::scale_about(&mut head, pack.pivot(), shaped.controls.head_scale);
     let seam = gf_core::body::head_seam(pack, &head, &base.triangles, &base.kept)?;
     let st = gf_core::body::stitch_lod(pack, 0, &seam, &shaped.controls)?;
-    let (_, normals) = gf_core::body::two_sided_normals(&head, &base.triangles, &st);
+    let mut surface: Vec<Point> = head.clone();
+    surface.extend_from_slice(&st.positions);
+    let h = head.len() as u32;
+    let surface_triangles: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+    let normals = vertex_normals(&surface, &surface_triangles);
     let control = pack.control(&shaped.controls);
     let control_joint = pack.control_joint(&shaped.controls);
     let mut dense_head = dense.clone();
@@ -88,7 +110,6 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     for t in &base.triangles {
         obj.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
     }
-    let h = head.len() as u32;
     for t in &st.triangles {
         obj.push_str(&format!("f {} {} {}\n", t[0] + h + 1, t[1] + h + 1, t[2] + h + 1));
     }
@@ -104,8 +125,8 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
         let mut depths = Vec::new();
         let mut deepest = (0.0, [0.0; 3]);
         for p in &positions {
-            let j = nearest(&st.positions, *p);
-            let (q, n) = (st.positions[j], normals[j]);
+            let j = nearest(&surface, *p);
+            let (q, n) = (surface[j], normals[j]);
             let signed = (p[0] - q[0]) * n[0] + (p[1] - q[1]) * n[1] + (p[2] - q[2]) * n[2];
             if signed < -INSIDE_TOLERANCE_M {
                 depths.push(-signed * 1000.0);
@@ -134,7 +155,7 @@ pub fn fit(opts: &Options) -> Result<Value, String> {
     std::fs::write(out, obj).map_err(|e| format!("{}: {e}", out.display()))?;
     Ok(json!({"ok": true, "command": "wearable fit", "out": out.display().to_string(), "body": {"vertices": st.positions.len(), "head_vertices": head.len()},
               "garments": rows, "frame": "world: metres, z up, the character's root similarity applied",
-              "inside_meaning": format!("garment vertices more than {} mm on the inner side of the nearest stitched LOD0 body vertex's normal (a garment vertex near the head is measured against the body all the same)", INSIDE_TOLERANCE_M * 1000.0)}))
+              "inside_meaning": format!("garment vertices more than {} mm on the inner side of the nearest vertex of the stitched LOD0 character (head and body), along that vertex's normal", INSIDE_TOLERANCE_M * 1000.0)}))
 }
 
 fn pack_unit(manifest: &Value) -> f64 {
