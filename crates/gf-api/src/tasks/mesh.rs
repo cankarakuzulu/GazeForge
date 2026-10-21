@@ -217,6 +217,8 @@ type GarmentLevel = (Vec<u32>, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
 type Worn = (gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value);
 
 pub const GENTLE_LEVELS: usize = 3;
+const CAP_SIZE: usize = 512;
+const CAP_PAD: usize = 8;
 
 fn level_target(n: usize, body: usize, body0: usize, level: usize, power: f64) -> usize {
     let ratio = body as f64 / body0.max(1) as f64;
@@ -1598,6 +1600,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let mut wear_slots: Vec<(usize, usize)> = Vec::new();
     let mut physics_ext: Option<Value> = None;
     let mut wear_materials: Vec<gltf::Material> = Vec::new();
+    let mut cap_parts: Vec<(String, Vec<f32>, [f32; 3])> = Vec::new();
     if let Some((pack, pack_manifest, controls)) = &body {
         crate::jobs::progress("body", 0, 1, "");
         use gf_core::body as gb;
@@ -1612,6 +1615,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let mut cloth_nodes: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
         let mut spring_skin: Vec<Option<Vec<gf_core::body_rig::Influences>>> = Vec::new();
         let mut opening_rows: Vec<Value> = Vec::new();
+        let cap_size = spec.skin.as_ref().map_or(CAP_SIZE, |s| s.size);
         let mut clear0: Vec<Vec<Option<f64>>> = Vec::new();
         let mut springs: Vec<Value> = Vec::new();
         let body_counts: Vec<usize> = (0..levels.len()).map(|i| pack.lod_mesh(i.min(pack.lod_count() - 1)).map(|m| m.1.len())).collect::<Result<_, _>>()?;
@@ -1631,7 +1635,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 return Err(format!("wearable {} is a rigid item: it cannot hang in spring-bone chains", item.manifest.name));
             }
             let coarse_power = w.coarse_power.unwrap_or(if item.manifest.transparent { gf_core::body_shape::COARSE_POWER_CARDS } else { 1.0 });
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power,
+            let scalp_cap = item.manifest.transparent && item.manifest.attach.is_none() && w.scalp_cap.unwrap_or(true);
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power, "scalp_cap": scalp_cap,
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
@@ -1777,6 +1782,23 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         })
                         .collect();
                     super::wearable::layer(&mut layers);
+                }
+                if i == 0 && levels.len() > GENTLE_LEVELS + 1 && worn.iter().any(|w| w.4["scalp_cap"] == true) {
+                    let cap_map = gf_core::skin_map::build(&base.triangle_uvs, cap_size, CAP_PAD);
+                    for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
+                        if row["scalp_cap"] != true {
+                            continue;
+                        }
+                        let decoded = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok());
+                        let Some((colour, (w, h, rgba))) = decoded.and_then(|d| super::wearable::hair_colour(&d.2).map(|c| (c, d))) else {
+                            cap_parts.push((item.manifest.name.clone(), Vec::new(), [0.0; 3]));
+                            continue;
+                        };
+                        let samples = super::wearable::hair_samples(positions, &ladder[0].1, &ladder[0].2, (w, h, &rgba), super::wearable::CAP_SAMPLE_M);
+                        let hair = super::wearable::Surface::new(samples, &[]);
+                        let mask = super::wearable::cap_mask(&cap_map, &game, &base.triangles, &hair, super::wearable::CAP_REACH_M);
+                        cap_parts.push((item.manifest.name.clone(), mask, colour));
+                    }
                 }
                 if i == 0
                     && let (Some(br), Some(rig)) = (&body_rig, body_gltf_rig.as_mut())
@@ -2082,6 +2104,69 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         None => None,
     };
+    if cap_parts.iter().any(|p| !p.1.is_empty()) && lods.len() > GENTLE_LEVELS + 1 {
+        let size = spec.skin.as_ref().map_or(CAP_SIZE, |s| s.size);
+        let skin_index = lods[0].material;
+        let mut rgba = match skin_index.and_then(|k| materials[k].base_texture.as_ref()) {
+            Some(png) => gf_io::png::decode_rgba(png)?.2,
+            None => vec![255u8; size * size * 4],
+        };
+        let from = skin_index.map(|k| &materials[k]);
+        let decode = |png: &Option<Vec<u8>>| png.as_ref().and_then(|p| gf_io::png::decode_rgba(p).ok()).filter(|d| d.0 == size && d.1 == size).map(|d| d.2);
+        let mut normal = decode(&from.and_then(|m| m.normal_texture.clone()));
+        let mut orm = decode(&from.and_then(|m| m.orm_texture.clone()));
+        let mix = |v: &mut u8, to: f32, m: f32| *v = (*v as f32 * (1.0 - m) + to * m).round().clamp(0.0, 255.0) as u8;
+        let mut texels = vec![0usize; cap_parts.len()];
+        for k in 0..size * size {
+            let (best, m) = cap_parts.iter().enumerate().filter(|p| !p.1.1.is_empty()).map(|(i, p)| (i, p.1[k])).fold((0, 0.0f32), |a, b| if b.1 > a.1 { b } else { a });
+            if m <= 0.0 {
+                continue;
+            }
+            if m >= 0.5 {
+                texels[best] += 1;
+            }
+            let c = cap_parts[best].2;
+            for ch in 0..3 {
+                mix(&mut rgba[k * 4 + ch], c[ch], m);
+            }
+            if let Some(n) = normal.as_mut() {
+                for (ch, flat) in [128.0, 128.0, 255.0].into_iter().enumerate() {
+                    mix(&mut n[k * 4 + ch], flat, m);
+                }
+            }
+            if let Some(o) = orm.as_mut() {
+                mix(&mut o[k * 4 + 1], 255.0, m);
+            }
+        }
+        let dropped = from.is_some_and(|m| m.extension.is_some());
+        let far = gltf::Material {
+            name: "head_far".into(),
+            base_color: [1.0; 4],
+            base_texture: Some(gf_io::png::rgba(size, size, &rgba)?),
+            normal_texture: normal.map(|n| gf_io::png::rgba(size, size, &n)).transpose()?,
+            orm_texture: orm.map(|o| gf_io::png::rgba(size, size, &o)).transpose()?,
+            metallic: 0.0,
+            roughness: from.map_or(1.0, |m| m.roughness),
+            transmission: None,
+            ior: None,
+            blend: false,
+            alpha_cutoff: None,
+            double_sided: false,
+            extension: None,
+        };
+        let index = materials.len();
+        materials.push(far);
+        for lod in lods.iter_mut().skip(GENTLE_LEVELS + 1) {
+            lod.material = Some(index);
+        }
+        if body_meta["wearables"].is_object() {
+            body_meta["wearables"]["scalp_cap"] = json!({
+                "head_levels": (GENTLE_LEVELS + 1..lods.len()).collect::<Vec<_>>(), "texture_size": size, "reach_mm": super::wearable::CAP_REACH_M * 1000.0,
+                "on_skin": skin_index.is_some(), "live_skin_layers_dropped": dropped,
+                "items": cap_parts.iter().zip(&texels).map(|(p, &t)| if p.1.is_empty() { json!({"name": p.0, "skipped": "no colour texture"}) } else { json!({"name": p.0, "colour": p.2, "texels": t}) }).collect::<Vec<_>>(),
+            });
+        }
+    }
     crate::jobs::progress("write", 0, 1, "glb");
     let root = world.map(|w| {
         let t = w.translation_for_origin();

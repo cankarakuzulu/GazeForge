@@ -77,6 +77,8 @@ pub struct WearableRef {
     pub opening_m: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coarse_power: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scalp_cap: Option<bool>,
 }
 
 pub const COARSE_POWER_CARDS: f64 = 0.5;
@@ -312,7 +314,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None, scalp_cap: None };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");

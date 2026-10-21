@@ -478,8 +478,10 @@ MakeHuman's `z_depth` when it has none: lower is closer to the skin), and the bo
 `hide_body` is false. Near its open edges (`opening_m`, default 6 cm, 0 off) an opaque item fitted to the body takes
 on the skin weights of the body beyond them, so a cuff follows a bent hand and a collar a turned head. `export-glb` writes every item textured (colour,
 normal, occlusion packed into the metallic-roughness texture; alpha cards as a mask) on every level of detail, decimated
-to the body's ratio (hair and beard cards kept whole, and thinned more gently on LOD1-3: `coarse_power`), and skinned with the body rig. The Body shape panel (studio and
-browser) wears, hides, takes off, orders and sets the openings, coarse detail and physics of each item, with undo; the stitch preview draws them.
+to the body's ratio (hair and beard cards kept whole, and thinned more gently on LOD1-3: `coarse_power`; at LOD4-5 the
+head gets the hair's colour painted where it covers the scalp: `scalp_cap`), and skinned with the body rig. The Body shape panel (studio and
+browser) wears, hides, takes off, orders and sets the openings, coarse detail, far-level paint and physics of each item,
+with undo; the stitch preview draws them.
 
 **Physics** (`physics`, needs `--body-rig`): `cloth` writes a `_PIN` weight per vertex (1 where the item lies on the
 body, 0 where it hangs free); `springbone` builds chains of extra joints from the item's own mesh, rooted where it rests

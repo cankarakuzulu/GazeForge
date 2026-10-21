@@ -255,6 +255,22 @@ impl World {
         }))
     }
 
+    pub fn body_wear_cap(&mut self, asset: &str, on: bool) -> bool {
+        self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    if on {
+                        o.remove("scalp_cap");
+                    } else {
+                        o.insert("scalp_cap".into(), json!(false));
+                    }
+                }
+            }
+        })
+    }
+
     pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
         self.body_edit(|b| {
             for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -382,6 +398,8 @@ impl crate::studio::Studio<'_> {
             let mut opening_commit: Option<(String, f64)> = None;
             let coarse_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["coarse_power"].as_f64());
             let mut coarse_commit: Option<(String, Option<f64>)> = None;
+            let cap_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["scalp_cap"].as_bool()).unwrap_or(true);
+            let mut cap_commit: Option<(String, bool)> = None;
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.reference == asset).map_or("?", |w| w.name.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -454,6 +472,12 @@ impl crate::studio::Studio<'_> {
                         let p = (p * 100.0).round() / 100.0;
                         coarse_commit = Some((asset.clone(), (p != kind_default).then_some(p)));
                     }
+                    if ui_state.store_wear.iter().find(|w| w.reference == *asset).is_some_and(|w| w.transparent) {
+                        let mut cap = cap_of(asset);
+                        if ui.checkbox(&mut cap, tr("body.wear_cap")).on_hover_text(tr("body.wear_cap_tip")).changed() {
+                            cap_commit = Some((asset.clone(), cap));
+                        }
+                    }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
                     }
@@ -499,6 +523,9 @@ impl crate::studio::Studio<'_> {
                 && let Err(e) = self.world.body_wear_coarse(&asset, power)
             {
                 self.world.body_ui.error = Some(e);
+            }
+            if let Some((asset, on)) = cap_commit {
+                self.world.body_wear_cap(&asset, on);
             }
             if let Some((asset, hide)) = wear_commit {
                 let worn_now = worn.iter().any(|w| w.0 == asset);

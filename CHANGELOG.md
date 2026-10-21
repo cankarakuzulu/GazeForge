@@ -89,6 +89,14 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **A painted hair cap at far levels.** At LOD4 and LOD5, where a hair or beard keeps too few cards to cover the
+  scalp, the head takes a second material: its skin texture (or plain white without skin) with the item's colour
+  (its texture's alpha-weighted mean) painted wherever the item's opaque texels lie within 12 mm outside the skin at
+  full detail, feathered at the edge and made matte (roughness 1, flat normal). The hair is sampled every 3 mm over its
+  triangles and only where its texture is opaque. `body.wearables[].scalp_cap` (default on for alpha-card items) and a
+  "Paint far levels" box in both clients turn it off; the sidecar reports per item the colour and texels painted.
+  The far material drops the skin's live layers (`GAZEFORGE_skin`). Looks to judge: under long hair the cap also
+  darkens the ear and nape, and a dense dark beard becomes a solid dark jaw.
 - **Hair keeps more of itself at middle distance.** On LOD1 to LOD3 a wearable now thins by the body's vertex ratio
   raised to its `coarse_power` (`body.wearables[].coarse_power`, 0.25 to 1; default 0.5 for hair, beards and other
   alpha-card items, 1 for everything else, so opaque clothes are unchanged); LOD4 and LOD5 thin with the body again.
@@ -122,6 +130,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- The wearable fitting's nearest-point lookup could return a point up to one 2 cm grid cell beyond the distance asked
+  for. Exports of the dressed, ponytail, long-hair and cape characters are byte-identical before and after the fix
+  (pins and push-out clearances never asked for a reach close to the cell size); the scalp cap, which does, found it.
 - A glb wearable whose colour texture is a JPEG (generated items usually are) came in untextured; the JPEG is now
   decoded and kept as a PNG (one new dependency: `jpeg-decoder`, MIT or Apache-2.0, pure Rust, no dependencies of its
   own; the browser build does not include it).

@@ -602,7 +602,7 @@ impl Surface {
             if let Some((d, i)) = best
                 && d.sqrt() <= r as f64 * self.cell
             {
-                return Some(i);
+                return (d.sqrt() <= reach).then_some(i);
             }
         }
         best.filter(|b| b.0.sqrt() <= reach).map(|b| b.1)
@@ -730,6 +730,101 @@ pub fn depth_of(binding: &Binding) -> f64 {
 
 pub fn layer_depth(binding: &Binding, layer: Option<f64>) -> f64 {
     layer.unwrap_or_else(|| depth_of(binding))
+}
+
+pub const CAP_REACH_M: f64 = 0.012;
+pub const CAP_BEHIND_M: f64 = 0.005;
+
+pub fn cap_mask(map: &gf_core::skin_map::TexelMap, head: &[Point], triangles: &[[u32; 3]], hair: &Surface, reach: f64) -> Vec<f32> {
+    let normals = vertex_normals(head, triangles);
+    let n = map.size * map.size;
+    let mut mask = vec![0f32; n];
+    for (k, m) in mask.iter_mut().enumerate() {
+        let t = map.triangle[k];
+        if t == gf_core::skin_map::NONE {
+            continue;
+        }
+        let tri = triangles[t as usize];
+        let [b0, b1] = map.bary[k];
+        let b = [b0 as f64, b1 as f64, 1.0 - b0 as f64 - b1 as f64];
+        let p: Point = std::array::from_fn(|j| (0..3).map(|c| b[c] * head[tri[c] as usize][j]).sum());
+        let nr: Point = std::array::from_fn(|j| (0..3).map(|c| b[c] * normals[tri[c] as usize][j]).sum());
+        let len = (nr[0] * nr[0] + nr[1] * nr[1] + nr[2] * nr[2]).sqrt().max(1e-12);
+        if let Some(j) = hair.nearest(p, reach) {
+            let q = hair.points[j];
+            let out = ((q[0] - p[0]) * nr[0] + (q[1] - p[1]) * nr[1] + (q[2] - p[2]) * nr[2]) / len;
+            if out > -CAP_BEHIND_M {
+                *m = 1.0;
+            }
+        }
+    }
+    let covered = mask.clone();
+    for (k, m) in mask.iter_mut().enumerate() {
+        let s = map.source[k];
+        if map.triangle[k] == gf_core::skin_map::NONE && s != gf_core::skin_map::NONE {
+            *m = covered[s as usize];
+        }
+    }
+    feather(&mut mask, map.size, (map.size / 256).max(2));
+    mask
+}
+
+pub fn feather(mask: &mut [f32], size: usize, radius: usize) {
+    let mut tmp = vec![0f32; mask.len()];
+    for _ in 0..2 {
+        for y in 0..size {
+            for x in 0..size {
+                let (lo, hi) = (x.saturating_sub(radius), (x + radius).min(size - 1));
+                tmp[y * size + x] = (lo..=hi).map(|i| mask[y * size + i]).sum::<f32>() / (hi - lo + 1) as f32;
+            }
+        }
+        for y in 0..size {
+            for x in 0..size {
+                let (lo, hi) = (y.saturating_sub(radius), (y + radius).min(size - 1));
+                mask[y * size + x] = (lo..=hi).map(|i| tmp[i * size + x]).sum::<f32>() / (hi - lo + 1) as f32;
+            }
+        }
+    }
+}
+
+pub const CAP_SAMPLE_M: f64 = 0.003;
+
+pub fn hair_samples(positions: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], texture: (usize, usize, &[u8]), spacing: f64) -> Vec<Point> {
+    let (w, h, rgba) = texture;
+    let wrap = |t: f64| if (0.0..=1.0).contains(&t) { t } else { t.rem_euclid(1.0) };
+    let alpha = |uv: [f64; 2]| {
+        let x = ((wrap(uv[0]) * w as f64) as usize).min(w - 1);
+        let y = ((wrap(uv[1]) * h as f64) as usize).min(h - 1);
+        rgba[(y * w + x) * 4 + 3]
+    };
+    let mut out = Vec::new();
+    for (t, tri) in triangles.iter().enumerate() {
+        let p = tri.map(|v| positions[v as usize]);
+        let edge = |a: Point, b: Point| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+        let n = ((edge(p[0], p[1]).max(edge(p[1], p[2])).max(edge(p[2], p[0])) / spacing).ceil() as usize).clamp(1, 200);
+        for i in 0..=n {
+            for j in 0..=n - i {
+                let b = [i as f64 / n as f64, j as f64 / n as f64, (n - i - j) as f64 / n as f64];
+                let uv = [0, 1].map(|k| (0..3).map(|c| b[c] * uvs[t][c][k] as f64).sum::<f64>());
+                if alpha(uv) >= 128 {
+                    out.push(std::array::from_fn(|k| (0..3).map(|c| b[c] * p[c][k]).sum()));
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn hair_colour(rgba: &[u8]) -> Option<[f32; 3]> {
+    let (mut sum, mut weight) = ([0f64; 3], 0f64);
+    for p in rgba.chunks_exact(4) {
+        let a = p[3] as f64 / 255.0;
+        for c in 0..3 {
+            sum[c] += a * p[c] as f64;
+        }
+        weight += a;
+    }
+    (weight > 0.0).then(|| sum.map(|s| (s / weight) as f32))
 }
 
 pub const OPENING_M: f64 = 0.06;
@@ -1085,6 +1180,37 @@ pub fn check(opts: &Options) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cap_covers_the_skin_under_the_hair_and_the_colour_ignores_clear_pixels() {
+        let head: Vec<Point> = vec![[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.1, 0.1, 0.0], [0.0, 0.1, 0.0]];
+        let triangles = vec![[0, 1, 2], [0, 2, 3]];
+        let uv = |p: Point| [(p[0] / 0.1) as f32, (p[1] / 0.1) as f32];
+        let triangle_uvs: Vec<[gf_geom::Uv; 3]> = triangles.iter().map(|t: &[u32; 3]| t.map(|v| uv(head[v as usize]))).collect();
+        let map = gf_core::skin_map::build(&triangle_uvs, 64, 2);
+        let mut hair = Vec::new();
+        for i in 0..=10 {
+            for j in 0..=20 {
+                hair.push([0.005 * i as f64, 0.005 * j as f64, 0.005]);
+            }
+        }
+        let surface = Surface::new(hair, &[]);
+        let mask = cap_mask(&map, &head, &triangles, &surface, CAP_REACH_M);
+        let at = |u: f32, v: f32| mask[(v * 63.0).round() as usize * 64 + (u * 63.0).round() as usize];
+        assert!(at(0.2, 0.5) > 0.99, "under the hair: {}", at(0.2, 0.5));
+        assert!(at(0.8, 0.5) < 0.01, "3 cm past the hair's edge: {}", at(0.8, 0.5));
+        let row: Vec<f32> = (0..64).map(|x| at(x as f32 / 63.0, 0.5)).collect();
+        assert!(row.iter().any(|&m| m > 0.05 && m < 0.95), "the edge is feathered: {row:?}");
+        assert!(row.windows(2).filter(|w| w[0] > 0.05 && w[0] < 0.95).all(|w| w[1] <= w[0] + 1e-6), "and falls away from the hair: {row:?}");
+        let below = Surface::new(vec![[0.02, 0.05, -0.02]], &[]);
+        assert!(cap_mask(&map, &head, &triangles, &below, CAP_REACH_M).iter().all(|&m| m == 0.0), "hair behind the skin paints nothing");
+        let pixels = [200u8, 40, 20, 255, 0, 0, 250, 0];
+        assert_eq!(hair_colour(&pixels), Some([200.0, 40.0, 20.0]));
+        assert_eq!(hair_colour(&[9, 9, 9, 0]), None);
+        let card = [[0.0, 0.0, 0.0], [0.03, 0.0, 0.0], [0.0, 0.03, 0.0]];
+        let samples = hair_samples(&card, &[[0, 1, 2]], &[[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]], (2, 1, &pixels), 0.003);
+        assert!(!samples.is_empty() && samples.iter().all(|p| p[0] < 0.015 + 1e-9), "only the opaque left half of the texture is sampled: {} samples", samples.len());
+    }
 
     #[test]
     fn a_sleeve_takes_the_hand_s_weights_only_near_its_open_cuff() {
