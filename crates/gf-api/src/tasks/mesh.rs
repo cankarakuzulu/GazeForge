@@ -86,6 +86,10 @@ pub struct GenitalMesh {
     pub flipped: bool,
 }
 
+fn gltf_v(uvs: &[[gf_geom::Uv; 3]]) -> Vec<[gf_geom::Uv; 3]> {
+    uvs.iter().map(|t| t.map(|u| [u[0], 1.0 - u[1]])).collect()
+}
+
 pub fn genital_mesh(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Controls, level: usize, body_positions: &[Point], body_normals: &[Point]) -> Result<GenitalMesh, String> {
     let g = pack.genital.as_ref().ok_or("the spec asks for genitals but the body has no helper-genital patch: re-import it (body.import)")?;
     if pack.helpers.positions.is_empty() {
@@ -142,7 +146,7 @@ fn genital_lod(
 ) -> Result<(Lod, Value), String> {
     let GenitalMesh { level: l, positions, normals, triangles, uvs, rim, gap_mm, flipped } = genital_mesh(pack, controls, level, body_positions, body_normals)?;
     let g = pack.genital.as_ref().ok_or("the body has no helper-genital patch")?;
-    let surface = gm::split_seams(&triangles, &uvs);
+    let surface = gm::split_seams(&triangles, &gltf_v(&uvs));
     let skin = match by_obj {
         Some(w) => {
             let none: Vec<(usize, f64)> = Vec::new();
@@ -1663,7 +1667,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let hidden = super::wearable::hidden_body(pack, body_lod, &st, &covered)?;
                 st.triangles.iter().zip(&st.uvs).filter(|(t, _)| !t.iter().all(|&v| hidden[v as usize])).map(|(t, u)| (*t, *u)).unzip()
             };
-            let surface = gm::split_seams(&body_triangles, &body_uvs);
+            let surface = gm::split_seams(&body_triangles, &gltf_v(&body_uvs));
             let name = format!("Body_LOD{i}");
             let body_skin = match (&body_rig, &head_influences) {
                 (Some(br), Some(hi)) => {

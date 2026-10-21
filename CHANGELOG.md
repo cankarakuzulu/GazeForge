@@ -90,8 +90,14 @@ open, with its last measurement, rather than left out.
 ### Changed
 
 - **Stitch gates on coarse levels of detail.** On LOD1 and coarser, the seam's normal-continuity limit is the larger of
-  40 degrees and the sharpest angle inside either side at that level (the body's blend band, the head's seam row); LOD0
-  and the stitch preview keep 40 degrees. The sidecar reports each level's limit.
+  40 degrees and the sharpest angle inside either side at that level (the body's blend band, the head's seam row),
+  capped at 60 degrees so that one sharp edge cannot open the gate; LOD0 and the stitch preview keep 40 degrees. The
+  sidecar reports each level's limit and the cap. Over the 128-character grid the cap changes no result (the same 119
+  pass, the same 9 fail with the same messages); the highest limit falls from 117.4 to 60 degrees.
+- **Body and genital UVs in glTF's convention.** The body and genital meshes now write V as glTF reads it (1 - v of
+  MakeHuman's OBJ), as garments already did, so a MakeHuman body texture maps the right way up; before, it landed on
+  the wrong parts of the body. The head's UVs are unchanged (its textures are generated in glTF's convention already).
+  Body glbs exported before this change carry the old V.
 
 ### Fixed
 
@@ -105,8 +111,7 @@ open, with its last measurement, rather than left out.
 
 - The neck seam with six levels of detail (ladder above, 800-vertex floor): 119 of the 128 characters of the macro grid
   pass the stitch gates at every level (116 with the earlier three levels); the 9 left carry 10 failures, 5 on band
-  folds or flips and 5 on the seam angle (one character at two levels). The relative limit can rise far above 40
-  degrees where a side has one sharp edge (up to 117 at LOD5 in the grid) - the seams that pass stay at or under 53
+  folds or flips and 5 on the seam angle (one character at two levels). The seams that pass stay at or under 53
   degrees.
 - Wearables: inward-facing layers (a collar's underside, cuffs) stay where the binding puts them and can sit inside a
   heavier neck or wrist; at the coarsest levels a trouser hem can rise above the shoe opening; a card beard keeps only
@@ -114,8 +119,6 @@ open, with its last measurement, rather than left out.
   hand-chosen bindings (loose cloth can hug muscles); a rigid hat does not follow a head's shape (bind hats instead);
   a glb's JPEG colour texture, or one kept outside the glb, is not read yet (give a PNG; the binding's report names
   which).
-- Body and genital UVs reach glTF in the OBJ convention (V up), so a body texture would map upside down; garments are
-  flipped to glTF's convention.
 - Head joints follow the head by a local fit (above): on an unchanged head they sit 0.4 mm further from the eyeball
   centres than before.
 - With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
