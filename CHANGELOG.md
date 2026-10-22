@@ -254,8 +254,9 @@ open, with its last measurement, rather than left out.
 - **Grown hair no longer strays under the jaw or flies off the temples.** Strands from the front of the part slid
   down the forehead, along the face's edge and in under the chin (49 of 20000). While on the head, each step now turns
   halfway back to the comb direction, so front hair keeps combing back; a strand that leaves the head above the ears
-  falls instead of arcing out; the face's keep-out reaches 5 cm under the chin. The groom report counts flyaways and
-  strands under the jaw (now 0 and 2) and `groom_gate` checks both.
+  falls instead of arcing out; the face's keep-out reaches 5 cm under the chin. The last pass alternates keeping a
+  point off the face and outside the skin (up to three rounds), so neither undoes the other. The groom report counts
+  flyaways and strands under the jaw (now 0 and 0, centre and side part) and `groom_gate` checks both.
 - **Grown hair rose off the head with a side part.** A strand kept the direction it left the scalp with, so hair
   combed across the top from a side part flew off in a straight line into a tall overhang. Strands now follow the
   head's curve while above the ears and near it, then fall; every groom lies flatter and reads as combed hair. The

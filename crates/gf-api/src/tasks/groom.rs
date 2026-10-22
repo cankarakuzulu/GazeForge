@@ -20,6 +20,7 @@ const FALL: f64 = 1.0;
 const JAW_MARGIN_M: f64 = -0.015;
 const THROAT_M: f64 = 0.05;
 const OUTSIDE_PASSES: usize = 4;
+const SETTLE_ROUNDS: usize = 3;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
 const CURL_FADE_M: f64 = 0.03;
@@ -272,16 +273,19 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let tip = k as f64 / (base.len() - 1) as f64;
             let frizz = scale([rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5], 2.0 * g.frizz_m * tip);
             line[k] = add(add(base[k], curl), frizz);
-            if k > 0
-                && let Some(q) = face.keep_out(line[k])
-            {
-                line[k] = q;
-                kept_off_face += 1;
-            }
-            if k > 0
-                && let Some(q) = outside(surface, line[k])
-            {
-                line[k] = q;
+            for _ in 0..SETTLE_ROUNDS * usize::from(k > 0) {
+                let face_moved = face.keep_out(line[k]);
+                if let Some(q) = face_moved {
+                    line[k] = q;
+                    kept_off_face += 1;
+                }
+                let skin_moved = outside(surface, line[k]);
+                if let Some(q) = skin_moved {
+                    line[k] = q;
+                }
+                if skin_moved.is_none() || face.keep_out(line[k]).is_none() {
+                    break;
+                }
             }
         }
         lengths.push(base.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum::<f64>());
