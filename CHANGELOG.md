@@ -324,6 +324,12 @@ open, with its last measurement, rather than left out.
   a vertex is kept no deeper in a capsule than it rests. Cape over a suit: stretch at most 1.037 on every level
   (LOD2 1.112 -> 1.016); the cape alone hangs from the shoulders as fitted. The bake report gives how far any vertex
   went into a capsule beyond its rest (0 to 0.11 mm here); nothing goes into the body beyond its rest.
+- **An inside-out item pulled the clothes under it out through it.** Layering took "outside" from each item's own
+  winding, so under an item modelled inside out (an imported or older wearable; `wearable bind` rewinds new ones)
+  everything counted as showing and was moved outward through it: a cape over a suit pushed 288 suit vertices out by
+  up to 63 mm. Export and the body preview now read each worn item's facing against the body (`faces_out` in the
+  wearable report) and lay it out as if it faced out; the cape now moves 89 suit vertices inward by at most 7.9 mm,
+  like the same cape rewound (92, 7.6 mm). Items that already face out export unchanged.
 - **Specks of an inner garment showed through the one over it.** Worn layering tucked the inner item's vertices
   behind the outer one, but two flat-faceted meshes can still cross between their vertices: a cape over a suit
   showed suit-coloured dots near its top edge (8 sample points of the suit outside the cape, up to 0.72 mm, while

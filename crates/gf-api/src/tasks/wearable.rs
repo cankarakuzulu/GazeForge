@@ -429,19 +429,30 @@ fn facing_body(garment: &[Point], triangles: &[[u32; 3]], frame: &BaseFrame, fac
     let index: HashMap<u32, u32> = ids.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
     let points: Vec<Point> = ids.iter().filter_map(|&v| frame.resolve(v)).collect();
     let tris: Vec<[u32; 3]> = faces.iter().filter_map(|f| Some([*index.get(&f[0])?, *index.get(&f[1])?, *index.get(&f[2])?])).collect();
-    let surface = Surface::new(points, &tris);
-    let base_normals = surface.normals.clone();
+    toward_body(garment, triangles, &Surface::new(points, &tris))
+}
+
+pub fn toward_body(garment: &[Point], triangles: &[[u32; 3]], body: &Surface) -> (usize, usize) {
     let normals = vertex_normals(garment, triangles);
     let (mut toward, mut measured) = (0, 0);
     for (p, n) in garment.iter().zip(&normals) {
-        let Some(j) = surface.nearest(*p, FACING_REACH_M) else { continue };
+        let Some(j) = body.nearest(*p, FACING_REACH_M) else { continue };
         measured += 1;
-        let m = base_normals[j];
+        let m = body.normals[j];
         if n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0.0 {
             toward += 1;
         }
     }
     (toward, measured)
+}
+
+pub fn faces_out(garment: &[Point], triangles: &[[u32; 3]], body: &Surface) -> bool {
+    let (toward, measured) = toward_body(garment, triangles, body);
+    !(measured > 0 && 2 * toward > measured)
+}
+
+pub fn wound_out(triangles: &[[u32; 3]], faces_out: bool) -> Vec<[u32; 3]> {
+    if faces_out { triangles.to_vec() } else { triangles.iter().map(|t| [t[0], t[2], t[1]]).collect() }
 }
 
 fn rewind_obj(text: &str) -> String {
@@ -812,6 +823,7 @@ pub struct Layered<'a> {
     pub rigid: bool,
     pub hide_hair: bool,
     pub cut: Option<&'a mut Vec<bool>>,
+    pub faces_out: bool,
 }
 
 pub fn depth_of(binding: &Binding) -> f64 {
@@ -1189,6 +1201,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
     let mut order: Vec<usize> = (0..garments.len()).collect();
     order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));
     let mut reports = vec![Value::Null; garments.len()];
+    let wound: Vec<Vec<[u32; 3]>> = garments.iter().map(|g| wound_out(&g.triangles, g.faces_out)).collect();
     for (at, &g) in order.iter().enumerate() {
         if !garments[g].opaque {
             continue;
@@ -1202,18 +1215,16 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
         for &k in &inner {
             let offset = points.len() as u32;
             points.extend_from_slice(garments[k].positions);
-            tris.extend(garments[k].triangles.iter().map(|t| t.map(|v| v + offset)));
+            tris.extend(wound[k].iter().map(|t| t.map(|v| v + offset)));
         }
         let surface = Surface::new(points, &tris);
-        let triangles = garments[g].triangles.clone();
-        let mut report = push_out(garments[g].positions, &triangles, &surface, CLEARANCE_M);
+        let mut report = push_out(garments[g].positions, &wound[g], &surface, CLEARANCE_M);
         report["over"] = json!(inner.len());
-        let outer = Outer::new(garments[g].positions, &triangles);
+        let outer = Outer::new(garments[g].positions, &wound[g]);
         let showing = |p: Point| outer.under(p).filter(|&(s, _)| s > -CLEARANCE_M && s < TUCK_REACH_M).map(|(s, n)| (s + CLEARANCE_M, n));
         let (mut tucked, mut facets, mut deepest) = (0usize, 0usize, 0.0f64);
         for &k in &inner {
-            let k_triangles = garments[k].triangles.clone();
-            let (t, f, d) = tuck(garments[k].positions, &k_triangles, &showing);
+            let (t, f, d) = tuck(garments[k].positions, &wound[k], &showing);
             tucked += t;
             facets += f;
             deepest = deepest.max(d);
@@ -1227,8 +1238,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
             if garments[g].transparent || garments[g].positions.iter().all(|p| p[2] <= head) {
                 continue;
             }
-            let triangles = garments[g].triangles.clone();
-            let outer = Outer::new(garments[g].positions, &triangles);
+            let outer = Outer::new(garments[g].positions, &wound[g]);
             let lowest = garments[g].positions.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
             let brim = outer.brim(lowest);
             let over = |p: Point| outer.under(p).filter(|&(_, n)| p[2] > head && n[2] > -HAIR_FACING_DOWN);
@@ -1603,9 +1613,9 @@ mod tests {
             let mut cuts = [vec![false; deep.len()], vec![false; shallow.len()], vec![false; brim.len()]];
             let reports = {
                 let [cd, cs, cb] = &mut cuts;
-                let card = |positions, triangles, cut| Layered { positions, triangles, depth: 50.0, opaque: false, transparent: true, rigid: false, hide_hair: false, cut: Some(cut) };
+                let card = |positions, triangles, cut| Layered { positions, triangles, depth: 50.0, opaque: false, transparent: true, rigid: false, hide_hair: false, cut: Some(cut), faces_out: true };
                 let mut items = vec![
-                    Layered { positions: &mut hat, triangles: hat_t, depth: 50.0, opaque: true, transparent: false, rigid: false, hide_hair: hide, cut: None },
+                    Layered { positions: &mut hat, triangles: hat_t, depth: 50.0, opaque: true, transparent: false, rigid: false, hide_hair: hide, cut: None, faces_out: true },
                     card(&mut deep, deep_t, cd),
                     card(&mut shallow, shallow_t, cs),
                     card(&mut brim, brim_t, cb),
@@ -1687,8 +1697,8 @@ mod tests {
         }
         let (before, outer_before) = (inner.clone(), outer.clone());
         let mut items = vec![
-            Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None },
-            Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None },
+            Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None, faces_out: true },
+            Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None, faces_out: true },
         ];
         let reports = layer(&mut items, None);
         assert_eq!(outer, outer_before, "the coarse outer sheet is not moved: its own vertices are clear of the inner one");
@@ -1701,6 +1711,32 @@ mod tests {
                 assert_eq!(p, q, "outside the outer sheet's footprint nothing moves");
             }
         }
+    }
+
+    #[test]
+    fn an_inside_out_outer_item_tucks_the_inner_one_under_it_not_through_it() {
+        let run = |inside_out: bool| {
+            let (mut inner, inner_t) = grid(40, 0.4, -0.01, 0.0);
+            let (mut outer, mut outer_t) = grid(4, 0.2, 0.0, 0.1);
+            for p in inner.iter_mut() {
+                let clear = outer.iter().all(|o| ((o[0] - p[0]).powi(2) + (o[1] - p[1]).powi(2)).sqrt() > 0.015);
+                if clear && p[0] > 0.1 && p[0] < 0.3 && p[1] > 0.0 && p[1] < 0.2 {
+                    p[2] = 0.003;
+                }
+            }
+            if inside_out {
+                outer_t = outer_t.iter().map(|t| [t[0], t[2], t[1]]).collect();
+            }
+            let mut items = vec![
+                Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None, faces_out: true },
+                Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None, faces_out: !inside_out },
+            ];
+            layer(&mut items, None);
+            inner
+        };
+        let (right, wrong) = (run(false), run(true));
+        assert!(right.iter().all(|p| p[2] <= 0.0) && wrong.iter().all(|p| p[2] <= 0.0), "everything ends behind the outer item, whichever way it is wound");
+        assert_eq!(right, wrong, "an item known to face in tucks exactly as one that faces out");
     }
 
     #[test]

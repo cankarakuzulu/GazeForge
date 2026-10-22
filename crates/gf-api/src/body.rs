@@ -818,10 +818,11 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                         covered.extend(item.binding.hidden.iter().copied());
                     }
                     let tris = crate::tasks::wearable::triangles_of(&item.faces);
+                    let out = crate::tasks::wearable::faces_out(&p, &tris, &surface);
                     if !item.manifest.transparent && item.manifest.attach.is_none() {
-                        crate::tasks::wearable::push_out(&mut p, &tris, &surface, crate::tasks::wearable::CLEARANCE_M);
+                        crate::tasks::wearable::push_out(&mut p, &crate::tasks::wearable::wound_out(&tris, out), &surface, crate::tasks::wearable::CLEARANCE_M);
                     }
-                    dressed.push((w, item, p, tris));
+                    dressed.push((w, item, p, tris, out));
                 }
                 let head_z = gf_core::base_landmarks::on(&dense).ok().and_then(|l| Some((l.get(&234)?[2] + l.get(&454)?[2]) / 2.0));
                 let mut cuts: Vec<Vec<bool>> = dressed.iter().map(|d| vec![false; d.2.len()]).collect();
@@ -829,7 +830,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     let mut layers: Vec<crate::tasks::wearable::Layered> = dressed
                         .iter_mut()
                         .zip(cuts.iter_mut())
-                        .map(|((w, item, p, tris), cut)| crate::tasks::wearable::Layered {
+                        .map(|((w, item, p, tris, out), cut)| crate::tasks::wearable::Layered {
                             triangles: tris.clone(),
                             depth: crate::tasks::wearable::layer_depth(&item.binding, w.layer),
                             opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
@@ -837,19 +838,20 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                             rigid: item.manifest.attach.is_some(),
                             hide_hair: w.hair == "hide",
                             cut: Some(cut),
+                            faces_out: *out,
                             positions: p,
                         })
                         .collect();
                     crate::tasks::wearable::layer(&mut layers, head_z);
                 }
-                for ((_, _, _, tris), cut) in dressed.iter_mut().zip(&cuts) {
+                for ((_, _, _, tris, _), cut) in dressed.iter_mut().zip(&cuts) {
                     tris.retain(|t| !t.iter().all(|&v| cut[v as usize]));
                 }
                 cover_head = head_z;
-                hat_covers = dressed.iter().filter(|(_, item, ..)| !item.manifest.transparent).map(|(w, _, p, tris)| (p.clone(), tris.clone(), w.hair == "hide")).collect();
+                hat_covers = dressed.iter().filter(|(_, item, ..)| !item.manifest.transparent).map(|(w, _, p, tris, _)| (p.clone(), tris.clone(), w.hair == "hide")).collect();
                 let mut meshes = Vec::new();
                 let strand_count = input.get("strands_preview").and_then(Value::as_u64).unwrap_or(STRANDS_PREVIEW) as usize;
-                for ((w, item, p, tris), cut) in dressed.iter().zip(&cuts) {
+                for ((w, item, p, tris, _), cut) in dressed.iter().zip(&cuts) {
                     if w.strands && item.manifest.transparent && item.manifest.attach.is_none() {
                         let texture = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok());
                         if let Some((tw, th, rgba)) = texture {

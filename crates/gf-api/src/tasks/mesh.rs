@@ -1830,7 +1830,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let surface = super::wearable::Surface::new(points, &tris);
                 let mut dressed = std::mem::take(&mut pending);
                 for (item, garment, _, row) in dressed.iter_mut() {
-                    row["pushed"] = if item.manifest.attach.is_some() { json!("no: a rigid item rides its bone") } else if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
+                    let tris = super::wearable::triangles_of(&item.faces);
+                    let out = super::wearable::faces_out(garment, &tris, &surface);
+                    row["faces_out"] = json!(out);
+                    row["pushed"] = if item.manifest.attach.is_some() { json!("no: a rigid item rides its bone") } else if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::wound_out(&tris, out), &surface, super::wearable::CLEARANCE_M) };
                 }
                 let mut cuts: Vec<Vec<bool>> = dressed.iter().map(|d| vec![false; d.1.len()]).collect();
                 let reports = {
@@ -1845,6 +1848,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                             rigid: item.manifest.attach.is_some(),
                             hide_hair: row["hair"] == "hide",
                             cut: Some(cut),
+                            faces_out: row["faces_out"] != false,
                             positions: garment,
                         })
                         .collect();
@@ -2010,6 +2014,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                             rigid: item.manifest.attach.is_some(),
                             hide_hair: row["hair"] == "hide",
                             cut: None,
+                            faces_out: row["faces_out"] != false,
                             positions,
                         })
                         .collect();
