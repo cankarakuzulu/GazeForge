@@ -505,12 +505,6 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                     next = q;
                     pushes += 1;
                 }
-                if tail.is_none()
-                    && dot(sub(tp, next), sub(tp, next)) > TIE_CLEAR_OF_M * TIE_CLEAR_OF_M
-                    && let Some(j) = surface.nearest(next, HUG_M)
-                {
-                    gather_off = gather_off.max(surface.signed(next, j));
-                }
                 line.push(next);
             }
             asked += g.length_m;
@@ -676,6 +670,18 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                 if skin_moved.is_none() || (face.keep_out_toward(line[k], side).is_none() && (!clear_forehead || hairline.off_forehead(line[k]).is_none())) {
                     break;
                 }
+            }
+            if let Some((tp, _)) = tie_point
+                && k > 0
+                && k < tail_from
+                && dot(sub(tp, line[k]), sub(tp, line[k])) > TIE_CLEAR_OF_M * TIE_CLEAR_OF_M
+                && let Some(j) = surface.nearest(line[k], HUG_M)
+            {
+                let off = surface.signed(line[k], j);
+                if off > GATHER_SNUG_M {
+                    line[k] = sub(line[k], scale(surface.normals[j], off - GATHER_SNUG_M));
+                }
+                gather_off = gather_off.max(surface.signed(line[k], j));
             }
         }
         lengths.push(base.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum::<f64>());
