@@ -868,7 +868,11 @@ pub fn with_document(glb: &[u8], edit: impl FnOnce(&mut Value) -> Result<(), Str
     let (mut doc, bin) = chunks(glb)?;
     let bin = bin.to_vec();
     edit(&mut doc)?;
-    let mut text = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
+    assemble(&doc, &bin)
+}
+
+pub fn assemble(doc: &Value, bin: &[u8]) -> Result<Vec<u8>, String> {
+    let mut text = serde_json::to_vec(doc).map_err(|e| e.to_string())?;
     while text.len() % 4 != 0 {
         text.push(b' ');
     }
@@ -882,7 +886,7 @@ pub fn with_document(glb: &[u8], edit: impl FnOnce(&mut Value) -> Result<(), Str
     out.extend(&text);
     out.extend((bin.len() as u32).to_le_bytes());
     out.extend(0x004E_4942u32.to_le_bytes());
-    out.extend(&bin);
+    out.extend_from_slice(bin);
     Ok(out)
 }
 

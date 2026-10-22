@@ -1070,6 +1070,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     allowed.push(BODY_KEYS);
     allowed.push(BODY_RIG_KEYS);
     allowed.push(VRM_KEYS);
+    allowed.push(super::bake::KEYS);
     if opts.get("lids").map(String::as_str) == Some("auto") {
         allowed.push(LID_EXPORT_KEYS);
         if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
@@ -1157,6 +1158,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let bake_settings = super::bake::settings(opts)?;
+    if bake_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
+        return Err("--bake goes with --format glb: the .vrm leaves GAZEFORGE_physics out (its colliders are placed for the A-pose rest)".into());
+    }
     let vrm_meta: Option<Value> = match opts.get("format").map(String::as_str).unwrap_or("glb") {
         "glb" => {
             if let Some(k) = VRM_KEYS[1..].iter().find(|k| opts.contains_key(**k)) {
@@ -1986,7 +1991,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 .collect();
             let cloth: Vec<Value> = cloth_nodes.iter().map(|(name, nodes)| json!({"wearable": name, "nodes": nodes, "pin": "_PIN"})).collect();
             physics_ext = Some(json!({"version": 1, "colliders": colliders, "cloth": cloth, "springs": springs,
-                                      "spring_defaults": {"stiffness": 1.0, "drag": 0.4, "gravity": 1.0, "hit_radius_m": 0.02},
+                                      "spring_defaults": {"stiffness": 1.0, "drag": 0.4, "gravity": 0.1, "hit_radius_m": 0.02},
                                       "pin": {"near_m": super::wearable::PIN_NEAR_M, "far_m": super::wearable::PIN_FAR_M},
                                       "frame": "glTF: metres, y up, in the Character root's space (the root's transform applies, like the meshes')"}));
             body_meta["physics"] = json!({"colliders": colliders.len(), "cloth": cloth_nodes.len(), "springs": springs.len(), "extension": "GAZEFORGE_physics"});
@@ -2309,6 +2314,14 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_physics", ext)?,
         None => bytes,
     };
+    let (bytes, spring_fit) = super::bake::fit_colliders(&bytes)?;
+    if !spring_fit.is_null() {
+        body_meta["physics"]["spring_colliders"] = spring_fit;
+    }
+    let (bytes, bake_report) = match &bake_settings {
+        Some(b) => super::bake::bake(&bytes, b)?,
+        None => (bytes, Value::Null),
+    };
     let humanoid = body_rig.as_ref().filter(|_| rig_data.is_none()).and_then(|br| br.meta["source"]["preset"].as_str()).and_then(|preset| {
         let table = |rows: Vec<(String, String)>| rows.into_iter().map(|(p, b)| (p, Value::String(b))).collect::<serde_json::Map<String, Value>>();
         let godot = gf_core::humanoid::godot(preset)?.into_iter().map(|(p, b)| (p.to_string(), b)).collect();
@@ -2397,6 +2410,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     if let Some(skin) = &skin_report {
         sidecar["skin"] = skin.clone();
     }
+    if !bake_report.is_null() {
+        sidecar["bake"] = bake_report.clone();
+    }
     let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
     std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
     let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
@@ -2410,6 +2426,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if lid_run.is_some() {
         result["lids"] = sidecar["lids"].clone();
+    }
+    if !bake_report.is_null() {
+        result["bake"] = bake_report;
     }
     if !body_meta.is_null() {
         result["body"] = body_meta;

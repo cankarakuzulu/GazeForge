@@ -6,8 +6,10 @@ with `"physics": "springbone"`, cloth worn with `"physics": "cloth"`, and the ch
 
 On import, the addon adds a `SpringBoneSimulator3D` named `GazeForgeSprings` under the character's `Skeleton3D`: one
 setting per chain, from its root joint to its end joint, with the file's `spring_defaults` (stiffness, drag, gravity,
-hit radius), and one `SpringBoneCollisionCapsule3D` child per collider, attached to its bone. Every chain collides with
-every capsule.
+hit radius, or the chain's own `hit_radius_m`), and one `SpringBoneCollisionCapsule3D` child per collider, attached to
+its bone. Every chain collides with every capsule, except where a spring's `collider_radii` gives it a thinner one: that
+chain gets its own copy of the capsule at the thinner radius (named `<capsule>_chain<k>`), excluded from the other
+chains, and the full capsule is excluded from it.
 
 For each cloth item, the addon adds a `GazeForgeCloth` (a `SoftBody3D`) beside the item's finest mesh and hides that
 mesh. Its pinned points are the vertices whose `_PIN` is at least 0.5; every physics frame it moves them to their
@@ -34,6 +36,14 @@ is restored afterwards, so a read at any other time sees the pose without the sp
 
 ## Things to know (measured on Godot 4.7.2)
 
+- `SpringBoneCollisionCapsule3D` keeps its total `height` when `radius` changes, so a smaller radius lengthens the
+  segment (`mid_height`): radius 0.07 to 0.04 at mid height 0.20 gave 0.26. The addon sets `mid_height` after the radius.
+- `SpringBoneSimulator3D` walks a setting's excluded collisions once, in the order of the simulator's children, and
+  silently ignores an entry listed out of that order (seen on Godot 4.7.2: a chain's own full capsule, listed after
+  another chain's copy, was not excluded, and the chain was thrown 55 mm off its rest). The addon lists them in child
+  order.
+- A baked animation (`GAZEFORGE_physics.baked`, format `bones`) moves the chain joints itself: turn the simulator off
+  (`active`) while it plays, or the springs move the joints again on top of it.
 - `SpringBoneCollision3D` takes its offset, radius and length in world units, rotated by the bone but not scaled by the
   skeleton, and the simulator's joint radius likewise. GazeForge characters carry their size as a scale on the
   `Character` root, so the addon multiplies every length by the skeleton's scale in the imported scene. If you scale the

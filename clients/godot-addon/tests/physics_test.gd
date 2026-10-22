@@ -12,6 +12,9 @@ extends SceneTree
 # half a second (a turn in one frame teleports the capsules through the chains), and joints within 3 cm of their
 # chain's root are left out of the depth (a root fixed to a bone that enters a capsule drags them in; the report keeps
 # their depth as with_joints_near_a_root_mm).
+# Each spring's collider_radii must become its own shrunk copy of that capsule (the original excluded for that chain,
+# the copy for every other) and each setting's radius its hit_radius_m; settle_tip_mm reports how far each chain's tip
+# moves from the rest pose with nothing moving, the number the bake's tip_settled_mm reproduces.
 # The tip is sampled inside Skeleton3D.skeleton_updated: a SkeletonModifier3D's result exists only during that update and
 # is restored afterwards, so a read from outside sees the unmodified pose and reports a still chain.
 
@@ -73,7 +76,7 @@ func run() -> void:
 		if sim.get_root_bone_name(i) != names[int(joints[0])] or sim.get_end_bone_name(i) != names[int(joints[joints.size() - 1])]:
 			problems.append("setting %d runs %s..%s, the spring %s..%s" % [i, sim.get_root_bone_name(i), sim.get_end_bone_name(i), names[int(joints[0])], names[int(joints[joints.size() - 1])]])
 	var colliders: Array = phys.get("colliders", [])
-	var capsules := sim.get_children().filter(func(n): return n is SpringBoneCollisionCapsule3D)
+	var capsules := sim.get_children().filter(func(n): return n is SpringBoneCollisionCapsule3D and not str(n.name).contains("_chain"))
 	report["colliders"] = capsules.size()
 	if capsules.size() != colliders.size():
 		problems.append("%d capsules for %d colliders" % [capsules.size(), colliders.size()])
@@ -108,6 +111,57 @@ func run() -> void:
 		problems.append("capsules with no bone: %s" % ", ".join(placed["unresolved"]))
 	if placed["worst_mm"] > 1.0:
 		problems.append("capsule %s sits %.1f mm from its collider's centre" % [placed["worst"], placed["worst_mm"]])
+	var exclusions := []
+	var hit_default: float = float(phys.get("spring_defaults", {}).get("hit_radius_m", 0.02))
+	for i in springs.size():
+		for r in springs[i].get("collider_radii", []):
+			if int(r.get("collider", -1)) < 0 or int(r.get("collider", -1)) >= colliders.size():
+				problems.append("spring %d shrinks collider %s, the file has %d" % [i, str(r.get("collider")), colliders.size()])
+	if not problems.is_empty():
+		finish(report, problems, report_path)
+		return
+	var own_of := []
+	for i in springs.size():
+		var own := []
+		for r in springs[i].get("collider_radii", []):
+			var name := "Collider_%s_chain%d" % [colliders[int(r["collider"])]["bone"], i]
+			own.append(name)
+			var node := sim.get_node_or_null(NodePath(name)) as SpringBoneCollisionCapsule3D
+			if node == null:
+				problems.append("no capsule %s for spring %d's shrunk collider" % [name, i])
+			elif absf(node.radius - float(r["radius"]) * float(report["world_scale"])) > 1e-6:
+				problems.append("%s has radius %.5f, the spring gives %.5f" % [name, node.radius, float(r["radius"]) * float(report["world_scale"])])
+		own_of.append(own)
+	for i in mini(sim.setting_count, springs.size()):
+		var expect := []
+		for r in springs[i].get("collider_radii", []):
+			expect.append("Collider_%s" % colliders[int(r["collider"])]["bone"])
+		for other in springs.size():
+			if other != i:
+				expect.append_array(own_of[other])
+		expect.sort()
+		var got := []
+		for e in sim.get_exclude_collision_count(i):
+			var path := sim.get_exclude_collision_path(i, e)
+			var n := sim.get_node_or_null(path)
+			got.append(str(n.name) if n != null else "unresolved %s" % path)
+		var order := []
+		for e in sim.get_exclude_collision_count(i):
+			var n := sim.get_node_or_null(sim.get_exclude_collision_path(i, e))
+			order.append(n.get_index() if n != null else -1)
+		var ascending := order.duplicate()
+		ascending.sort()
+		if order != ascending:
+			problems.append("setting %d lists its excluded capsules out of child order %s: the simulator walks its deny list once in child order and ignores such entries" % [i, str(order)])
+		got.sort()
+		if got != expect:
+			problems.append("setting %d excludes %s, the springs make %s" % [i, str(got), str(expect)])
+		var radius: float = float(springs[i].get("hit_radius_m", hit_default)) * float(report["world_scale"])
+		if absf(sim.get_radius(i) - radius) > 1e-6:
+			problems.append("setting %d has radius %.5f, the spring's hit radius makes %.5f" % [i, sim.get_radius(i), radius])
+		exclusions.append({"setting": i, "excluded": got, "radius": sim.get_radius(i)})
+	report["exclusions"] = exclusions
+	report["settle_tip_mm"] = await settle(skeleton, sim, names, springs)
 	if "no-colliders" in args:
 		report["colliders_disabled"] = true
 		for i in sim.setting_count:
@@ -195,6 +249,27 @@ func contact(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStri
 		for cap in capsules:
 			sim.add_child(cap)
 	return {"mm": worst["depth"] * 1000.0, "where": worst["capsule"], "all_joints_mm": worst["all_joints"] * 1000.0}
+
+
+func settle(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStringArray, springs: Array) -> Array:
+	sim.active = true
+	sim.reset()
+	var tips := []
+	for s in springs:
+		tips.append(skeleton.find_bone(names[int(s["joints"][s["joints"].size() - 1])]))
+	var moved := []
+	moved.resize(tips.size())
+	moved.fill(0.0)
+	var sample := func() -> void:
+		for k in tips.size():
+			var now := skeleton.global_transform * skeleton.get_bone_global_pose(tips[k]).origin
+			var rest := skeleton.global_transform * skeleton.get_bone_global_rest(tips[k]).origin
+			moved[k] = now.distance_to(rest) * 1000.0
+	skeleton.skeleton_updated.connect(sample)
+	for k in SETTLE_FRAMES:
+		await process_frame
+	skeleton.skeleton_updated.disconnect(sample)
+	return moved
 
 
 func swing(skeleton: Skeleton3D, sim: SpringBoneSimulator3D, names: PackedStringArray, spring: Dictionary, active: bool) -> Dictionary:

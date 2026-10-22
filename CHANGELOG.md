@@ -8,6 +8,18 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Baked spring-bone physics.** `export-glb --bake sway|ANIMATION [--bake-format bones|vertex] [--bake-fps 30]`, the
+  same as `wearable bake --glb IN --out OUT` on an exported file, and the "Bake hair physics into a glb" task: the
+  chains of wearables worn with spring bones are simulated offline (VRM's spring bone against the body's capsules, 60 Hz,
+  after a one-second settle) against a built-in four-second `sway` or an animation already in the file, and written as
+  an animation `CLIP_baked`, as chain-joint rotation keys or as one morph target per frame (the chain joints taken out
+  of those meshes' skin). Listed under `GAZEFORGE_physics.baked`. Verified: Godot 4.7's `SpringBoneSimulator3D` settles
+  the same file's chain tips where the bake does (0.001 mm without capsules; with them 0.03 mm on the ponytail,
+  0.4-1.6 mm on the long hair); three.js plays the bones and the vertex bake to the same
+  vertices within 0.0001 mm at every key and within 0.22 mm between keys (slerped rotations against blended morphs),
+  `tools/diag/bake_reader_check.mjs`, not shipped, proven to fail on a bake with a different stiffness (8.3 mm). Cloth
+  is not baked yet; a bake does not loop exactly (about 4 degrees).
+
 - **VRM 1.0 export.** `export-glb --format vrm --vrm-author NAME` (needs `--body-rig` with a humanoid map; optional
   `--vrm-name`, `--vrm-license`; also in the export task): the finest level only, the arms re-posed to a T-pose by the
   character's own skinning (the rest of the body as exported), `VRMC_vrm` with the meta, the humanoid bones and
@@ -106,6 +118,12 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **Spring chains start at rest.** Every export fits each spring chain's colliders to its modelled shape
+  (`GAZEFORGE_physics.springs[].collider_radii` and `hit_radius_m`): a capsule a chain starts inside is shrunk to the
+  chain's rest distance for that chain only. Before, a short tuft at the ponytail's nape started 11.6 mm inside the head
+  capsule and was thrown 40 mm off its shape at the first frame in any solver (Godot included). The Godot addon gives
+  each such chain its own thinner capsule (listed in child order: Godot ignores a deny-list entry out of that order). The default spring gravity is now 0.1 (was 1.0): the ponytail's tip settled
+  65 mm off its modelled place under its own weight, now 26 mm.
 - **Up to 8 joints per body vertex.** With `--body-rig` the body, head, genitals and worn items now keep up to 8
   joints per vertex (`JOINTS_1` / `WEIGHTS_1`); `--body-influences 4` (and the export task's field) keeps the old single
   set, byte-identical to before. Why: MakeHuman's weights name more than four bones on many shoulder vertices (`default`:

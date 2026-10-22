@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), body(), wearable(), bind_garment(), attach_solid(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), attach_solid(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -208,6 +208,25 @@ fn attach_solid() -> Value {
     })
 }
 
+fn bake_physics() -> Value {
+    json!({
+        "id": "bake_physics", "title": "Bake hair physics into a glb", "group": "Export", "developer": false,
+        "summary": "Spring-bone hair, ropes and capes simulated offline and written into a copy of an exported character as an animation, for engines that cannot run the physics themselves.",
+        "steps": [
+            {"id": "bake", "title": "Bake", "command": "wearable.bake",
+             "help": "The glb must come from Export with a body skeleton and a wearable worn with spring bones. Clip: sway (four seconds of head turns, a lean and a sideways sway) or the name of an animation already in the file. Bones writes rotation keys for the chain joints; vertex writes one morph target per frame, which is larger. The report gives how far the hair settles from its modelled shape and how far it swings.",
+             "fields": [
+                 {"name": "glb", "label": "Exported glb", "widget": "file_open", "ext": ".glb", "bind": "$run.out", "common": true},
+                 {"name": "out", "label": "Baked glb", "widget": "file_save", "ext": ".glb", "common": true},
+                 {"name": "bake", "label": "Clip", "bind": "=sway", "common": true},
+                 {"name": "bake_format", "label": "Bake as", "common": true},
+                 {"name": "bake_fps", "label": "Frames per second"},
+             ],
+             "shows": [{"kind": "report"}, {"kind": "glb", "from": "$bake.result.out"}]},
+        ],
+    })
+}
+
 fn check() -> Value {
     json!({
         "id": "check", "title": "Check a sculpt against the base", "group": "Check", "developer": true,
@@ -362,6 +381,9 @@ fn export() -> Value {
                  {"name": "vrm_author", "label": "VRM author (required for vrm)"},
                  {"name": "vrm_license", "label": "VRM licence URL (default: VRM Public License 1.0)"},
                  {"name": "vrm_name", "label": "VRM avatar name (default: the character's name)"},
+                 {"name": "bake", "label": "Bake spring-bone physics (sway, or an animation in the file; needs a body skeleton and a wearable with spring bones)"},
+                 {"name": "bake_format", "label": "Bake as (bones: joint keys; vertex: one morph target per frame, for engines without skinning beyond the body)"},
+                 {"name": "bake_fps", "label": "Baked frames per second"},
                  {"name": "lids", "label": "Eyelid fitting"},
                  {"name": "rig", "label": "Face rig"},
                  {"name": "sparse", "label": "Sparse morphs"},

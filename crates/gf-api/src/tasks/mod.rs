@@ -9,6 +9,7 @@ use gf_io::{game_base, obj};
 use serde_json::{Value, json};
 
 pub mod api;
+pub mod bake;
 pub mod data;
 pub mod mesh;
 pub mod rig;

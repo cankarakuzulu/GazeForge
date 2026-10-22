@@ -505,9 +505,22 @@ strands that bend as a sheet. **Godot:** the addon `clients/godot-addon/addons/g
 import and at run time: the chains become a `SpringBoneSimulator3D` with the colliders as capsules, and a cloth item a
 `SoftBody3D` whose pinned vertices follow the skin and whose free cloth collides with the body's capsules. Measured in
 Godot 4.7.2: turning the head 60 degrees, the long hair swings up to 47 cm and stays out of the body (0 mm into it with
-the capsules, up to 49 mm without); a test cape's pinned collar stays on the skin to 0.05 mm and, with the spine bent 35
+the capsules, up to 69 mm without); a test cape's pinned collar stays on the skin to 0.05 mm and, with the spine bent 35
 degrees either way, its free cloth stays out of the body (0 mm, up to 78 mm without the capsules). Not yet: the chains
-in VRM (`VRMC_springBone`), baked animation.
+in VRM (`VRMC_springBone`).
+
+**Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
+--bake CLIP` on a file already exported, or the "Bake hair physics into a glb" task) simulates the spring chains offline
+and writes an animation `CLIP_baked`: `--bake-format bones` (the default) as rotation keys for the chain joints beside
+the clip's own channels, `--bake-format vertex` as one morph target per frame over a skin without the chain joints.
+`sway` is built in (four seconds of head turns, a torso lean and a sideways sway with a bob, on the bones the chains hang
+from); any animation already in the file can drive it instead. `--bake-fps` sets the key rate (30). The solver is VRM's
+spring bone against the body's capsules, and every export now fits each chain's capsules to its modelled rest (a
+capsule the chain starts inside is shrunk for that chain only), so the hair keeps its shape until something moves it.
+Measured: Godot's own `SpringBoneSimulator3D` given the same file settles every chain tip exactly where the bake does
+with the capsules off, and with them on within 0.03 mm on MakeHuman's ponytail and 0.4-1.6 mm on its long hair (where
+the hair rests on the back); three.js plays the bones bake and the vertex bake to the same vertex positions within 0.0001 mm at
+every key (10,148 vertices, the hair moving up to 15 cm); the vertex form adds about 30 MB for 121 frames on six levels.
 
 **VRM.** `export-glb --format vrm --vrm-author NAME` (with `--body-rig` and a preset that has a humanoid map) writes a
 VRM 1.0 avatar: the finest level of every mesh, re-posed to a T-pose (upper arms, forearms and hands level along X in
@@ -1445,7 +1458,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
-| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items, the physics data and the Godot reader (spring bones and cloth) done; VRM done (T-pose, humanoid, expressions; springs not yet); bakes not yet |
+| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items, the physics data and the Godot reader (spring bones and cloth) done; VRM done (T-pose, humanoid, expressions; springs not yet); spring bakes done (bones or vertex), cloth bakes not yet |
 | Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development

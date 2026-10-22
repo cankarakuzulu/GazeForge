@@ -241,6 +241,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: api::bind,
     },
     CommandDef {
+        name: "wearable.bake",
+        kind: Kind::Job,
+        summary: "Bake a character's spring-bone chains (hair, ropes, capes worn with physics springbone) offline: a VRM-style spring solver runs over the chains and the body's capsule colliders in GAZEFORGE_physics, driven by a built-in clip (sway) or an animation already in the glb, and the result is written into a copy of the glb as an animation, as bone rotation keys or as per-frame morph targets (argv `wearable bake`; export-glb takes the same bake options).",
+        limits: "Fields are the argv options with _ for -. Spring chains only: cloth is not baked yet. LINEAR and STEP source clips only. The solver's settings are the file's spring_defaults; the result does not loop exactly (the report gives the gap). Vertex output is refused past 256 MB of morph targets.",
+        input: api::bake_input,
+        output: api::argv_output,
+        run: api::bake,
+    },
+    CommandDef {
         name: "body.sliders",
         kind: Kind::Query,
         summary: "The body's regional sliders and compound parameters: every decrease/increase pair of a body targets set (arms, legs, torso, hips, stomach, buttocks, pelvis, hands, feet, ...) grouped by family, leaving out targets the head catalog also has (the head's sliders drive those on both sides), and the compound parameters with any target they need that is missing.",

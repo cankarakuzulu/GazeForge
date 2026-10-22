@@ -158,13 +158,15 @@ static func build_springs(root: Node, ext: Dictionary, names: PackedStringArray)
 		sim.set_end_bone(i, skeleton.find_bone(chains[i][chains[i].size() - 1]))
 		sim.set_stiffness(i, float(defaults.get("stiffness", 1.0)))
 		sim.set_drag(i, float(defaults.get("drag", 0.4)))
-		sim.set_gravity(i, float(defaults.get("gravity", 1.0)))
-		sim.set_radius(i, float(defaults.get("hit_radius_m", 0.02)) * world)
+		sim.set_gravity(i, float(defaults.get("gravity", 0.1)))
+		sim.set_radius(i, float(springs[i].get("hit_radius_m", defaults.get("hit_radius_m", 0.02))) * world)
 		sim.set_enable_all_child_collisions(i, true)
 	var made := 0
 	var skipped := PackedStringArray()
+	var capsules := []
 	for c in ext.get("colliders", []):
 		var bone := skeleton.find_bone(str(c.get("bone", "")))
+		capsules.append(null)
 		if bone < 0:
 			skipped.append(str(c.get("bone", "")))
 			continue
@@ -182,10 +184,38 @@ static func build_springs(root: Node, ext: Dictionary, names: PackedStringArray)
 		capsule.position_offset = (head + tail) * 0.5 * world
 		if head.distance_to(tail) > 1e-6:
 			capsule.rotation_offset = Quaternion(Vector3.UP, (tail - head).normalized())
+		capsules[capsules.size() - 1] = capsule
 		made += 1
 	if not skipped.is_empty():
 		push_warning("%s: no bone for colliders %s" % [EXTENSION, ", ".join(skipped)])
-	return {"simulator": sim, "chains": chains.size(), "colliders": made}
+	var excluded := []
+	for i in chains.size():
+		excluded.append([])
+	var shrunk := 0
+	for i in chains.size():
+		for r in springs[i].get("collider_radii", []):
+			var k := int(r.get("collider", -1))
+			if k < 0 or k >= capsules.size():
+				return {"error": "spring %s shrinks collider %d, the file has %d" % [str(springs[i].get("chain")), k, capsules.size()]}
+			if capsules[k] == null:
+				continue
+			var own := (capsules[k] as SpringBoneCollisionCapsule3D).duplicate() as SpringBoneCollisionCapsule3D
+			own.name = "%s_chain%d" % [capsules[k].name, i]
+			own.radius = float(r.get("radius", 0.0)) * world
+			own.mid_height = (capsules[k] as SpringBoneCollisionCapsule3D).mid_height
+			sim.add_child(own)
+			own.owner = root
+			excluded[i].append(capsules[k])
+			for other in chains.size():
+				if other != i:
+					excluded[other].append(own)
+			shrunk += 1
+	for i in chains.size():
+		excluded[i].sort_custom(func(a, b): return a.get_index() < b.get_index())
+		sim.set_exclude_collision_count(i, excluded[i].size())
+		for e in excluded[i].size():
+			sim.set_exclude_collision_path(i, e, NodePath(excluded[i][e].name))
+	return {"simulator": sim, "chains": chains.size(), "colliders": made, "shrunk": shrunk}
 
 
 # The editor import hands _import_post ImporterMeshInstance3D nodes (they become MeshInstance3D later); a run-time

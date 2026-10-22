@@ -57,6 +57,7 @@ const NUMBERS: &[&str] = &[
     "f2-angle-margin",
     "f2-repair-max-step",
     "f2-repair-max-step-confident",
+    "bake-fps",
     "f3-regular",
     "f3-max-move",
     "f3-smooth",
@@ -127,6 +128,7 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("frame", &["world", "canonical"]),
     ("hide-under", &["on", "off"]),
     ("scale", &["none", "bone"]),
+    ("bake-format", &["bones", "vertex"]),
 ];
 
 const TEXT: &[(&str, &str)] = &[
@@ -185,6 +187,9 @@ const TEXT: &[(&str, &str)] = &[
     ("body-gates", "refuse: a body whose stitch gates fail is not exported; report: it is exported and the failures go in the sidecar"),
     ("format", "glb (the default) or vrm: a VRM 1.0 avatar - needs --body-rig with a humanoid map and --vrm-author; the finest level only, re-posed to a T-pose (arms level along X, the rest as exported), with VRMC_vrm meta, humanoid bones and expression presets from the face morphs"),
     ("vrm-author", "the VRM avatar's author (required by VRM's meta)"),
+    ("bake", "bake the spring-bone chains offline against a clip and write the result as an animation named CLIP_baked: sway (built in: 4 s of head turns, a torso lean and a sideways sway with a bob, driving the bones the chains hang from) or the name of an animation already in the glb"),
+    ("bake-format", "bones (the default): the chain joints get rotation keys beside the clip's channels; vertex: the chain joints are taken out of the skin and the swing becomes one morph target per frame played by a weights track, for engines with no skinning beyond the body"),
+    ("bake-fps", "frames per second of the baked keys (default 30, 1 to 60); the solver steps at 60 Hz or finer"),
     ("vrm-license", "the VRM avatar's licence URL (default: the VRM Public License 1.0, https://vrm.dev/licenses/1.0/)"),
     ("vrm-name", "the VRM avatar's name (default: the spec's name)"),
     ("body-influences", "joints per vertex with --body-rig: 8 (the default; JOINTS_1 / WEIGHTS_1 carry the second four) keeps MakeHuman's weights whole, 4 fits engines that read only one set but cuts weight the shoulders need (the default preset's shoulders tear with arms raised)"),
@@ -328,6 +333,14 @@ pub fn attach(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, super::wearable::attach)
 }
 
+pub fn bake_input() -> Value {
+    schema(&[super::bake::RUN_KEYS], &["glb", "out", "bake"])
+}
+
+pub fn bake(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, super::bake::run)
+}
+
 pub fn obj_input() -> Value {
     let mut sets = vec![EXPORT_KEYS];
     sets.extend_from_slice(PLACEMENT_KEYS);
@@ -339,7 +352,7 @@ pub fn export_obj(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 }
 
 pub fn glb_input() -> Value {
-    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS, BODY_RIG_KEYS, VRM_KEYS];
+    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS, BODY_RIG_KEYS, VRM_KEYS, super::bake::KEYS];
     sets.extend_from_slice(PLACEMENT_KEYS);
     schema(&sets, &["store", "spec", "out"])
 }
