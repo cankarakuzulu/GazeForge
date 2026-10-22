@@ -10,6 +10,13 @@ pub enum Part {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tie {
+    None,
+    Low,
+    High,
+}
+
 #[derive(Clone, Debug)]
 pub struct Groom {
     pub name: String,
@@ -17,6 +24,7 @@ pub struct Groom {
     pub points: usize,
     pub length_m: f64,
     pub part: Part,
+    pub tie: Tie,
     pub droop: f64,
     pub curl_radius_m: f64,
     pub curl_turns_per_m: f64,
@@ -55,17 +63,27 @@ pub const FIELDS: &[Field] = &[
 
 pub const PARTS: &[&str] = &["centre", "left", "right", "none"];
 
-pub const STYLES: &[(&str, &[(&str, f64)])] = &[
-    ("short", &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("bob", &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("long", &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("wavy", &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0)]),
-    ("curly", &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0)]),
+pub const TIES: &[&str] = &["none", "low", "high"];
+
+pub type Style = (&'static str, &'static str, &'static [(&'static str, f64)]);
+
+pub const STYLES: &[Style] = &[
+    ("short", "none", &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("bob", "none", &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("long", "none", &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("wavy", "none", &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0)]),
+    ("curly", "none", &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0)]),
+    ("ponytail", "high", &[("length_m", 0.45), ("droop", 0.8), ("clumps", 300.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
 ];
 
 pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
-    let (_, settings) = STYLES.iter().find(|(n, _)| *n == name)?;
+    let (_, tie, settings) = STYLES.iter().find(|(n, _, _)| *n == name)?;
     let mut out = groom.as_object()?.clone();
+    if *tie == "none" {
+        out.remove("tie");
+    } else {
+        out.insert("tie".into(), serde_json::json!(tie));
+    }
     for &(key, v) in settings.iter() {
         let integer = FIELDS.iter().any(|f| f.key == key && f.integer);
         out.insert(key.into(), if integer { serde_json::json!(v as u64) } else { serde_json::json!(v) });
@@ -75,7 +93,8 @@ pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
 
 pub fn style_of(groom: &Value) -> Option<&'static str> {
     let value = |key: &str| groom.get(key).and_then(Value::as_f64).or_else(|| FIELDS.iter().find(|f| f.key == key).map(|f| f.default));
-    STYLES.iter().find(|(_, settings)| settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9))).map(|(n, _)| *n)
+    let tie = groom.get("tie").and_then(Value::as_str).unwrap_or("none");
+    STYLES.iter().find(|(_, t, settings)| *t == tie && settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9))).map(|(n, _, _)| *n)
 }
 
 pub fn starter() -> Value {
@@ -87,7 +106,7 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         return Err(format!("a groom file says \"format\": \"{FORMAT}\""));
     }
     if let Some(o) = v.as_object()
-        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
+        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
     {
         return Err(format!("groom {k} is not a groom setting"));
     }
@@ -109,6 +128,12 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         "none" => Part::None,
         other => return Err(format!("groom part is left, right, centre or none, got {other}")),
     };
+    let tie = match v["tie"].as_str().unwrap_or("none") {
+        "none" => Tie::None,
+        "low" => Tie::Low,
+        "high" => Tie::High,
+        other => return Err(format!("groom tie is none, low or high, got {other}")),
+    };
     let colour = match v["colour"].as_str() {
         None => [0.18, 0.11, 0.07].map(linear),
         Some(hex) => {
@@ -124,6 +149,7 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         points: num("points")? as usize,
         length_m: num("length_m")?,
         part,
+        tie,
         droop: num("droop")?,
         curl_radius_m: num("curl_radius_m")?,
         curl_turns_per_m: num("curl_turns_per_m")?,
@@ -150,7 +176,7 @@ mod tests {
         assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
         assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
         assert!(parse(&json!({"format": FORMAT, "lenght_m": 0.3})).is_err(), "a misspelt setting is refused, not ignored");
-        for (name, _) in STYLES {
+        for (name, _, _) in STYLES {
             let styled = with_style(&starter(), name).unwrap();
             assert!(parse(&styled).is_ok(), "{name}");
             assert_eq!(style_of(&styled), Some(*name));

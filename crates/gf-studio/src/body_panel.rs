@@ -579,7 +579,7 @@ impl crate::studio::Studio<'_> {
                 egui::ComboBox::from_label(tr("body.groom_style"))
                     .selected_text(style_label(style))
                     .show_ui(ui, |ui| {
-                        for &(name, _) in gf_core::groom::STYLES {
+                        for &(name, _, _) in gf_core::groom::STYLES {
                             if ui.selectable_label(style == name, style_label(name)).clicked() && style != name {
                                 groom_style = Some(name.to_string());
                             }
@@ -596,6 +596,19 @@ impl crate::studio::Studio<'_> {
                         }
                     }
                 });
+                let tie = g["tie"].as_str().unwrap_or("none").to_string();
+                let tie_label = |t: &str| tr(&format!("body.groom_tie.{t}")).to_string();
+                egui::ComboBox::from_label(tr("body.groom_tie"))
+                    .selected_text(tie_label(&tie))
+                    .show_ui(ui, |ui| {
+                        for &t in gf_core::groom::TIES {
+                            if ui.selectable_label(tie == t, tie_label(t)).clicked() && tie != t {
+                                groom_commit = Some(("tie".into(), json!(t)));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("body.groom_tie_tip"));
                 egui::Grid::new("body_groom").num_columns(2).show(ui, |ui| {
                     for &(key, unit, speed, decimals) in GROOM_SHOWN {
                         let Some(f) = gf_core::groom::FIELDS.iter().find(|f| f.key == key) else { continue };

@@ -171,6 +171,8 @@ function mount(root, api) {
         return;
       }
       const next = JSON.parse(JSON.stringify(b));
+      if (!s.tie || s.tie === 'none') delete next.groom.tie;
+      else next.groom.tie = s.tie;
       for (const [k, v] of Object.entries(s.settings)) {
         const f = groomSchema.fields.find((x) => x.key === k);
         next.groom[k] = f && f.integer ? Math.round(v) : v;
@@ -185,7 +187,18 @@ function mount(root, api) {
       if (b && b.groom) apply(withGroom(b, 'part', part.value), tr('body.groom_set_line', { setting: tr('body.groom_part'), value: tr(`body.groom_part.${part.value}`) }));
     });
     groomInputs.set('part', { input: part });
-    const out = [el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_style') }), style]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_part') }), part])];
+    const tie = el('select', { 'data-groom': 'tie', title: tr('body.groom_tie_tip') });
+    tie.replaceChildren(...(groomSchema.ties || ['none']).map((k) => el('option', { value: k, text: tr(`body.groom_tie.${k}`) })));
+    tie.addEventListener('change', () => {
+      const b = api.body.get();
+      if (!b || !b.groom) return;
+      const next = JSON.parse(JSON.stringify(b));
+      if (tie.value === 'none') delete next.groom.tie;
+      else next.groom.tie = tie.value;
+      apply(next, tr('body.groom_set_line', { setting: tr('body.groom_tie'), value: tr(`body.groom_tie.${tie.value}`) }));
+    });
+    groomInputs.set('tie', { input: tie });
+    const out = [el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_style') }), style]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_part') }), part]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_tie') }), tie])];
     for (const [k, unit, step, decimals] of GROOM_SHOWN) {
       const f = groomSchema.fields.find((x) => x.key === k);
       if (!f) continue;
@@ -221,7 +234,7 @@ function mount(root, api) {
 
   function styleOf(g) {
     const value = (k) => (typeof g[k] === 'number' ? g[k] : (groomSchema.fields.find((f) => f.key === k) || {}).default);
-    const hit = (groomSchema.styles || []).find((s) => Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
+    const hit = (groomSchema.styles || []).find((s) => (s.tie || 'none') === (g.tie || 'none') && Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
     return hit ? hit.name : 'custom';
   }
 
@@ -234,6 +247,7 @@ function mount(root, api) {
     for (const [k, r] of groomInputs) {
       if (k === 'style') r.input.value = styleOf(g);
       else if (k === 'part') r.input.value = g.part || 'centre';
+      else if (k === 'tie') r.input.value = g.tie || 'none';
       else if (k === 'colour') r.input.value = /^#[0-9a-f]{6}$/i.test(g.colour || '') ? g.colour.toLowerCase() : '#3b2416';
       else r.input.value = String(Number(((typeof g[k] === 'number' ? g[k] : r.f.default) * r.unit).toFixed(r.decimals)));
     }

@@ -18,6 +18,10 @@ open, with its last measurement, rather than left out.
   with a masked double-sided material, strands traced back from the cards. Worn with spring-bone physics, every
   level's cards follow the chains alike (mean chain weight 0.53 on LOD0-3, 0.56-0.59 on LOD4-5), so the far sets do
   not pop when the level changes; the scalp cap and hair lying on the head stay with the head.
+- **Ponytails.** A groom's `tie` (none, low, high; a Tie choice in both panels, and a Ponytail style): every strand is
+  combed along the head to a tie point at the back of the head (below the crown, or at the nape), joins a 2 cm bundle
+  and hangs from it as a tail that fans out a little toward its end, its length kept as asked. A strand now also gets
+  a point at least every 1.5 cm (a 45 cm strand had 3 cm segments, and its first one stood off the forehead).
 - **Hair styles.** The Grown hair section in both panels has a Style choice - short, bob, long, wavy, curly - that sets
   length, droop, clumps, curl and frizz at once (one undo step) and keeps the part, colour, strands and seed; edit any
   value after and it shows as custom. `body.sliders` serves the styles; `gf_core::groom::{STYLES, with_style,
