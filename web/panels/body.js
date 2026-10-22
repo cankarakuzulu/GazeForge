@@ -43,7 +43,7 @@ function withCompound(body, name, v) {
   return tidy(next);
 }
 
-const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['sides_m', 100, 0.1, 1], ['fade_m', 100, 0.1, 1], ['lift', 1, 0.01, 2], ['forehead', 1, 0.01, 2], ['fringe_m', 100, 0.5, 1], ['frame_m', 100, 0.5, 1], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
+const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['sides_m', 100, 0.1, 1], ['fade_m', 100, 0.1, 1], ['lift', 1, 0.01, 2], ['forehead', 1, 0.01, 2], ['fringe_m', 100, 0.5, 1], ['frame_m', 100, 0.5, 1], ['highlights', 1, 0.01, 2], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
 
 function mount(root, api) {
   let key = '';
@@ -241,13 +241,15 @@ function mount(root, api) {
       groomInputs.set(k, { input, unit, decimals, f });
       out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr(`body.groom.${k}`) }), input]));
     }
-    const colour = el('input', { type: 'color', 'data-groom': 'colour', title: tr('body.groom_colour_tip') });
-    colour.addEventListener('change', () => {
-      const b = api.body.get();
-      if (b && b.groom) apply(withGroom(b, 'colour', colour.value), tr('body.groom_set_line', { setting: tr('body.groom_colour'), value: colour.value }));
-    });
-    groomInputs.set('colour', { input: colour });
-    out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_colour') }), colour]));
+    for (const [key, label, tip] of [['colour', tr('body.groom_colour'), tr('body.groom_colour_tip')], ['tip_colour', tr('body.groom_tip_colour'), tr('body.groom_tip_colour_tip')], ['highlight_colour', tr('body.groom_highlight_colour'), tr('body.groom_highlight_colour_tip')]]) {
+      const colour = el('input', { type: 'color', 'data-groom': key, title: tip });
+      colour.addEventListener('change', () => {
+        const b = api.body.get();
+        if (b && b.groom) apply(withGroom(b, key, colour.value), tr('body.groom_set_line', { setting: label, value: colour.value }));
+      });
+      groomInputs.set(key, { input: colour });
+      out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: label }), colour]));
+    }
     const cards = el('button', { type: 'button', 'data-groom': 'cards', text: tr('body.groom_cards'), title: tr('body.groom_cards_tip') });
     cards.addEventListener('click', () => {
       api.tasks.open('groom_cards').catch((e) => { note.textContent = tr('body.groom_cards_failed', { error: e && e.message ? e.message : e }); });
@@ -274,7 +276,11 @@ function mount(root, api) {
       else if (k === 'tie') r.input.value = g.tie || 'none';
       else if (k === 'direction') r.input.value = g.direction || 'part';
       else if (k === 'fringe') r.input.value = g.fringe || 'none';
-      else if (k === 'colour') r.input.value = /^#[0-9a-f]{6}$/i.test(g.colour || '') ? g.colour.toLowerCase() : '#3b2416';
+      else if (k === 'colour' || k === 'tip_colour' || k === 'highlight_colour') {
+        const hex = (v) => (/^#[0-9a-f]{6}$/i.test(v || '') ? v.toLowerCase() : null);
+        const root = hex(g.colour) || '#3b2416';
+        r.input.value = k === 'colour' ? root : hex(g[k]) || (k === 'tip_colour' ? root : (groomSchema.highlight_default || '#b8925a'));
+      }
       else r.input.value = String(Number(((typeof g[k] === 'number' ? g[k] : r.f.default) * r.unit).toFixed(r.decimals)));
     }
   }

@@ -55,6 +55,9 @@ pub struct Groom {
     pub clump: f64,
     pub frizz_m: f64,
     pub colour: [f32; 3],
+    pub tip_colour: [f32; 3],
+    pub highlight_colour: [f32; 3],
+    pub highlights: f64,
     pub seed: u64,
 }
 
@@ -81,6 +84,7 @@ pub const FIELDS: &[Field] = &[
     Field { key: "forehead", default: 1.0, lo: 0.3, hi: 1.6, integer: false },
     Field { key: "fringe_m", default: 0.1, lo: 0.01, hi: 0.5, integer: false },
     Field { key: "frame_m", default: 0.0, lo: 0.0, hi: 2.0, integer: false },
+    Field { key: "highlights", default: 0.0, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "droop", default: 0.5, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "curl_radius_m", default: 0.0, lo: 0.0, hi: 0.1, integer: false },
     Field { key: "curl_turns_per_m", default: 0.0, lo: 0.0, hi: 200.0, integer: false },
@@ -94,6 +98,7 @@ pub const PARTS: &[&str] = &["centre", "left", "right", "none"];
 
 pub const TIES: &[&str] = &["none", "low", "high"];
 pub const FRINGES: &[&str] = &["none", "straight", "curtain"];
+pub const HIGHLIGHT_DEFAULT: &str = "#b8925a";
 
 pub const DIRECTIONS: &[&str] = &["part", "back", "forward", "up"];
 
@@ -154,7 +159,7 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         return Err(format!("a groom file says \"format\": \"{FORMAT}\""));
     }
     if let Some(o) = v.as_object()
-        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "fringe", "direction", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
+        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "fringe", "direction", "colour", "tip_colour", "highlight_colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
     {
         return Err(format!("groom {k} is not a groom setting"));
     }
@@ -195,15 +200,21 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         "up" => Direction::Up,
         other => return Err(format!("groom direction is part, back, forward or up, got {other}")),
     };
+    let hex_colour = |key: &str, hex: &str| -> Result<[f32; 3], String> {
+        let h = hex.trim_start_matches('#');
+        let c = (h.len() == 6).then(|| (0..3).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>()).flatten();
+        let c = c.ok_or_else(|| format!("groom {key} is #rrggbb, got {hex}"))?;
+        Ok([0, 1, 2].map(|i| linear(c[i] as f64 / 255.0)))
+    };
     let colour = match v["colour"].as_str() {
         None => [0.18, 0.11, 0.07].map(linear),
-        Some(hex) => {
-            let h = hex.trim_start_matches('#');
-            let c = (h.len() == 6).then(|| (0..3).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>()).flatten();
-            let c = c.ok_or_else(|| format!("groom colour is #rrggbb, got {hex}"))?;
-            [0, 1, 2].map(|i| linear(c[i] as f64 / 255.0))
-        }
+        Some(hex) => hex_colour("colour", hex)?,
     };
+    let tip_colour = match v["tip_colour"].as_str() {
+        None => colour,
+        Some(hex) => hex_colour("tip_colour", hex)?,
+    };
+    let highlight_colour = hex_colour("highlight_colour", v["highlight_colour"].as_str().unwrap_or(HIGHLIGHT_DEFAULT))?;
     Ok(Groom {
         name: v["name"].as_str().unwrap_or("groom").to_string(),
         strands: num("strands")? as usize,
@@ -226,6 +237,9 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         clump: num("clump")?,
         frizz_m: num("frizz_m")?,
         colour,
+        tip_colour,
+        highlight_colour,
+        highlights: num("highlights")?,
         seed: num("seed")? as u64,
     })
 }

@@ -32,7 +32,7 @@ pub struct BodyUi {
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
-    groom_colour: Option<[u8; 3]>,
+    groom_colour: Option<(&'static str, [u8; 3])>,
 }
 
 const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
@@ -44,6 +44,7 @@ const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
     ("forehead", 1.0, 0.01, 2),
     ("fringe_m", 100.0, 0.5, 1),
     ("frame_m", 100.0, 0.5, 1),
+    ("highlights", 1.0, 0.01, 2),
     ("droop", 1.0, 0.01, 2),
     ("clumps", 1.0, 5.0, 0),
     ("clump", 1.0, 0.01, 2),
@@ -657,22 +658,29 @@ impl crate::studio::Studio<'_> {
                         }
                         ui.end_row();
                     }
-                    ui.label(tr("body.groom_colour")).on_hover_text(tr("body.groom_colour_tip"));
-                    let hex = g["colour"].as_str().unwrap_or("#3b2416");
-                    let mut c = ui_state.groom_colour.unwrap_or_else(|| {
-                        let h = hex.trim_start_matches('#');
-                        [0, 1, 2].map(|i| h.get(2 * i..2 * i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).unwrap_or(0))
-                    });
-                    if egui::color_picker::color_edit_button_srgb(ui, &mut c).on_hover_text(tr("body.groom_colour_tip")).changed() {
-                        ui_state.groom_colour = Some(c);
+                    let root_hex = g["colour"].as_str().unwrap_or("#3b2416").to_string();
+                    for (key, label, tip, fallback) in [
+                        ("colour", tr("body.groom_colour"), tr("body.groom_colour_tip"), root_hex.as_str()),
+                        ("tip_colour", tr("body.groom_tip_colour"), tr("body.groom_tip_colour_tip"), root_hex.as_str()),
+                        ("highlight_colour", tr("body.groom_highlight_colour"), tr("body.groom_highlight_colour_tip"), gf_core::groom::HIGHLIGHT_DEFAULT),
+                    ] {
+                        ui.label(label).on_hover_text(tip);
+                        let hex = g[key].as_str().unwrap_or(fallback);
+                        let mut c = ui_state.groom_colour.filter(|(k, _)| *k == key).map(|(_, c)| c).unwrap_or_else(|| {
+                            let h = hex.trim_start_matches('#');
+                            [0, 1, 2].map(|i| h.get(2 * i..2 * i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).unwrap_or(0))
+                        });
+                        if egui::color_picker::color_edit_button_srgb(ui, &mut c).on_hover_text(tip).changed() {
+                            ui_state.groom_colour = Some((key, c));
+                        }
+                        ui.end_row();
                     }
-                    ui.end_row();
                 });
-                if let Some(c) = ui_state.groom_colour
+                if let Some((key, c)) = ui_state.groom_colour
                     && !egui::Popup::is_any_open(ui.ctx())
                 {
                     ui_state.groom_colour = None;
-                    groom_commit = Some(("colour".into(), json!(format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))));
+                    groom_commit = Some((key.into(), json!(format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))));
                 }
                 if ui.button(tr("body.groom_cards")).on_hover_text(tr("body.groom_cards_tip")).clicked() {
                     groom_cards = true;

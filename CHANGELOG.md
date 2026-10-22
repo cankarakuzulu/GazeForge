@@ -8,6 +8,14 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Ombre, highlights, balayage.** A groom's `tip_colour` (the colour blends from the roots to it along each
+  strand; absent keeps it even), `highlights` (the share of locks that are highlighted, a lock being one clump, so
+  they read as streaks) and `highlight_colour` (default #b8925a; faint at the root, full a third of the way down).
+  Both panels have Tip colour and Highlight colour pickers and a Highlights row. Game hair cards follow: the atlas
+  paints each column from the root colour to the tip colour, gives the highlights their own columns (a seventh of
+  the card columns per seventh asked, at least one), and a card whose strands are mostly highlighted takes one of
+  them. A groom without these settings makes byte-identical cards. The groom report counts the highlighted strands;
+  the cards report the highlight cards and columns.
 - **Face-framing layers.** A groom's `frame_m` (Face framing in both panels; 0 is off): the hair rooted along the
   front hairline, ahead of the ears, is cut to that length, blending back to the full length over 5 cm behind the
   hairline, and is swept out to the sides so it falls beside the face rather than back into the rest. With a

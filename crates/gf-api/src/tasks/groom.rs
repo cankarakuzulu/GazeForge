@@ -55,6 +55,8 @@ const EYES_BAND_M: f64 = 0.015;
 const FRAME_DOWN: f64 = 0.35;
 const FOREHEAD_CLEAR_M: f64 = 0.01;
 const FRINGE_WIDTH_WITH_FRAME: f64 = 0.6;
+const HIGHLIGHT_AT_ROOT: f32 = 0.15;
+const HIGHLIGHT_FULL_AT: f32 = 0.3;
 const FRAME_DEPTH_M: f64 = 0.05;
 const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
@@ -209,6 +211,14 @@ fn strand_points(g: &Groom) -> usize {
     let curled = (curls * POINTS_PER_TURN as f64).ceil() as usize + 1;
     let fine = (g.length_m / MAX_SEGMENT_M).ceil() as usize + 1;
     g.points.max(curled.max(fine).min(MAX_POINTS))
+}
+
+pub(crate) fn highlight_lift(t: f32) -> f32 {
+    HIGHLIGHT_AT_ROOT + (1.0 - HIGHLIGHT_AT_ROOT) * (t / HIGHLIGHT_FULL_AT).min(1.0)
+}
+
+fn lock_unit(seed: u64, lock: usize) -> f64 {
+    Rng(seed ^ (lock as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93)).next()
 }
 
 pub(crate) struct Rng(pub(crate) u64);
@@ -548,6 +558,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         lines.iter().flat_map(|l| l.iter().skip(1)).filter_map(|&p| surface.nearest(p, NEAR_M).map(|j| -surface.signed(p, j))).fold(0.0, f64::max)
     };
     let grown_depth = depth_of(&lines);
+    let mut lock_of: Vec<usize> = (0..lines.len()).collect();
+    let mut highlighted = 0usize;
     if g.clumps > 0 && g.clump > 0.0 {
         let k = g.clumps.min(lines.len());
         let centres: Vec<usize> = (0..k).map(|i| i * lines.len() / k).collect();
@@ -562,6 +574,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let Some(&c) = centres.iter().filter(|&&a| side(a) == side(s)).min_by(|&&a, &&b| dot(sub(roots[a].0, roots[s].0), sub(roots[a].0, roots[s].0)).total_cmp(&dot(sub(roots[b].0, roots[s].0), sub(roots[b].0, roots[s].0)))) else {
                 continue;
             };
+            lock_of[s] = c;
             if c == s {
                 continue;
             }
@@ -626,9 +639,13 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                 }
             }
         }
+        let lit = g.highlights > 0.0 && lock_unit(g.seed, lock_of[s]) < g.highlights;
+        highlighted += usize::from(lit);
         let colours = (0..line.len()).map(|k| {
             let t = k as f32 / (line.len() - 1) as f32;
-            g.colour.map(|c| c * (0.55 + 0.45 * t))
+            let base: [f32; 3] = std::array::from_fn(|i| g.colour[i] + (g.tip_colour[i] - g.colour[i]) * t);
+            let lift = if lit { highlight_lift(t) } else { 0.0 };
+            std::array::from_fn(|i| (base[i] + (g.highlight_colour[i] - base[i]) * lift) * (0.55 + 0.45 * t))
         });
         if let Some(q) = line.iter().take(tail_from).find(|q| q[2] > brim && surface.nearest(**q, FLYAWAY_M + g.curl_radius_m).is_none()) {
             flyaways += 1;
@@ -691,7 +708,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                              "brows_to_subnasale_m": cm(brows - subnasale), "subnasale_to_chin_m": cm(subnasale - chin)});
     let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
-                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed,
+                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed, "highlighted_strands": highlighted,
                         "strands_over_eyes": over_eyes.len(), "strands_on_forehead": on_forehead, "over_eyes_roots": over_eyes.iter().take(6).map(|&i| roots[i].0.map(|x| (x * 1e4).round() / 1e4)).collect::<Vec<_>>(),"mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_distance_mm": ((FLYAWAY_M + g.curl_radius_m) * 1e4).round() / 10.0, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
                         "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); with sides_m set, a root below the fade line (3.5 cm above the ears, blended over fade_m) gets the sides length instead of length_m; each strand leaves the scalp lifted by lift (0.35; the top's own lift above the fade line) along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed (on the top, back, forward or up when direction says so, a styled top shortening toward the back to 35 % at 8 cm behind the crown; up stands the hair from 3 cm ahead of the crown forward free of the head, mostly toward world up leaning back and rolling back over, and combs the rest back) along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands (on the same side of the part), curled (fading in over 3 cm), frizzed toward the tip (a strand gets a point at least every 1.5 cm and, curled, at least 8 points per turn, up to 256), and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on its strand's side (the root's), so a curl that crosses the middle does not jump to the other side (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});

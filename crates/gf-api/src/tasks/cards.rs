@@ -31,6 +31,7 @@ pub struct Cards {
     pub members: Vec<usize>,
     pub widths_m: Vec<f64>,
     pub cut: usize,
+    pub lit: usize,
     pub cap: Vec<[u32; 3]>,
 }
 
@@ -48,7 +49,7 @@ fn apart(a: &[Point; 3], b: &[Point; 3]) -> f64 {
     dist2(a[0], b[0]) + dist2(a[1], b[1]) + dist2(a[2], b[2])
 }
 
-pub fn build(strands: &[Strand], count: usize, centre: Point, widest: f64, blocked: &dyn Fn(Point) -> bool) -> Cards {
+pub fn build(strands: &[Strand], count: usize, centre: Point, widest: f64, blocked: &dyn Fn(Point) -> bool, lit_columns: usize, lit: &dyn Fn(&Strand) -> bool) -> Cards {
     let shapes: Vec<[Point; 3]> = strands.iter().map(shape).collect();
     let n = count.min(shapes.len());
     let mut seeds: Vec<usize> = Vec::with_capacity(n);
@@ -68,7 +69,7 @@ pub fn build(strands: &[Strand], count: usize, centre: Point, widest: f64, block
         let c = (0..n).fold(0, |best, c| if apart(s, &shapes[seeds[c]]) < apart(s, &shapes[seeds[best]]) { c } else { best });
         groups[c].push(k);
     }
-    let mut out = Cards { positions: Vec::new(), uvs: Vec::new(), quads: Vec::new(), members: Vec::new(), widths_m: Vec::new(), cut: 0, cap: Vec::new() };
+    let mut out = Cards { positions: Vec::new(), uvs: Vec::new(), quads: Vec::new(), members: Vec::new(), widths_m: Vec::new(), cut: 0, lit: 0, cap: Vec::new() };
     for group in &groups {
         let Some(rows) = group.iter().map(|&s| strands[s].points.len()).min().filter(|&r| r >= 2) else { continue };
         let line: Vec<Point> = (0..rows).map(|k| scale(group.iter().fold([0.0; 3], |a, &s| add(a, strands[s].points[k])), 1.0 / group.len() as f64)).collect();
@@ -99,7 +100,9 @@ pub fn build(strands: &[Strand], count: usize, centre: Point, widest: f64, block
             continue;
         }
         let card = out.members.len();
-        let column = card % CARD_COLUMNS;
+        let lit_card = lit_columns > 0 && 2 * group.iter().filter(|&&s| lit(&strands[s])).count() > group.len();
+        out.lit += usize::from(lit_card);
+        let column = if lit_card { CARD_COLUMNS - lit_columns + card % lit_columns } else { card % (CARD_COLUMNS - lit_columns) };
         let (u0, u1) = (column as f64 / COLUMNS as f64 + UV_MARGIN, (column + 1) as f64 / COLUMNS as f64 - UV_MARGIN);
         let first = out.positions.len() as u32;
         for (k, (l, r)) in edges.iter().take(used).enumerate() {
@@ -138,6 +141,7 @@ pub fn append(a: &mut Cards, b: Cards) {
     a.members.extend(b.members);
     a.widths_m.extend(b.widths_m);
     a.cut += b.cut;
+    a.lit += b.lit;
     a.cap.extend(b.cap.into_iter().map(|t| t.map(|i| i + shift)));
 }
 
@@ -173,7 +177,7 @@ pub fn scalp_cap(head: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]
     };
     let column = CARD_COLUMNS;
     let (u0, u1) = (column as f64 / COLUMNS as f64 + UV_MARGIN, (column + 1) as f64 / COLUMNS as f64 - UV_MARGIN);
-    let mut out = Cards { positions: Vec::new(), uvs: Vec::new(), quads: Vec::new(), members: Vec::new(), widths_m: Vec::new(), cut: 0, cap: tris };
+    let mut out = Cards { positions: Vec::new(), uvs: Vec::new(), quads: Vec::new(), members: Vec::new(), widths_m: Vec::new(), cut: 0, lit: 0, cap: tris };
     for &k in &kept {
         let p = lifted[k as usize];
         let turn = ((p[1] - centre[1]).atan2(p[0] - centre[0]) / std::f64::consts::TAU + 0.5) * 3.0;
@@ -185,7 +189,46 @@ pub fn scalp_cap(head: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]
     out
 }
 
-pub fn atlas(size: usize, colour: [f64; 3], seed: u64) -> Vec<u8> {
+pub struct Palette {
+    pub root: [f32; 3],
+    pub tip: [f32; 3],
+    pub highlight: [f32; 3],
+    pub lit_columns: usize,
+}
+
+impl Palette {
+    pub fn of(g: &super::groom::Groom) -> Palette {
+        let lit_columns = if g.highlights > 0.0 { ((g.highlights * CARD_COLUMNS as f64).round() as usize).clamp(1, CARD_COLUMNS - 1) } else { 0 };
+        Palette { root: g.colour, tip: g.tip_colour, highlight: g.highlight_colour, lit_columns }
+    }
+
+    fn at(&self, t: f64, lit: bool) -> [f64; 3] {
+        let t = t as f32;
+        let base: [f32; 3] = std::array::from_fn(|i| self.root[i] + (self.tip[i] - self.root[i]) * t);
+        let lift = if lit { super::groom::highlight_lift(t) } else { 0.0 };
+        std::array::from_fn(|i| srgb(base[i] + (self.highlight[i] - base[i]) * lift))
+    }
+
+    pub fn is_lit(&self, s: &Strand) -> bool {
+        let n = s.colours.len();
+        if self.lit_columns == 0 || n < 2 {
+            return false;
+        }
+        let k = ((n - 1) as f64 * 0.6).round() as usize;
+        let t = k as f32 / (n - 1) as f32;
+        let shade = 0.55 + 0.45 * t;
+        let want = |lit: bool| -> [f32; 3] {
+            let base: [f32; 3] = std::array::from_fn(|i| self.root[i] + (self.tip[i] - self.root[i]) * t);
+            let lift = if lit { super::groom::highlight_lift(t) } else { 0.0 };
+            std::array::from_fn(|i| (base[i] + (self.highlight[i] - base[i]) * lift) * shade)
+        };
+        let d = |a: [f32; 3]| (0..3).map(|i| (s.colours[k][i] - a[i]).powi(2)).sum::<f32>();
+        d(want(true)) < d(want(false))
+    }
+}
+
+pub fn atlas(size: usize, palette: &Palette, seed: u64) -> Vec<u8> {
+    let colour = palette.at(0.0, false);
     let mut rgb = vec![colour; size * size];
     let mut alpha = vec![0.0f64; size * size];
     let column = size as f64 / COLUMNS as f64;
@@ -198,9 +241,10 @@ pub fn atlas(size: usize, colour: [f64; 3], seed: u64) -> Vec<u8> {
             let (amp, freq, phase) = (0.5 + 1.5 * rng.next(), 1.0 + 3.0 * rng.next(), std::f64::consts::TAU * rng.next());
             let half = 0.7 + 0.6 * rng.next();
             let bright = 0.75 + 0.5 * rng.next();
-            let tone = colour.map(|x| (x * bright).clamp(0.0, 1.0));
+            let lit = c >= CARD_COLUMNS - palette.lit_columns;
             for y in 0..((length * size as f64) as usize).min(size) {
                 let t = y as f64 / size as f64;
+                let tone = palette.at(t, lit).map(|x| (x * bright).clamp(0.0, 1.0));
                 let x = x0 + amp * (freq * std::f64::consts::TAU * t + phase).sin();
                 let fade = ((length - t) / (0.2 * length)).clamp(0.0, 1.0);
                 for xi in ((x - half - 1.0).floor() as i64).max(lo)..=((x + half + 1.0).ceil() as i64).min(hi) {
@@ -276,6 +320,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
         None => spec.body.as_ref().and_then(|b| b.groom.clone()).ok_or("groom cards needs --groom GROOM.json or a character with a groom (body.groom)")?,
     };
     let g = super::groom::parse(&groom_value)?;
+    let palette = Palette::of(&g);
     let number = |key: &str, default: usize, lo: usize, hi: usize| -> Result<usize, String> {
         let v = match opts.get(key) {
             Some(t) => t.parse::<usize>().map_err(|_| format!("--{key} takes a whole number, got {t}"))?,
@@ -291,7 +336,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     let centre = scale(scalp.head.iter().fold([0.0; 3], |a, &p| add(a, p)), 1.0 / scalp.head.len().max(1) as f64);
     let face = super::groom::Face::on(&gf_core::base_landmarks::on(&scalp.dense)?)?;
     let blocked = |p: Point| face.keep_out(p).is_some();
-    let mut cards = build(&strands, count, centre, WIDTH_MAX_M, &blocked);
+    let mut cards = build(&strands, count, centre, WIDTH_MAX_M, &blocked, palette.lit_columns, &|s| palette.is_lit(s));
     let (near_cards, near_vertices) = (cards.members.len(), cards.positions.len());
     let regions = gf_core::skin_regions::build(&scalp.head, &gf_core::game_mesh::game_normals(&scalp.head, &scalp.triangles), &scalp.triangles, &gf_core::base_landmarks::on(&scalp.dense)?)?;
     let scalp_index = gf_core::skin_regions::NAMES.iter().position(|n| *n == "scalp").ok_or("no scalp skin region")?;
@@ -306,13 +351,13 @@ pub fn run(opts: &Options) -> Result<Value, String> {
         for _ in 1..halvings {
             thinned = halved(&thinned);
         }
-        let far = build(&thinned, (count / share).max(1), centre, widest, &blocked);
+        let far = build(&thinned, (count / share).max(1), centre, widest, &blocked, palette.lit_columns, &|s| palette.is_lit(s));
         levels.push(gf_io::wearable_store::Level { from, first_face: cards.cap.len() + cards.quads.len() });
         far_rows.push(json!({"from_level": from, "cards": far.members.len(), "vertices": far.positions.len(), "rows": thinned.first().map_or(0, |s| s.points.len()),
                              "widest_mm": far.widths_m.iter().copied().fold(0.0, f64::max) * 1000.0}));
         append(&mut cards, far);
     }
-    let png = gf_io::png::rgba(size, size, &atlas(size, g.colour.map(srgb), g.seed))?;
+    let png = gf_io::png::rgba(size, size, &atlas(size, &palette, g.seed))?;
     let obj = obj_text(&cards, &name);
     let dir = store.root.join("cache").join("groom_cards").join(gf_core::hash::sha256_hex(&[obj.as_bytes(), &png].concat()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -337,13 +382,17 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": cards.cut,
               "strands_per_card": {"min": members.iter().min(), "max": members.iter().max(), "mean": members.iter().sum::<usize>() as f64 / members.len().max(1) as f64},
               "card_width_mm": {"min": cards.widths_m[..near_cards].iter().copied().fold(f64::INFINITY, f64::min) * 1000.0, "max": cards.widths_m[..near_cards].iter().copied().fold(0.0, f64::max) * 1000.0},
-              "atlas": {"size": size, "columns": COLUMNS, "file": png_path.to_string_lossy()}, "obj": obj_path.to_string_lossy(), "groom": grown, "bind": bound,
+              "atlas": {"size": size, "columns": COLUMNS, "highlight_columns": palette.lit_columns, "file": png_path.to_string_lossy()}, "highlight_cards": cards.lit, "obj": obj_path.to_string_lossy(), "groom": grown, "bind": bound,
               "method": "the groom grown on this character's scalp; its strands grouped by shape (root, middle and tip together, around seeds spread by farthest-point sampling, so strands combed apart never share a card), one card per group: a strip along the group's mean strand, as wide as twice its spread (6 to 40 mm), lying across the hair (its side perpendicular to the strand and to the line from the head's centre); its UVs one of the atlas's first seven columns, root at the top; under the cards a cap over the scalp (the head's scalp skin region from 25 %, lifted 1.5 mm, decimated to 700 vertices) mapped into the eighth column, painted opaque and fading in streaks where the scalp weight falls, so no bare skin shows between cards and the hairline is soft; a card that would reach in front of the face (the zone the groom keeps its strands out of) ends at the row before, its texture fitted to what is left; the atlas paints strands in the groom's colour with tapered tips; from level 4 on, a quarter as many cards made the same way from every other strand point, up to 80 mm wide, and from level 5 an eighth as many from every fourth point, up to 120 mm, so the far levels keep their cover (all sets in one mesh, each after the one before: the wearable's levels); the cards bound to the character like any garment (wearable bind, canonical frame, hiding nothing, double-sided)"}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_palette() -> Palette {
+        Palette { root: [0.133, 0.073, 0.033], tip: [0.133, 0.073, 0.033], highlight: [0.133, 0.073, 0.033], lit_columns: 0 }
+    }
 
     fn strand(root: Point, dir: Point) -> Strand {
         Strand { points: (0..5).map(|k| add(root, scale(dir, k as f64 * 0.02))).collect(), colours: vec![[0.1, 0.1, 0.1]; 5] }
@@ -356,7 +405,7 @@ mod tests {
             let x = if i < 10 { -0.05 } else { 0.05 } + (i % 10) as f64 * 0.001;
             strands.push(strand([x, 0.0, 0.1], [0.0, 0.0, -1.0]));
         }
-        let cards = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false);
+        let cards = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false, 0, &|_| false);
         assert_eq!(cards.members, vec![10, 10]);
         assert_eq!(cards.positions.len(), 2 * 2 * 5);
         assert_eq!(cards.quads.len(), 2 * 4);
@@ -372,16 +421,16 @@ mod tests {
         assert_eq!(cards.uvs[0][1], 1.0);
         assert_eq!(cards.uvs[8][1], 0.0);
         assert!(cards.uvs[10][0] > cards.uvs[1][0], "the second card uses the next atlas column");
-        let again = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false);
+        let again = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false, 0, &|_| false);
         assert_eq!(again.positions, cards.positions);
-        let cut = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|p| p[2] < 0.05);
+        let cut = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|p| p[2] < 0.05, 0, &|_| false);
         assert_eq!((cut.cut, cut.positions.len()), (2, 2 * 2 * 3), "each card ends before its first row below z 0.05");
         assert_eq!(cut.uvs[4][1], 0.0, "the shortened card still runs its texture root to tip");
         let half = halved(&strands);
         assert_eq!(half[0].points.len(), 3);
         assert_eq!(half[0].points[2], strands[0].points[4], "halving keeps the tip");
-        let mut both = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false);
-        let far = build(&half, 1, [0.0, 0.1, 0.0], FAR_SETS[0].3, &|_| false);
+        let mut both = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false, 0, &|_| false);
+        let far = build(&half, 1, [0.0, 0.1, 0.0], FAR_SETS[0].3, &|_| false, 0, &|_| false);
         let (n, q) = (both.positions.len() as u32, both.quads.len());
         append(&mut both, far);
         assert_eq!(both.quads[q], [n, n + 1, n + 3, n + 2], "the far set's faces follow, indexed past the near set");
@@ -421,7 +470,7 @@ mod tests {
             strands.push(strand([x, 0.0, 0.1], [-1.0, 0.0, -0.2]));
             strands.push(strand([x, 0.0, 0.1], [1.0, 0.0, -0.2]));
         }
-        let cards = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false);
+        let cards = build(&strands, 2, [0.0, 0.1, 0.0], WIDTH_MAX_M, &|_| false, 0, &|_| false);
         assert_eq!(cards.members, vec![10, 10]);
         for card in 0..2 {
             let tip = scale(add(cards.positions[card * 10 + 8], cards.positions[card * 10 + 9]), 0.5);
@@ -432,7 +481,7 @@ mod tests {
     #[test]
     fn the_atlas_is_see_through_between_strands_and_stays_in_its_columns() {
         let size = 256;
-        let a = atlas(size, [0.4, 0.3, 0.2], 7);
+        let a = atlas(size, &test_palette(), 7);
         assert_eq!(a.len(), size * size * 4);
         let alpha = |x: usize, y: usize| a[(y * size + x) * 4 + 3];
         let column = size / COLUMNS;
@@ -447,6 +496,6 @@ mod tests {
         assert!(top_cover > size / 4, "the roots are covered: {top_cover}");
         let bottom_cover = (0..size).filter(|&x| alpha(x, size - 1) > 128).count();
         assert!(bottom_cover < top_cover, "the tips thin out: {bottom_cover} vs {top_cover}");
-        assert_eq!(atlas(size, [0.4, 0.3, 0.2], 7), a);
+        assert_eq!(atlas(size, &test_palette(), 7), a);
     }
 }
