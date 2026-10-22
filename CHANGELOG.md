@@ -8,6 +8,13 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Hair under hats: tuck or hide.** Hair cards came out through a hat's crown (196 vertices of a short hair through
+  a fedora, up to 13 mm): alpha cards were never layered, and hat and hair share a layer depth. A worn item now has a
+  `hair` setting (Hair under it, in both panels; `tuck` by default, or `hide`) for the alpha-card hair under it above
+  the ears: tuck squashes the hair that would show through it just under it; hide also leaves out the hair inside its
+  crown. Both act only on the item's triangles that do not face down, and hide leaves the brim alone (the flat band
+  within 2 cm of its lowest point), so hair that shows under a brim stays. On the dressed test character: hair through
+  the crown 362 triangle centres -> 0 in both modes; hide leaves out 417 hair triangles at the finest level.
 - **Bob with bangs, curtain bangs, long layers.** Three more styles (fourteen in all); a style now also sets the
   fringe (and every style sets face framing, so picking a style without them takes them away). The colours,
   highlights and forehead stay as they are, like the part.

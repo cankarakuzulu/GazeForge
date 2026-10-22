@@ -83,6 +83,8 @@ pub struct WearableRef {
     pub scalp_cap: Option<bool>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strands: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hair: String,
 }
 
 pub const COARSE_POWER_CARDS: f64 = 0.5;
@@ -98,6 +100,8 @@ fn is_opening_default(v: &f64) -> bool {
 }
 
 pub const WEARABLE_PHYSICS: &[&str] = &["cloth", "springbone"];
+
+pub const WEARABLE_HAIR: &[&str] = &["tuck", "hide"];
 
 fn yes() -> bool {
     true
@@ -144,6 +148,9 @@ impl BodySpec {
             }
             if !(w.physics.is_empty() || w.physics == "none" || WEARABLE_PHYSICS.contains(&w.physics.as_str())) {
                 out.push(format!("body.wearables[{i}].physics {:?} is not none or one of {WEARABLE_PHYSICS:?}", w.physics));
+            }
+            if !(w.hair.is_empty() || WEARABLE_HAIR.contains(&w.hair.as_str())) {
+                out.push(format!("body.wearables[{i}].hair {:?} is not one of {WEARABLE_HAIR:?}", w.hair));
             }
             if let Some(l) = w.layer
                 && !(l.is_finite() && (0.0..=1000.0).contains(&l))
@@ -331,7 +338,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None, scalp_cap: None, strands: false };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None, scalp_cap: None, strands: false, hair: String::new() };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -343,6 +350,10 @@ mod tests {
         assert!(read.wearables[0].physics.is_empty());
         let shaken = BodySpec { wearables: vec![WearableRef { physics: "jelly".into(), ..worn(&r) }], ..ok.clone() };
         assert!(shaken.problems().iter().any(|x| x.contains("physics")));
+        assert!(BodySpec { wearables: vec![WearableRef { hair: "hide".into(), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
+        assert!(!BodySpec { wearables: vec![WearableRef { hair: "shave".into(), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
+        assert!(serde_json::to_string(&WearableRef { hair: "hide".into(), ..worn(&r) }).unwrap().contains("\"hair\":\"hide\""));
+        assert!(!serde_json::to_string(&worn(&r)).unwrap().contains("hair"), "tuck, the default, is not written");
         assert!(BodySpec { wearables: vec![WearableRef { physics: "cloth".into(), ..worn(&r) }], ..ok.clone() }.problems().is_empty());
         assert!(read.wearables[0].layer.is_none(), "no layer means the item's own z_depth");
         assert!(BodySpec { wearables: vec![WearableRef { layer: Some(7.5), ..worn(&r) }], ..ok.clone() }.problems().is_empty());

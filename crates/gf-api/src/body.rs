@@ -819,20 +819,38 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     }
                     dressed.push((w, item, p, tris));
                 }
+                let head_z = gf_core::base_landmarks::on(&dense).ok().and_then(|l| Some((l.get(&234)?[2] + l.get(&454)?[2]) / 2.0));
+                let mut cuts: Vec<Vec<bool>> = dressed.iter().map(|d| vec![false; d.2.len()]).collect();
                 {
                     let mut layers: Vec<crate::tasks::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(w, item, p, tris)| crate::tasks::wearable::Layered { triangles: tris.clone(), depth: crate::tasks::wearable::layer_depth(&item.binding, w.layer), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: p })
+                        .zip(cuts.iter_mut())
+                        .map(|((w, item, p, tris), cut)| crate::tasks::wearable::Layered {
+                            triangles: tris.clone(),
+                            depth: crate::tasks::wearable::layer_depth(&item.binding, w.layer),
+                            opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
+                            transparent: item.manifest.transparent,
+                            rigid: item.manifest.attach.is_some(),
+                            hide_hair: w.hair == "hide",
+                            cut: Some(cut),
+                            positions: p,
+                        })
                         .collect();
-                    crate::tasks::wearable::layer(&mut layers);
+                    crate::tasks::wearable::layer(&mut layers, head_z);
+                }
+                for ((_, _, _, tris), cut) in dressed.iter_mut().zip(&cuts) {
+                    tris.retain(|t| !t.iter().all(|&v| cut[v as usize]));
                 }
                 let mut meshes = Vec::new();
                 let strand_count = input.get("strands_preview").and_then(Value::as_u64).unwrap_or(STRANDS_PREVIEW) as usize;
-                for (w, item, p, tris) in &dressed {
+                for ((w, item, p, tris), cut) in dressed.iter().zip(&cuts) {
                     if w.strands && item.manifest.transparent && item.manifest.attach.is_none() {
                         let texture = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok());
                         if let Some((tw, th, rgba)) = texture {
-                            let (ctris, uvs) = crate::tasks::mesh::garment_triangles(item, p);
+                            let (ctris, uvs): (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) = {
+                                let (t, u) = crate::tasks::mesh::garment_triangles(item, p);
+                                t.into_iter().zip(u).filter(|(t, _)| !t.iter().all(|&v| cut[v as usize])).unzip()
+                            };
                             let (rank, _) = crate::tasks::strands::rank_on(&surface, p, &ctris);
                             let tex = crate::tasks::strands::Texture { width: tw, height: th, rgba: &rgba };
                             let (strands, report) = crate::tasks::strands::from_cards(p, &ctris, &uvs, &tex, strand_count, STRAND_PREVIEW_POINTS, 1, &rank);

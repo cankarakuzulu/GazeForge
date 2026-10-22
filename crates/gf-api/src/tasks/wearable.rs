@@ -635,6 +635,11 @@ const PUSH_REACH_M: f64 = 0.1;
 const FACING_REACH_M: f64 = 0.3;
 const TUCK_REACH_M: f64 = 0.02;
 const FACET_TUCK_PASSES: usize = 3;
+const HAIR_FACING_DOWN: f64 = 0.2;
+const HIDE_DEPTH_M: f64 = 0.1;
+const BRIM_BAND_M: f64 = 0.02;
+const HIDE_FROM_M: f64 = 0.0;
+const BRIM_FLAT: f64 = 0.6;
 const PUSH_SPREAD_PASSES: usize = 2;
 const LIFT_ROUNDS: usize = 4;
 const LIFT_MAX_M: f64 = 0.01;
@@ -801,6 +806,10 @@ pub struct Layered<'a> {
     pub triangles: Vec<[u32; 3]>,
     pub depth: f64,
     pub opaque: bool,
+    pub transparent: bool,
+    pub rigid: bool,
+    pub hide_hair: bool,
+    pub cut: Option<&'a mut Vec<bool>>,
 }
 
 pub fn depth_of(binding: &Binding) -> f64 {
@@ -952,7 +961,72 @@ pub fn opening_influences(
     (out, blended)
 }
 
-pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
+struct Outer {
+    surface: Surface,
+    triangles: Vec<[u32; 3]>,
+    around: Vec<Vec<usize>>,
+}
+
+impl Outer {
+    fn new(positions: &[Point], triangles: &[[u32; 3]]) -> Outer {
+        let surface = Surface::new(positions.to_vec(), triangles);
+        let mut around: Vec<Vec<usize>> = vec![Vec::new(); surface.points.len()];
+        for (t, tri) in triangles.iter().enumerate() {
+            for &v in tri {
+                around[v as usize].push(t);
+            }
+        }
+        Outer { surface, triangles: triangles.to_vec(), around }
+    }
+
+    fn under(&self, p: Point) -> Option<(f64, Point)> {
+        self.under_at(p).map(|(s, n, _)| (s, n))
+    }
+
+    fn under_at(&self, p: Point) -> Option<(f64, Point, usize)> {
+        let j = self.surface.nearest(p, PUSH_REACH_M)?;
+        let ring: Vec<usize> = self.around[j].iter().flat_map(|&t| self.triangles[t].iter().flat_map(|&u| self.around[u as usize].iter().copied())).collect();
+        ring.iter().find_map(|&t| under_triangle(p, self.triangles[t].map(|i| self.surface.points[i as usize]), self.surface.normals[j]).map(|(s, n)| (s, n, t)))
+    }
+}
+
+fn tuck(positions: &mut [Point], triangles: &[[u32; 3]], showing: &dyn Fn(Point) -> Option<(f64, Point)>) -> (usize, usize, f64) {
+    let (mut tucked, mut facets, mut deepest) = (0usize, 0usize, 0.0f64);
+    for v in positions.iter_mut() {
+        if let Some((by, n)) = showing(*v) {
+            *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
+            tucked += 1;
+            deepest = deepest.max(by);
+        }
+    }
+    for _ in 0..FACET_TUCK_PASSES {
+        let mut push: Vec<Option<(f64, Point)>> = vec![None; positions.len()];
+        for tri in triangles {
+            let [a, b, c] = tri.map(|i| positions[i as usize]);
+            let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
+            let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
+            let Some((by, n)) = [centre, mid(a, b), mid(b, c), mid(c, a)].into_iter().filter_map(showing).max_by(|x, y| x.0.total_cmp(&y.0)) else { continue };
+            facets += 1;
+            for &i in tri {
+                if push[i as usize].is_none_or(|(old, _)| by > old) {
+                    push[i as usize] = Some((by, n));
+                }
+            }
+        }
+        if push.iter().all(Option::is_none) {
+            break;
+        }
+        for (v, p) in positions.iter_mut().zip(&push) {
+            if let Some((by, n)) = p {
+                *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
+                deepest = deepest.max(*by);
+            }
+        }
+    }
+    (tucked, facets, deepest)
+}
+
+pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
     let mut order: Vec<usize> = (0..garments.len()).collect();
     order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));
     let mut reports = vec![Value::Null; garments.len()];
@@ -975,56 +1049,71 @@ pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
         let triangles = garments[g].triangles.clone();
         let mut report = push_out(garments[g].positions, &triangles, &surface, CLEARANCE_M);
         report["over"] = json!(inner.len());
-        let outer = Surface::new(garments[g].positions.clone(), &triangles);
-        let mut around: Vec<Vec<usize>> = vec![Vec::new(); outer.points.len()];
-        for (t, tri) in triangles.iter().enumerate() {
-            for &v in tri {
-                around[v as usize].push(t);
-            }
-        }
-        let showing = |p: Point| -> Option<(f64, Point)> {
-            let j = outer.nearest(p, PUSH_REACH_M)?;
-            let ring: Vec<usize> = around[j].iter().flat_map(|&t| triangles[t].iter().flat_map(|&u| around[u as usize].iter().copied())).collect();
-            let (s, n) = ring.iter().find_map(|&t| under_triangle(p, triangles[t].map(|i| outer.points[i as usize]), outer.normals[j]))?;
-            (s > -CLEARANCE_M && s < TUCK_REACH_M).then_some((s + CLEARANCE_M, n))
-        };
-        let (mut tucked, mut deepest, mut facets) = (0usize, 0.0f64, 0usize);
+        let outer = Outer::new(garments[g].positions, &triangles);
+        let showing = |p: Point| outer.under(p).filter(|&(s, _)| s > -CLEARANCE_M && s < TUCK_REACH_M).map(|(s, n)| (s + CLEARANCE_M, n));
+        let (mut tucked, mut facets, mut deepest) = (0usize, 0usize, 0.0f64);
         for &k in &inner {
-            for v in garments[k].positions.iter_mut() {
-                if let Some((by, n)) = showing(*v) {
-                    *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
-                    tucked += 1;
-                    deepest = deepest.max(by);
-                }
-            }
-            for _ in 0..FACET_TUCK_PASSES {
-                let mut push: Vec<Option<(f64, Point)>> = vec![None; garments[k].positions.len()];
-                for tri in &garments[k].triangles {
-                    let [a, b, c] = tri.map(|i| garments[k].positions[i as usize]);
-                    let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
-                    let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
-                    let Some((by, n)) = [centre, mid(a, b), mid(b, c), mid(c, a)].into_iter().filter_map(&showing).max_by(|x, y| x.0.total_cmp(&y.0)) else { continue };
-                    facets += 1;
-                    for &i in tri {
-                        if push[i as usize].is_none_or(|(old, _)| by > old) {
-                            push[i as usize] = Some((by, n));
-                        }
-                    }
-                }
-                if push.iter().all(Option::is_none) {
-                    break;
-                }
-                for (v, p) in garments[k].positions.iter_mut().zip(&push) {
-                    if let Some((by, n)) = p {
-                        *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
-                        deepest = deepest.max(*by);
-                    }
-                }
-            }
+            let k_triangles = garments[k].triangles.clone();
+            let (t, f, d) = tuck(garments[k].positions, &k_triangles, &showing);
+            tucked += t;
+            facets += f;
+            deepest = deepest.max(d);
         }
         report["tucked_under"] = json!({"vertices": tucked, "facets": facets, "max_mm": deepest * 1000.0,
                                         "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance; then their triangles whose centre or edge midpoints still showed through (facets crossing between vertices) moved behind it the same way, up to 3 passes"});
         reports[g] = report;
+    }
+    if let Some(head) = head_z {
+        for g in 0..garments.len() {
+            if garments[g].transparent || garments[g].positions.iter().all(|p| p[2] <= head) {
+                continue;
+            }
+            let triangles = garments[g].triangles.clone();
+            let outer = Outer::new(garments[g].positions, &triangles);
+            let lowest = garments[g].positions.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
+            let brim: Vec<bool> = triangles
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|i| outer.surface.points[i as usize]);
+                    let n = cross(sub(b, a), sub(c, a));
+                    let len = dot(n, n).sqrt().max(1e-12);
+                    (a[2] + b[2] + c[2]) / 3.0 < lowest + BRIM_BAND_M && (n[2] / len).abs() > BRIM_FLAT
+                })
+                .collect();
+            let over = |p: Point| outer.under(p).filter(|&(_, n)| p[2] > head && n[2] > -HAIR_FACING_DOWN);
+            let (mut moved, mut facets, mut deepest, mut hidden) = (0usize, 0usize, 0.0f64, 0usize);
+            for k in 0..garments.len() {
+                if k == g || !garments[k].transparent || garments[k].rigid {
+                    continue;
+                }
+                if garments[g].hide_hair {
+                    let marks: Vec<bool> = garments[k]
+                        .positions
+                        .iter()
+                        .map(|&p| p[2] > head && outer.under_at(p).is_some_and(|(s, n, t)| !brim[t] && n[2] > -HAIR_FACING_DOWN && s > -HIDE_DEPTH_M && s < -HIDE_FROM_M))
+                        .collect();
+                    hidden += marks.iter().filter(|m| **m).count();
+                    if let Some(cut) = garments[k].cut.as_deref_mut() {
+                        for (c, m) in cut.iter_mut().zip(&marks) {
+                            *c |= *m;
+                        }
+                    }
+                }
+                {
+                    let showing = |p: Point| over(p).filter(|&(s, _)| s > -CLEARANCE_M && s < TUCK_REACH_M).map(|(s, n)| (s + CLEARANCE_M, n));
+                    let k_triangles = garments[k].triangles.clone();
+                    let (t, f, d) = tuck(garments[k].positions, &k_triangles, &showing);
+                    moved += t;
+                    facets += f;
+                    deepest = deepest.max(d);
+                }
+            }
+            if !reports[g].is_object() {
+                reports[g] = json!({});
+            }
+            reports[g]["hair_under"] = json!({"mode": if garments[g].hide_hair { "hide" } else { "tuck" }, "vertices_hidden": hidden, "vertices_tucked": moved, "facets": facets, "max_mm": deepest * 1000.0,
+                                               "meaning": "alpha-card items above the ears: in hide, vertices under this item's crown (its triangles but the brim - the flat ones within 2 cm of its lowest point - and those facing down; up to 10 cm behind, or under 2 cm in front) have their triangles left out; in both, vertices still showing through its triangles that do not face down move behind them by the clearance, then their crossing facets"});
+        }
     }
     reports
 }
@@ -1348,6 +1437,47 @@ mod tests {
     }
 
     #[test]
+    fn hair_cards_above_the_ears_go_under_a_hat_or_are_hidden_by_it() {
+        let lift = |(p, t): (Vec<Point>, Vec<[u32; 3]>), y: f64, z: f64| (p.into_iter().map(|q| [q[0], q[1] + y, q[2] + z]).collect::<Vec<_>>(), t);
+        let run = |hide: bool, head: f64| {
+            let (mut hat, hat_t) = lift(grid(6, 0.2, 0.0, 0.1), 0.0, 1.6);
+            for p in hat.iter_mut() {
+                if p[0] > 0.16 && p[0] < 0.24 && p[1] > 0.06 && p[1] < 0.14 {
+                    p[2] += 0.05;
+                }
+            }
+            let (mut deep, deep_t) = lift(grid(2, 0.04, 0.0, 0.18), 0.08, 1.63);
+            let (mut shallow, shallow_t) = lift(grid(2, 0.04, 0.0, 0.18), 0.08, 1.653);
+            let (mut brim, brim_t) = lift(grid(1, 0.02, 0.0, 0.105), 0.005, 1.603);
+            let mut cuts = [vec![false; deep.len()], vec![false; shallow.len()], vec![false; brim.len()]];
+            let reports = {
+                let [cd, cs, cb] = &mut cuts;
+                let card = |positions, triangles, cut| Layered { positions, triangles, depth: 50.0, opaque: false, transparent: true, rigid: false, hide_hair: false, cut: Some(cut) };
+                let mut items = vec![
+                    Layered { positions: &mut hat, triangles: hat_t, depth: 50.0, opaque: true, transparent: false, rigid: false, hide_hair: hide, cut: None },
+                    card(&mut deep, deep_t, cd),
+                    card(&mut shallow, shallow_t, cs),
+                    card(&mut brim, brim_t, cb),
+                ];
+                layer(&mut items, Some(head))
+            };
+            ([deep, shallow, brim], cuts, reports)
+        };
+        let at = |v: &[Point], z: f64| v.iter().all(|p| (p[2] - z).abs() < 1e-9);
+        let none = |c: &[bool]| c.iter().all(|x| !x);
+        let ([deep, shallow, brim], cuts, r) = run(false, 1.5);
+        assert!(at(&shallow, 1.65 - CLEARANCE_M) && at(&brim, 1.6 - CLEARANCE_M), "tuck: hair showing through the crown or the brim ends behind it by the clearance: {}", r[0]);
+        assert!(at(&deep, 1.63), "tuck: hair already well inside stays");
+        assert!(cuts.iter().all(|c| none(c)) && r[0]["hair_under"]["mode"] == "tuck", "{}", r[0]);
+        let ([_, shallow, brim], cuts, r) = run(true, 1.5);
+        assert!(cuts[0].iter().all(|c| *c), "hide: hair well inside the crown is left out: {}", r[0]);
+        assert!(none(&cuts[1]) && none(&cuts[2]), "hide: hair at the crown's surface or at the brim stays (it can show under a brim)");
+        assert!(at(&shallow, 1.65 - CLEARANCE_M) && at(&brim, 1.6 - CLEARANCE_M), "hide still tucks what shows through");
+        let ([deep, shallow, _], cuts, _) = run(true, 1.7);
+        assert!(cuts.iter().all(|c| none(c)) && at(&deep, 1.63) && at(&shallow, 1.653), "nothing below the ears is touched");
+    }
+
+    #[test]
     fn an_inner_item_showing_through_an_outer_one_is_tucked_under_its_footprint_only() {
         let (mut inner, inner_t) = grid(40, 0.4, -0.01, 0.0);
         let (mut outer, outer_t) = grid(4, 0.2, 0.0, 0.1);
@@ -1361,10 +1491,10 @@ mod tests {
         }
         let (before, outer_before) = (inner.clone(), outer.clone());
         let mut items = vec![
-            Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true },
-            Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true },
+            Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None },
+            Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true, transparent: false, rigid: false, hide_hair: false, cut: None },
         ];
-        let reports = layer(&mut items);
+        let reports = layer(&mut items, None);
         assert_eq!(outer, outer_before, "the coarse outer sheet is not moved: its own vertices are clear of the inner one");
         assert!(reports[1]["tucked_under"]["vertices"].as_u64().unwrap() > 0, "{}", reports[1]);
         for ((p, q), &b) in inner.iter().zip(&before).zip(&bumps) {

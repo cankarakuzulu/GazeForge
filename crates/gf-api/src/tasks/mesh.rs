@@ -1793,10 +1793,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             let coarse_power = w.coarse_power.unwrap_or(if item.manifest.transparent { gf_core::body_shape::COARSE_POWER_CARDS } else { 1.0 });
             let scalp_cap = item.manifest.transparent && item.manifest.attach.is_none() && w.scalp_cap.unwrap_or(true);
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power, "scalp_cap": scalp_cap, "strands": w.strands,
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power, "scalp_cap": scalp_cap, "strands": w.strands, "hair": if w.hair == "hide" { "hide" } else { "tuck" },
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
+        let head_z = gf_core::base_landmarks::on(&neutral_dense).ok().and_then(|l| Some((l.get(&234)?[2] + l.get(&454)?[2]) / 2.0));
         let mut rows = Vec::new();
         let mut failures = Vec::new();
         for (i, level) in levels.iter().enumerate() {
@@ -1831,16 +1832,40 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 for (item, garment, _, row) in dressed.iter_mut() {
                     row["pushed"] = if item.manifest.attach.is_some() { json!("no: a rigid item rides its bone") } else if item.manifest.transparent { json!("no: alpha cards cross the skin on purpose") } else { super::wearable::push_out(garment, &super::wearable::triangles_of(&item.faces), &surface, super::wearable::CLEARANCE_M) };
                 }
+                let mut cuts: Vec<Vec<bool>> = dressed.iter().map(|d| vec![false; d.1.len()]).collect();
                 let reports = {
                     let mut layers: Vec<super::wearable::Layered> = dressed
                         .iter_mut()
-                        .map(|(item, garment, _, row)| super::wearable::Layered { triangles: super::wearable::triangles_of(&item.faces), depth: row["depth"].as_f64().unwrap_or(50.0), opaque: !item.manifest.transparent && item.manifest.attach.is_none(), positions: garment })
+                        .zip(cuts.iter_mut())
+                        .map(|((item, garment, _, row), cut)| super::wearable::Layered {
+                            triangles: super::wearable::triangles_of(&item.faces),
+                            depth: row["depth"].as_f64().unwrap_or(50.0),
+                            opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
+                            transparent: item.manifest.transparent,
+                            rigid: item.manifest.attach.is_some(),
+                            hide_hair: row["hair"] == "hide",
+                            cut: Some(cut),
+                            positions: garment,
+                        })
                         .collect();
-                    super::wearable::layer(&mut layers)
+                    super::wearable::layer(&mut layers, head_z)
                 };
-                for ((item, garment, slot, mut row), layered) in dressed.into_iter().zip(reports) {
+                for (((item, garment, slot, mut row), layered), cut) in dressed.into_iter().zip(reports).zip(&cuts) {
                     row["layered"] = layered;
-                    let ladder = wearable_ladder(&item, &garment, &body_counts, row["coarse_power"].as_f64().unwrap_or(1.0));
+                    let mut ladder = wearable_ladder(&item, &garment, &body_counts, row["coarse_power"].as_f64().unwrap_or(1.0));
+                    if cut.iter().any(|c| *c) {
+                        let mut dropped = Vec::new();
+                        for (kept, tris, uvs) in ladder.iter_mut() {
+                            let before = tris.len();
+                            let keep: Vec<bool> = tris.iter().map(|t| !t.iter().all(|&v| cut[kept[v as usize] as usize])).collect();
+                            let mut flags = keep.iter();
+                            tris.retain(|_| *flags.next().unwrap_or(&true));
+                            let mut flags = keep.iter();
+                            uvs.retain(|_| *flags.next().unwrap_or(&true));
+                            dropped.push(before - tris.len());
+                        }
+                        row["hair_hidden_triangles"] = json!(dropped);
+                    }
                     row["lod_vertices"] = json!(ladder.iter().map(|l| l.0.len()).collect::<Vec<_>>());
                     row["lod_pushed"] = json!([]);
                     worn.push((item, garment, slot, ladder, row));
@@ -1947,10 +1972,14 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                             triangles: ladder[i.min(ladder.len() - 1)].1.clone(),
                             depth: row["depth"].as_f64().unwrap_or(50.0),
                             opaque: !item.manifest.transparent && item.manifest.attach.is_none(),
+                            transparent: item.manifest.transparent,
+                            rigid: item.manifest.attach.is_some(),
+                            hide_hair: row["hair"] == "hide",
+                            cut: None,
                             positions,
                         })
                         .collect();
-                    super::wearable::layer(&mut layers);
+                    super::wearable::layer(&mut layers, head_z);
                 }
                 if i == 0 && levels.len() > GENTLE_LEVELS + 1 && worn.iter().any(|w| w.4["scalp_cap"] == true) {
                     let cap_map = gf_core::skin_map::build(&base.triangle_uvs, cap_size, CAP_PAD);

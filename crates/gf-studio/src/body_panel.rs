@@ -309,6 +309,25 @@ impl World {
         })
     }
 
+    pub fn body_wear_hair(&mut self, asset: &str, mode: &str) -> Result<bool, String> {
+        if !gf_core::body_shape::WEARABLE_HAIR.contains(&mode) {
+            return Err(format!("{mode} is not one of {:?}", gf_core::body_shape::WEARABLE_HAIR));
+        }
+        Ok(self.body_edit(|b| {
+            for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
+                if w["asset"] == asset
+                    && let Some(o) = w.as_object_mut()
+                {
+                    if mode == "hide" {
+                        o.insert("hair".into(), json!("hide"));
+                    } else {
+                        o.remove("hair");
+                    }
+                }
+            }
+        }))
+    }
+
     pub fn body_wear_hide(&mut self, asset: &str, hide: bool) -> bool {
         self.body_edit(|b| {
             for w in b.get_mut("wearables").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -470,6 +489,8 @@ impl crate::studio::Studio<'_> {
             let mut cap_commit: Option<(String, bool)> = None;
             let strands_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["strands"].as_bool()).unwrap_or(false);
             let mut strands_commit: Option<(String, bool)> = None;
+            let hair_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["hair"].as_str()).unwrap_or("tuck").to_string();
+            let mut hair_commit: Option<(String, String)> = None;
             let label = |asset: &str| {
                 let name = ui_state.store_wear.iter().find(|w| w.reference == asset).map_or("?", |w| w.name.as_str());
                 format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
@@ -551,6 +572,21 @@ impl crate::studio::Studio<'_> {
                         if ui.checkbox(&mut strands, tr("body.wear_strands")).on_hover_text(tr("body.wear_strands_tip")).changed() {
                             strands_commit = Some((asset.clone(), strands));
                         }
+                    } else {
+                        let current = hair_of(asset);
+                        let mode_label = |m: &str| tr(&format!("body.wear_hair.{m}")).to_string();
+                        ui.label(tr("body.wear_hair")).on_hover_text(tr("body.wear_hair_tip"));
+                        egui::ComboBox::from_id_salt(("body_wear_hair", asset.as_str()))
+                            .selected_text(mode_label(&current))
+                            .show_ui(ui, |ui| {
+                                for &mode in gf_core::body_shape::WEARABLE_HAIR {
+                                    if ui.selectable_label(current == mode, mode_label(mode)).clicked() && current != mode {
+                                        hair_commit = Some((asset.clone(), mode.to_string()));
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(tr("body.wear_hair_tip"));
                     }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
@@ -720,6 +756,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((asset, on)) = strands_commit {
                 self.world.body_wear_strands(&asset, on);
+            }
+            if let Some((asset, mode)) = hair_commit
+                && let Err(e) = self.world.body_wear_hair(&asset, &mode)
+            {
+                self.world.body_ui.error = Some(e);
             }
             if let Some((asset, hide)) = wear_commit {
                 let worn_now = worn.iter().any(|w| w.0 == asset);
