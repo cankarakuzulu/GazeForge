@@ -14,6 +14,11 @@ const PROBES: usize = 16;
 const OPAQUE: u8 = 128;
 const ROOT_WIDTH_M: f64 = 0.00008;
 const TIP_WIDTH_M: f64 = 0.00002;
+const FOLDED_SHARE: f64 = 0.1;
+
+fn uv_signed(t: [[f64; 2]; 3]) -> f64 {
+    (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[2][0] - t[0][0]) * (t[1][1] - t[0][1])
+}
 
 pub struct Settings {
     pub out: String,
@@ -231,7 +236,21 @@ pub fn opaque_area(positions: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom:
 pub fn from_cards(positions: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], texture: &Texture, count: usize, points: usize, seed: u64, rank: &[f64]) -> (Vec<Strand>, Value) {
     let uvs: Vec<[[f64; 2]; 3]> = uvs.iter().map(|t| t.map(|c| [c[0] as f64, c[1] as f64])).collect();
     let areas = areas(positions, triangles);
-    let pieces: Vec<Piece> = pieces(positions.len(), triangles).into_iter().map(|t| Piece::new(t, &uvs, &areas, texture)).collect();
+    let mut folded = 0usize;
+    let pieces: Vec<Piece> = pieces(positions.len(), triangles)
+        .into_iter()
+        .map(|t| {
+            let signs: Vec<bool> = t.iter().map(|&i| uv_signed(uvs[i]) > 0.0).collect();
+            let up = signs.iter().filter(|&&s| s).count();
+            let fold = up.min(signs.len() - up) as f64 > FOLDED_SHARE * signs.len() as f64;
+            let mut piece = Piece::new(t, &uvs, &areas, texture);
+            if fold {
+                piece.weight = 0.0;
+                folded += 1;
+            }
+            piece
+        })
+        .collect();
     let total: f64 = pieces.iter().map(|p| p.weight).sum();
     let mut rng = Rng(seed);
     let mut strands = Vec::new();
@@ -330,7 +349,7 @@ pub fn from_cards(positions: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::
     let lengths: Vec<f64> = strands.iter().map(|s| s.points.windows(2).map(|w| dist(w[0], w[1])).sum()).collect();
     let mean = if lengths.is_empty() { 0.0 } else { lengths.iter().sum::<f64>() / lengths.len() as f64 };
     let longest = lengths.iter().copied().fold(0.0, f64::max);
-    let report = json!({"pieces": pieces.len(), "strands": strands.len(), "asked": count, "traced": tries, "too_short_or_empty": short,
+    let report = json!({"pieces": pieces.len(), "folded_pieces_skipped": folded, "strands": strands.len(), "asked": count, "traced": tries, "too_short_or_empty": short,
                         "rooted_at_the_far_uv_end": flipped, "pieces_traced_along_u": along_u, "pieces_short_of_their_share": unfilled, "points_per_strand": points,
                         "mean_length_mm": (mean * 1e4).round() / 10.0, "longest_mm": (longest * 1e4).round() / 10.0});
     (strands, report)
@@ -466,6 +485,24 @@ mod tests {
         }
         let (same, _) = from_cards(&p, &tris, &uvs, &tex, 20, 8, 7, &rank(&p, 0.0));
         assert_eq!(same.iter().map(|s| s.points[3]).collect::<Vec<_>>(), strands.iter().map(|s| s.points[3]).collect::<Vec<_>>(), "seeded");
+    }
+
+    #[test]
+    fn a_piece_whose_uvs_fold_over_is_not_a_card_and_grows_no_strands() {
+        let (p, tris, uvs) = strip(10);
+        let n = p.len() as u32;
+        let mut all = p.clone();
+        all.extend(p.iter().map(|q| [q[0] + 1.0, q[1], q[2]]));
+        let mut all_tris = tris.clone();
+        all_tris.extend(tris.iter().map(|t| t.map(|v| v + n)));
+        let mut all_uvs = uvs.clone();
+        all_uvs.extend(uvs.iter().enumerate().map(|(i, t)| if i % 2 == 1 { t.map(|c| [1.0 - c[0], c[1]]) } else { *t }));
+        let rgba = vec![255u8; 4 * 8 * 64];
+        let tex = Texture { width: 8, height: 64, rgba: &rgba };
+        let (strands, report) = from_cards(&all, &all_tris, &all_uvs, &tex, 20, 6, 3, &rank(&all, 0.0));
+        assert_eq!(report["folded_pieces_skipped"], 1, "{report}");
+        assert_eq!(strands.len(), 20, "{report}");
+        assert!(strands.iter().all(|s| s.points.iter().all(|q| q[0] < 0.5)), "every strand on the unfolded card");
     }
 
     #[test]

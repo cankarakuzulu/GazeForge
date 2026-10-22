@@ -15,9 +15,13 @@ open, with its last measurement, rather than left out.
   transparent, double-sided wearable through `wearable bind`, so it follows every shape and takes the hair ladder,
   the scalp cap and spring-bone physics. Gate (`tools/diag/groom_cards_gate.py`, not shipped, proven to fail on
   single-sided cards): deterministic, binding back within 0.01 mm, faces outward, worn and exported on six levels
-  with a masked double-sided material, strands traced back from the cards. Known: the scalp shows between cards at
-  the part and the crown (the head's own skin, painted with hair colour only on the far levels); the far card sets
+  with a masked double-sided material, strands traced back from the cards. Known: the far card sets and the scalp cap
   ride the body's skin weights, not the spring chains.
+- **Groom cards have a scalp under them.** A cap over the head's scalp skin region (lifted 1.5 mm, decimated to
+  700 vertices on the head's own UVs) rides with the near cards, painted in the atlas's eighth column: opaque hair
+  where the scalp weight is full, fading in streaks where it falls, so no bare skin shows between cards and the
+  hairline is soft. Strand tracing (`--strands` from worn cards) now skips any piece whose UVs fold over (more than a
+  tenth of its triangles mirrored) - such a piece is not a card; MakeHuman hair traces byte for byte as before.
 - **Groom cards keep their cover on the far levels.** A wearable can now carry more than one set of faces in its
   mesh, each from a level on (`levels` in the store manifest; LOD0 and every reader that wants one mesh see the
   first set). `groom cards` writes three: the 600 cards, then 150 cards from every other strand point (up to 80 mm

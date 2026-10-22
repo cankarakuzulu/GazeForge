@@ -707,6 +707,7 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 pub struct Scalp {
     pub head: Vec<Point>,
     pub triangles: Vec<[u32; 3]>,
+    pub triangle_uvs: Vec<[gf_geom::Uv; 3]>,
     pub dense: Vec<[f64; 3]>,
     pub surface: crate::tasks::wearable::Surface,
 }
@@ -725,7 +726,7 @@ pub fn scalp(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>) -> Re
     let h = head.len() as u32;
     let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
     let surface = crate::tasks::wearable::Surface::new(points, &tris);
-    Ok(Scalp { head, triangles: base.triangles, dense, surface })
+    Ok(Scalp { head, triangles: base.triangles, triangle_uvs: base.triangle_uvs, dense, surface })
 }
 
 pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
