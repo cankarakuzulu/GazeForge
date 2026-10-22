@@ -292,6 +292,14 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Baked cloth stretched at a partly pinned band.** A cloth vertex partly pinned to the skin was pulled toward its
+  skinned place after the cloth's edges were solved, so the edges around it ended each step stretched: a cape over a
+  suit, baked with sway, reached 1.31 (LOD0) and 1.34 (LOD1) times its rest length at the collar band, and its
+  partly pinned vertices ended up to 13 mm inside a body capsule. The pull now comes before the solve (fully pinned
+  vertices still end exactly on the skin): 1.055 and 1.036, and 0 mm inside on those levels. LOD2, where the coarse
+  cape's pinned rows sit inside a capsule at rest, now shows the conflict as stretch at its pinned edges (1.112,
+  was 1.015) instead of as penetration (11.5 mm, was 13.6). The bake report gives the largest stretch for edges with
+  free, partly pinned and fully pinned ends.
 - **Specks of an inner garment showed through the one over it.** Worn layering tucked the inner item's vertices
   behind the outer one, but two flat-faceted meshes can still cross between their vertices: a cape over a suit
   showed suit-coloured dots near its top edge (8 sample points of the suit outside the cape, up to 0.72 mm, while

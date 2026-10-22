@@ -1196,6 +1196,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
     let mut vel = vec![[0.0; 3]; n];
     let dt = 1.0 / CLOTH_HZ;
     let mut stats = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut stretch_by = [0.0f64; 3];
     let surface = |t: f64| -> Option<(Vec<V3>, Vec<V3>, Grid)> {
         let body = body?;
         let world = scene.world(&clip.pose(scene, t));
@@ -1234,6 +1235,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             } else {
                 x[v] = target[v];
             }
+            x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
         }
         for _ in 0..CLOTH_ITERATIONS {
             for &(list, stiffness) in &[(&edges, 1.0), (&bends, CLOTH_BEND)] {
@@ -1275,7 +1277,9 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             }
         }
         for v in 0..n {
-            x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
+            if cloth.pin[v] >= PINNED_REPORT {
+                x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
+            }
             vel[v] = scale(sub(x[v], old[v]), 1.0 / dt);
         }
         if record {
@@ -1291,7 +1295,11 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             }
             for &(a, b, rest) in &edges {
                 if rest > 1e-9 {
-                    stats.2 = stats.2.max(norm(sub(x[a], x[b])) / rest);
+                    let s = norm(sub(x[a], x[b])) / rest;
+                    stats.2 = stats.2.max(s);
+                    let class = |p: f64| if p >= PINNED_REPORT { 2 } else if p > 0.0 { 1 } else { 0 };
+                    let k = class(cloth.pin[a]).max(class(cloth.pin[b]));
+                    stretch_by[k] = stretch_by[k].max(s);
                 }
             }
             if let Some((pts, nrm, grid)) = &skin_now {
@@ -1323,7 +1331,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
     }).fold(0.0, f64::max);
     let mm = |x: f64| (x * 1e6).round() / 1000.0;
     let report = json!({"node": scene.names[cloth.node], "vertices": n, "free_vertices": free, "edges": edges.len(), "bends": bends.len(),
-                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0,
+                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0, "max_stretch_free_partly_pinned_pinned": stretch_by.map(|s| (s * 1000.0).round() / 1000.0),
                         "max_from_skinned_mm": mm(moved)});
     ClothRun { positions, report }
 }
@@ -1634,6 +1642,20 @@ mod tests {
         }
         let far = last[cloth.bind.len() - 1];
         assert!(far[1] < -0.2, "the free edge hangs down: {far:?}");
+        assert!(run.report["max_stretch"].as_f64().unwrap() < 1.1, "{}", run.report);
+    }
+
+    #[test]
+    fn a_partly_pinned_band_does_not_stretch_its_edges() {
+        let scene = line_scene(0, [0.0; 3]);
+        let mut cloth = sheet(6, 0.3);
+        for v in 7..21 {
+            cloth.pin[v] = 0.6;
+        }
+        let times: Vec<f64> = (0..=10).map(|k| k as f64 / 10.0).collect();
+        let values: Vec<f64> = times.iter().flat_map(|&t| [if (t * 10.0).round() as i64 % 2 == 0 { 0.15 } else { -0.15 }, 0.0, 0.0]).collect();
+        let shake = Clip { name: "shake".into(), duration: 1.0, tracks: vec![Track { node: 0, path: PathKind::Translation, times: times.clone(), values, step: false }], source: None };
+        let run = simulate_cloth(&scene, &shake, &cloth, &[], None, &times, 1.0);
         assert!(run.report["max_stretch"].as_f64().unwrap() < 1.1, "{}", run.report);
     }
 
