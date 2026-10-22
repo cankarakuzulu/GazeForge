@@ -301,6 +301,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A groom file with an odd colour crashed the command.** A colour of six bytes holding a non-ASCII letter (such as
+  `#aééb`) stopped any command that read the groom, with no JSON answer. Colours are now exactly `#rrggbb` (the `#`
+  optional, once), whole-number settings (strands, points, clumps, seed) refuse fractions instead of cutting them,
+  and words given as numbers or other non-text are refused instead of falling back to defaults. The undocumented
+  part `center` is gone; the clients only ever wrote `centre`.
 - **No more wisps across the forehead.** Framed strands rooted at the front of the part were combed down and
   sideways across the forehead, and a curl swung them further: 6 strands of the wavy framed groom (2 without the
   curl). The face's keep-out stopped at the top of the brows, so nothing guarded the forehead above them. The last
