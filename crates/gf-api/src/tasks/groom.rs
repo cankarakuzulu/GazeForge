@@ -21,6 +21,8 @@ const JAW_MARGIN_M: f64 = -0.015;
 const THROAT_M: f64 = 0.05;
 const OUTSIDE_PASSES: usize = 4;
 const SETTLE_ROUNDS: usize = 3;
+const POINTS_PER_TURN: usize = 8;
+const MAX_POINTS: usize = 256;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
 const CURL_FADE_M: f64 = 0.03;
@@ -63,6 +65,14 @@ impl Face {
     }
 
     pub(crate) fn keep_out(&self, p: Point) -> Option<Point> {
+        self.keep_out_toward(p, p[0] - self.centre_x)
+    }
+
+    fn side_of(&self, p: Point) -> f64 {
+        if p[0] >= self.centre_x { 1.0 } else { -1.0 }
+    }
+
+    fn keep_out_toward(&self, p: Point, side: f64) -> Option<Point> {
         let dx = (p[0] - self.centre_x).abs();
         let ahead = (self.eyes_y - p[1]).max(0.0);
         if dx >= self.half_width + ahead || p[2] <= self.bottom || p[2] >= self.top || p[1] >= self.ears_y {
@@ -74,7 +84,7 @@ impl Face {
         } else {
             (self.half_width, p[1])
         };
-        Some([self.centre_x + if p[0] >= self.centre_x { dx } else { -dx }, y, p[2]])
+        Some([self.centre_x + if side >= 0.0 { dx } else { -dx }, y, p[2]])
     }
 }
 
@@ -89,6 +99,11 @@ fn outside(surface: &Surface, p: Point) -> Option<Point> {
         q = add(q, scale(surface.normals[j], CLEAR_M - s));
     }
     (q != p).then_some(q)
+}
+
+fn strand_points(g: &Groom) -> usize {
+    let curls = g.length_m * g.curl_turns_per_m * if g.curl_radius_m > 0.0 { 1.0 } else { 0.0 };
+    g.points.max(((curls * POINTS_PER_TURN as f64).ceil() as usize + 1).min(MAX_POINTS))
 }
 
 pub(crate) struct Rng(pub(crate) u64);
@@ -178,7 +193,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         if dot(f, f) < 1e-10 { unit(tangent(down, n)) } else { unit(f) }
     };
     let mut rng = Rng(g.seed);
-    let seg = g.length_m / (g.points - 1) as f64;
+    let points = strand_points(g);
+    let seg = g.length_m / (points - 1) as f64;
     let mut roots = Vec::with_capacity(g.strands);
     let mut lines: Vec<Vec<Point>> = Vec::with_capacity(g.strands);
     let mut pushes = 0usize;
@@ -197,13 +213,13 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         roots.push((p, n));
         let mut line = vec![add(p, scale(n, ROOT_LIFT_M))];
         let mut dir = unit(add(scale(n, LIFT), scale(flow(p, n), 1.0 - LIFT)));
-        for _ in 1..g.points {
+        for _ in 1..points {
             let mut next = add(*line.last().unwrap(), scale(dir, seg));
             if let Some(q) = outside(surface, next) {
                 next = q;
                 pushes += 1;
             }
-            if let Some(q) = face.keep_out(next) {
+            if let Some(q) = face.keep_out_toward(next, face.side_of(p)) {
                 next = q;
                 kept_off_face += 1;
             }
@@ -234,15 +250,18 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     if g.clumps > 0 && g.clump > 0.0 {
         let k = g.clumps.min(lines.len());
         let centres: Vec<usize> = (0..k).map(|i| i * lines.len() / k).collect();
+        let side = |i: usize| part_x.map(|x| roots[i].0[0] >= x);
         for s in 0..lines.len() {
-            let c = *centres.iter().min_by(|&&a, &&b| dot(sub(roots[a].0, roots[s].0), sub(roots[a].0, roots[s].0)).total_cmp(&dot(sub(roots[b].0, roots[s].0), sub(roots[b].0, roots[s].0)))).unwrap();
+            let Some(&c) = centres.iter().filter(|&&a| side(a) == side(s)).min_by(|&&a, &&b| dot(sub(roots[a].0, roots[s].0), sub(roots[a].0, roots[s].0)).total_cmp(&dot(sub(roots[b].0, roots[s].0), sub(roots[b].0, roots[s].0)))) else {
+                continue;
+            };
             if c == s {
                 continue;
             }
             let centre = lines[c].clone();
             let offset = sub(roots[s].0, roots[c].0);
             for (k_, p) in lines[s].iter_mut().enumerate() {
-                let t = k_ as f64 / (g.points - 1) as f64;
+                let t = k_ as f64 / (points - 1) as f64;
                 let target = add(centre[k_], scale(offset, 1.0 - t));
                 *p = add(*p, scale(sub(target, *p), g.clump * t));
             }
@@ -257,6 +276,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mut jaw_roots: Vec<Value> = Vec::new();
     let mut lengths = Vec::with_capacity(lines.len());
     for line in &mut lines {
+        let side = face.side_of(line[0]);
         let phase = rng.next() * std::f64::consts::TAU;
         let mut arc = 0.0;
         let base = line.clone();
@@ -274,7 +294,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let frizz = scale([rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5], 2.0 * g.frizz_m * tip);
             line[k] = add(add(base[k], curl), frizz);
             for _ in 0..SETTLE_ROUNDS * usize::from(k > 0) {
-                let face_moved = face.keep_out(line[k]);
+                let face_moved = face.keep_out_toward(line[k], side);
                 if let Some(q) = face_moved {
                     line[k] = q;
                     kept_off_face += 1;
@@ -283,7 +303,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                 if let Some(q) = skin_moved {
                     line[k] = q;
                 }
-                if skin_moved.is_none() || face.keep_out(line[k]).is_none() {
+                if skin_moved.is_none() || face.keep_out_toward(line[k], side).is_none() {
                     break;
                 }
             }
@@ -326,17 +346,33 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         .sum::<f64>()
         / roots.len().min(500) as f64;
     let mean = lengths.iter().sum::<f64>() / lengths.len().max(1) as f64;
-    let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": g.points, "length_m": g.length_m,
+    let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
                         "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "kept_off_face": kept_off_face, "hugged_steps": hugged,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
-                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
+                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands (on the same side of the part), curled (fading in over 3 cm), frizzed toward the tip (a curled groom gets at least 8 points per turn, up to 256), and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on its strand's side (the root's), so a curl that crosses the middle does not jump to the other side (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
     Ok((strands, report))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_curled_strand_gets_points_enough_for_its_turns_and_keeps_its_side() {
+        let mut g = parse(&json!({"format": FORMAT, "length_m": 0.3})).unwrap();
+        assert_eq!(strand_points(&g), 16, "a straight groom keeps its points");
+        g.curl_turns_per_m = 20.0;
+        assert_eq!(strand_points(&g), 16, "turns without a radius are no curl");
+        g.curl_radius_m = 0.01;
+        assert_eq!(strand_points(&g), 49, "6 turns, 8 points each, plus the root");
+        g.curl_turns_per_m = 200.0;
+        g.length_m = 2.0;
+        assert_eq!(strand_points(&g), MAX_POINTS);
+        let face = Face { centre_x: 0.0, half_width: 0.05, bottom: 1.5, chin: 1.55, top: 1.7, eyes_y: -0.08, ears_y: 0.0 };
+        assert_eq!(face.keep_out_toward([-0.01, -0.05, 1.6], 1.0), Some([0.05, -0.05, 1.6]), "a right-side strand's point that curled left goes back right");
+        assert_eq!(face.keep_out([-0.01, -0.05, 1.6]), Some([-0.05, -0.05, 1.6]), "a lone point goes to its own side");
+    }
 
     #[test]
     fn hair_in_front_of_the_face_moves_to_the_nearest_edge_beside_it() {

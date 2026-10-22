@@ -245,6 +245,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Curly grooms were zigzags and drew lines across the throat.** A strand kept its 16 points however many turns it
+  curled, about two points per turn; a curled groom now gets at least 8 points per turn (up to 256). Points the face's
+  keep-out moved went to the side each point happened to be on, so a curl crossing the middle jumped to the other
+  edge and back; a strand now keeps its root's side. Clumping pulled strands toward locks across the part, which
+  blended into hair in front of the throat; a strand now clumps only with locks on its own side.
 - **Tasks that work on "the character it was modelled on" did not get it.** In both clients, Fit a garment, Attach a
   solid and Make game hair cards opened with that field empty: the current character is saved into the run after
   the run starts, and the run's values never named it. A run now takes the character saved into it as its spec,
