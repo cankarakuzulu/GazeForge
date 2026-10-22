@@ -157,7 +157,7 @@ impl Store {
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
 
-    pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
+    pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, double_sided: bool, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
         let mesh = crate::body::read_obj(obj_path, None)?;
         if mesh.positions.len() != binding.bound.len() {
             return Err(format!("the binding has {} vertices, {} has {}", binding.bound.len(), obj_path.display(), mesh.positions.len()));
@@ -182,7 +182,7 @@ impl Store {
             hidden: binding.hidden.len(),
             material,
             transparent,
-            double_sided: false,
+            double_sided,
             source,
             notes,
             attach: None,

@@ -390,7 +390,7 @@ pub fn attach(opts: &Options) -> Result<Value, String> {
     Ok(json!({"ok": true, "command": "wearable attach", "wearable": reference, "name": m.name, "vertices": m.vertices, "bone": bone, "rig": rig, "bone_length_m": bf.length, "from_glb": from_glb,
               "meaning": "a rigid item: its vertices are kept in the bone's frame on the character it was modelled on (origin at the bone's head, y along the bone, x from the character's forward) and placed by the same frame on any character - at its modelled size, or scaled with the bone's length with --scale bone; skinned wholly to that bone", "scale": if scale_with_bone { "bone" } else { "none" }}))
 }
-pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo", "hide-under", "compare-hidden"];
+pub const BIND_KEYS: &[&str] = &["store", "spec", "macro", "obj", "base", "name", "diffuse", "frame", "out-mhclo", "hide-under", "compare-hidden", "double-sided"];
 const HIDE_REACH_M: f64 = 0.15;
 
 fn covered_base(base: &std::collections::BTreeMap<u32, Point>, body: &HashMap<u32, Point>, faces: &[[u32; 3]], garment: &[Point], garment_tris: &[[u32; 3]], unit: f64) -> Vec<u32> {
@@ -538,8 +538,13 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
     if let Some(path) = opts.get("out-mhclo") {
         std::fs::write(path, binding.to_text()).map_err(|e| format!("{path}: {e}"))?;
     }
-    let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
-    Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent,
+    let double_sided = match opts.get("double-sided").map(String::as_str).unwrap_or("off") {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("--double-sided takes on or off, got {other}")),
+    };
+    let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", double_sided, vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
+    Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent, "double_sided": m.double_sided,
               "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared, "from_glb": from_glb,
               "faces": {"facing_the_body": toward, "measured": measured, "rewound": flipped,
                         "meaning": "a vertex faces the body when its normal points against the nearest body or head normal; when most do, the garment was modelled inside out and is stored with every face reversed (and its vn normals negated), so it renders and layers outward"},

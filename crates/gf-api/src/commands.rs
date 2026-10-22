@@ -241,6 +241,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: api::bind,
     },
     CommandDef {
+        name: "groom.cards",
+        kind: Kind::Job,
+        summary: "Turn a groom into game hair: grow it on a character's scalp, group its strands into hair cards (strips along each group's mean strand, as wide as the group) with a strand-painted alpha atlas in the groom's colour, and store the cards as a double-sided hair wearable bound to the character like any garment, to wear through body.wearables (argv `groom cards`).",
+        limits: "Fields are the argv options with _ for -. The cards are made on the character the spec describes and follow other shapes through the binding, like MakeHuman hair; they are rigid strips (no spring chains are written here: wear the result with physics springbone for those). One atlas of 8 strand columns per groom; the groom's curl and frizz show only through the cards' paths.",
+        input: api::cards_input,
+        output: api::argv_output,
+        run: api::cards,
+    },
+    CommandDef {
         name: "wearable.bake",
         kind: Kind::Job,
         summary: "Bake a character's spring-bone chains (hair, ropes, capes worn with physics springbone) and cloth (worn with physics cloth) offline: a VRM-style spring solver runs over the chains and the body's capsule colliders in GAZEFORGE_physics, driven by a built-in clip (sway) or an animation already in the glb, and the result is written into a copy of the glb as an animation, as bone rotation keys or as per-frame morph targets (argv `wearable bake`; export-glb takes the same bake options).",

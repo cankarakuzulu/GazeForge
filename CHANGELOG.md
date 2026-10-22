@@ -8,6 +8,16 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Game hair cards from a groom.** `groom cards` (task "Make game hair cards from a groom"): the groom grown on the
+  character, its strands grouped by shape (root, middle and tip, so strands combed apart never share a card) into
+  600 cards by default, each a strip along its group's mean strand as wide as the group, a 1024 px strand atlas
+  painted in the groom's colour, a card that would reach in front of the face ending before it; stored as a
+  transparent, double-sided wearable through `wearable bind`, so it follows every shape and takes the hair ladder,
+  the scalp cap and spring-bone physics. Gate (`tools/diag/groom_cards_gate.py`, not shipped, proven to fail on
+  single-sided cards): deterministic, binding back within 0.01 mm, faces outward, worn and exported on six levels
+  with a masked double-sided material, strands traced back from the cards. Known: the scalp shows between cards at
+  the part and the crown (the head's own skin, painted with hair colour only on the far levels).
+- `wearable bind --double-sided on`: a bound wearable that renders both faces (hair cards, thin sheets).
 - **Grooms: hair grown from scratch (first step).** `export-glb --strands X.usda --groom GROOM.json`: strands rooted on
   the character's own scalp (the head's `scalp` skin region, from 478 built-in landmarks on the dense base, so one groom
   fits every head), combed away from a part (left, right, centre or none; backwards behind the crown, back and

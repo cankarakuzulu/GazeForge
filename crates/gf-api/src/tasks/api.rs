@@ -10,6 +10,8 @@ use crate::{ApiError, Code, Ctx};
 const PLACEMENT_KEYS: &[&[&str]] = &[OPTIMAL_KEYS, FIT_KEYS, F2_KEYS, F3_KEYS, F4_KEYS, F5_KEYS, F6_KEYS];
 
 const INTEGERS: &[&str] = &[
+    "cards",
+    "atlas",
     "target",
     "tip-vertex",
     "fit-iterations",
@@ -130,6 +132,7 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("format", &["glb", "vrm"]),
     ("frame", &["world", "canonical"]),
     ("hide-under", &["on", "off"]),
+    ("double-sided", &["on", "off"]),
     ("scale", &["none", "bone"]),
     ("bake-format", &["bones", "vertex"]),
 ];
@@ -177,6 +180,7 @@ const TEXT: &[(&str, &str)] = &[
     ("game", "game base reference, sha256:<hex>, as store.list prints it"),
     ("frame", "world: the garment was modelled on the character as exported or fitted (its root transform applied); canonical: on the stored body frame"),
     ("hide-under", "on: list the body vertices the garment covers (a line along each body normal meets it within 15 cm), so hide_body can leave them out"),
+    ("double-sided", "on: the wearable renders both faces of each triangle (hair cards, thin sheets); off (default): back faces are culled"),
     ("compare-hidden", "a MakeHuman .mhclo whose hidden list to compare with, on the body vertices"),
     ("out-mhclo", "also write the binding to this file in MakeHuman's format"),
     ("diffuse", "path of the garment's colour texture (.png)"),
@@ -194,6 +198,8 @@ const TEXT: &[(&str, &str)] = &[
     ("bake-format", "bones (the default): the chain joints get rotation keys beside the clip's channels; vertex: the chain joints are taken out of the skin and the swing becomes one morph target per frame played by a weights track, for engines with no skinning beyond the body"),
     ("strands", "also write the hair the character wears as strands, a USD text file (.usda) of BasisCurves in the glb's frame: each hair card's texture columns traced along the card where the texture is opaque, rooted at the end nearer the body"),
     ("groom", "path of a groom file (gazeforge.groom/1: strands, length_m, part, droop, curl, clumps, frizz, colour, seed): hair grown on this character's scalp into the --strands file instead of strands traced from hair cards; without it, the character's own body.groom is grown when there is one"),
+    ("cards", "how many hair cards the groom's strands are grouped into (default 600, 1 to 5000)"),
+    ("atlas", "the hair atlas's size in pixels, square (default 1024, 256 to 4096)"),
     ("strands-count","how many strands in all (default 20000), shared out by each hair's opaque card area"),
     ("strands-seed", "seed of where the strands are taken on the cards (default 1)"),
     ("strands-points", "points per strand (default 16, 3 to 64)"),
@@ -339,6 +345,17 @@ pub fn attach_input() -> Value {
 
 pub fn attach(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     run(input, super::wearable::attach)
+}
+
+pub fn cards_input() -> Value {
+    let mut s = schema(&[super::cards::KEYS], &["store", "spec", "base"]);
+    s["properties"]["base"]["description"] = json!("path of MakeHuman's base.obj (its body group is the surface the cards are bound to) (argv --base)");
+    s["properties"]["groom"]["description"] = json!("path of a groom file (gazeforge.groom/1); without it, the character's own body.groom (argv --groom)");
+    s
+}
+
+pub fn cards(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
+    run(input, super::cards::run)
 }
 
 pub fn bake_input() -> Value {

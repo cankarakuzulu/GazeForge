@@ -9,7 +9,7 @@ use crate::{Ctx, Kind, check_input, find, jobs, project};
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), attach_solid(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), groom_cards(), attach_solid(), check(), lids(), macros()]
 }
 
 fn hidden(name: &str, bind: &str) -> Value {
@@ -179,6 +179,7 @@ fn bind_garment() -> Value {
                  {"name": "macro", "label": "Macro definition", "common": true},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
                  {"name": "name", "label": "Name"},
+                 {"name": "double_sided", "label": "Both faces (hair cards, thin sheets)"},
              ],
              "shows": [{"kind": "report"}]},
         ],
@@ -201,6 +202,28 @@ fn attach_solid() -> Value {
                  {"name": "rig", "label": "Rig"},
                  {"name": "scale", "label": "Scale"},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
+                 {"name": "name", "label": "Name"},
+             ],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
+}
+
+fn groom_cards() -> Value {
+    json!({
+        "id": "groom_cards", "title": "Make game hair cards from a groom", "group": "Body", "developer": false,
+        "summary": "A groom (grown hair) turned into hair cards with a strand-painted texture and stored as a hair wearable, for every engine that takes meshes.",
+        "steps": [
+            {"id": "cards", "title": "Cards", "command": "groom.cards",
+             "help": "The groom is grown on the character's scalp and its strands are grouped into cards. Use a character with Grown hair turned on, or give a groom file. Wear the result from the Body shape panel: it follows every body shape like MakeHuman hair, thins over the levels of detail, and takes spring-bone physics. More cards cover the scalp better and cost more triangles. Paths are on this machine.",
+             "fields": [
+                 {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                 {"name": "spec", "label": "Character with the groom (spec)", "bind": "$run.spec", "common": true},
+                 {"name": "base", "label": "MakeHuman base.obj", "common": true},
+                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "groom", "label": "Groom file (instead of the character's own)"},
+                 {"name": "cards", "label": "Cards"},
+                 {"name": "atlas", "label": "Texture size (px)"},
                  {"name": "name", "label": "Name"},
              ],
              "shows": [{"kind": "report"}]},

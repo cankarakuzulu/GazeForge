@@ -704,6 +704,30 @@ pub fn joints(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
               "head_joints": head_joints, "body": s.report}))
 }
 
+pub struct Scalp {
+    pub head: Vec<Point>,
+    pub triangles: Vec<[u32; 3]>,
+    pub dense: Vec<[f64; 3]>,
+    pub surface: crate::tasks::wearable::Surface,
+}
+
+pub fn scalp(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>) -> Result<Scalp, String> {
+    let (dense, _, _, pin) = ch::evaluate_traced(store, spec, source)?;
+    let game_ref = spec.base.game_base.clone().ok_or("the spec names no game base")?;
+    let (_, base) = store.load_game(&game_ref)?;
+    let s = spec_body(store, spec, source, pin.as_ref())?;
+    let mut head: Vec<Point> = base.kept.iter().map(|&d| dense[d as usize]).collect();
+    b::scale_about(&mut head, s.pack.pivot(), s.controls.head_scale);
+    let seam = b::head_seam(&s.pack, &head, &base.triangles, &base.kept)?;
+    let st = b::stitch_lod(&s.pack, 0, &seam, &s.controls)?;
+    let mut points = head.clone();
+    points.extend_from_slice(&st.positions);
+    let h = head.len() as u32;
+    let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+    let surface = crate::tasks::wearable::Surface::new(points, &tris);
+    Ok(Scalp { head, triangles: base.triangles, dense, surface })
+}
+
 pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let root = text(input, "store");
     if !Path::new(root).join("packs").is_dir() {

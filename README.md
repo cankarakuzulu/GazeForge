@@ -526,7 +526,11 @@ strands on the scalp of the character exported - roots sampled over the head's s
 every head - combed away from the part, kept outside the head and body and off the face, and writes them into the
 `--strands` file. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
 hair** section to turn it on and set it, the stitch preview draws it, and an export with `--strands` grows it.
-Strands turned back into game cards come next.
+A groom becomes game hair with `groom cards --store DIR --spec FILE --base BASE_OBJ [--groom GROOM.json]
+[--cards 600] [--atlas 1024]` (or the "Make game hair cards from a groom" task): its strands are grouped by shape,
+each group becomes a card along its mean strand, a strand texture is painted in the groom's colour, and the cards are
+stored as a double-sided hair wearable bound to the character like any garment - wear it like MakeHuman hair, on
+every level of detail, with spring-bone physics if you like.
 
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
 --bake CLIP` on a file already exported, or the "Bake hair and cloth physics into a glb" task) simulates the spring chains offline

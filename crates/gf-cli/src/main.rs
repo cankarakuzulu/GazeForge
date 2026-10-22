@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::process::ExitCode;
 
-use gf_api::tasks::{self, Options, bake, data, mesh, rig, topology, wearable};
+use gf_api::tasks::{self, Options, bake, cards, data, mesh, rig, topology, wearable};
 use serde_json::{Value, json};
 
 mod front;
@@ -50,8 +50,10 @@ const USAGE: &str = "gazeforge <command> [--key value ...]
   wearable fit --store DIR --spec FILE [--macro MACRO_JSON] --mhclo A.mhclo,B.mhclo --out LOOKDEV.obj [--hide on|off]
   wearable import --store DIR --mhclo A.mhclo,B.mhclo
   wearable attach --store DIR --spec FILE [--macro MACRO_JSON] --obj SOLID.obj --bone NAME [--rig game_engine] [--scale none|bone] [--name N] [--diffuse PNG] [--frame world|canonical]
-  wearable bind --store DIR --spec FILE [--macro MACRO_JSON] --obj GARMENT.obj --base BASE_OBJ [--name N] [--diffuse PNG] [--frame world|canonical]
+  wearable bind --store DIR --spec FILE [--macro MACRO_JSON] --obj GARMENT.obj --base BASE_OBJ [--name N] [--diffuse PNG] [--frame world|canonical] [--double-sided on|off]
   wearable bake --glb IN.glb --out OUT.glb --bake sway|ANIMATION [--bake-format bones|vertex] [--bake-fps 30]
+  groom cards --store DIR --spec FILE [--macro MACRO_JSON] --base BASE_OBJ [--groom GROOM.json] [--name N] [--cards 600] [--atlas 1024]
+              (a groom grown on the character, made into hair cards and stored as a wearable)
               (the spring-bone chains simulated offline against the clip; export-glb takes the same --bake options)
   export-glb  --store DIR --spec FILE --out FILE.glb [--macro MACRO_JSON] [--morphs ID,ID|@FILE.json] [--sparse auto|always|never]
               [--lod-screen 0.25,0.1] [the options of the spec's placement, e.g. --eyes EYES.json]
@@ -109,6 +111,10 @@ fn run(args: &[String]) -> Result<Value, String> {
         Some("topology") => match args.get(1).map(String::as_str) {
             Some("improve") => options(&args[2..]).and_then(|o| topology::improve(&o)),
             Some("inspect") => options(&args[2..]).and_then(|o| topology::inspect(&o)),
+            _ => Err(USAGE.to_string()),
+        },
+        Some("groom") => match args.get(1).map(String::as_str) {
+            Some("cards") => options(&args[2..]).and_then(|o| cards::run(&o)),
             _ => Err(USAGE.to_string()),
         },
         Some("wearable") => match args.get(1).map(String::as_str) {

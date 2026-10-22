@@ -25,7 +25,7 @@ pub fn read(path: &Path) -> Result<Groom, String> {
     parse(&serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?)
 }
 
-struct Face {
+pub(crate) struct Face {
     centre_x: f64,
     half_width: f64,
     bottom: f64,
@@ -35,7 +35,20 @@ struct Face {
 }
 
 impl Face {
-    fn keep_out(&self, p: Point) -> Option<Point> {
+    pub(crate) fn on(landmarks: &std::collections::BTreeMap<usize, Point>) -> Result<Face, String> {
+        let lm = |i: usize| landmarks.get(&i).copied().ok_or_else(|| format!("landmark {i} is missing"));
+        let (eye_r, eye_l, chin, brow, ear_r, ear_l) = (lm(33)?, lm(263)?, lm(152)?, lm(10)?, lm(234)?, lm(454)?);
+        Ok(Face {
+            centre_x: (eye_r[0] + eye_l[0]) / 2.0,
+            half_width: (eye_l[0] - eye_r[0]).abs() / 2.0 + FACE_MARGIN_M,
+            bottom: chin[2],
+            top: brow[2] - FRINGE_M,
+            eyes_y: (eye_r[1] + eye_l[1]) / 2.0,
+            ears_y: (ear_r[1] + ear_l[1]) / 2.0,
+        })
+    }
+
+    pub(crate) fn keep_out(&self, p: Point) -> Option<Point> {
         let dx = (p[0] - self.centre_x).abs();
         let ahead = (self.eyes_y - p[1]).max(0.0);
         if dx >= self.half_width + ahead || p[2] <= self.bottom || p[2] >= self.top || p[1] >= self.ears_y {
@@ -51,10 +64,10 @@ impl Face {
     }
 }
 
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
-    fn next(&mut self) -> f64 {
+    pub(crate) fn next(&mut self) -> f64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -63,27 +76,27 @@ impl Rng {
     }
 }
 
-fn add(a: Point, b: Point) -> Point {
+pub(crate) fn add(a: Point, b: Point) -> Point {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-fn sub(a: Point, b: Point) -> Point {
+pub(crate) fn sub(a: Point, b: Point) -> Point {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn scale(a: Point, s: f64) -> Point {
+pub(crate) fn scale(a: Point, s: f64) -> Point {
     a.map(|x| x * s)
 }
 
-fn dot(a: Point, b: Point) -> f64 {
+pub(crate) fn dot(a: Point, b: Point) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn cross(a: Point, b: Point) -> Point {
+pub(crate) fn cross(a: Point, b: Point) -> Point {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-fn unit(a: Point) -> Point {
+pub(crate) fn unit(a: Point) -> Point {
     let l = dot(a, a).sqrt();
     if l < 1e-12 { a } else { scale(a, 1.0 / l) }
 }
@@ -94,16 +107,7 @@ fn tangent(v: Point, n: Point) -> Point {
 
 pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]], surface: &Surface) -> Result<(Vec<Strand>, Value), String> {
     let landmarks = gf_core::base_landmarks::on(dense)?;
-    let lm = |i: usize| landmarks.get(&i).copied().ok_or_else(|| format!("landmark {i} is missing"));
-    let (eye_r, eye_l, chin, brow, ear_r, ear_l) = (lm(33)?, lm(263)?, lm(152)?, lm(10)?, lm(234)?, lm(454)?);
-    let face = Face {
-        centre_x: (eye_r[0] + eye_l[0]) / 2.0,
-        half_width: (eye_l[0] - eye_r[0]).abs() / 2.0 + FACE_MARGIN_M,
-        bottom: chin[2],
-        top: brow[2] - FRINGE_M,
-        eyes_y: (eye_r[1] + eye_l[1]) / 2.0,
-        ears_y: (ear_r[1] + ear_l[1]) / 2.0,
-    };
+    let face = Face::on(&landmarks)?;
     let mut kept_off_face = 0usize;
     let normals = game_normals(head, triangles);
     let regions = skin_regions::build(head, &normals, triangles, &landmarks)?;
