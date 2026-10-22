@@ -19,7 +19,8 @@ open, with its last measurement, rather than left out.
   lowest point is kept 2 mm under the lowest of the hat's surfaces straight over or under it (segment middles too),
   and hide leaves out each strand's points under the crown from the root. A quiff under a fedora: 148,305 points
   lowered, 0 points and 0 segment middles left showing; hide leaves out 5,466 strands entirely. The strands report
-  gives these counts.
+  gives these counts. The body preview in both clients does the same, so the hat looks there as it exports (groom
+  vertices above the fedora's top in the preview: 1,252 -> 0).
 - **Bob with bangs, curtain bangs, long layers.** Three more styles (fourteen in all); a style now also sets the
   fringe (and every style sets face framing, so picking a style without them takes them away). The colours,
   highlights and forehead stay as they are, like the part.

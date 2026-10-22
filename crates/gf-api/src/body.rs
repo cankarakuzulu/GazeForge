@@ -729,6 +729,8 @@ pub fn scalp(store: &Store, spec: &Spec, source: Option<&ch::MacroSource>) -> Re
     Ok(Scalp { head, triangles: base.triangles, triangle_uvs: base.triangle_uvs, dense, surface })
 }
 
+type HatCover = (Vec<[f64; 3]>, Vec<[u32; 3]>, bool);
+
 pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let root = text(input, "store");
     if !Path::new(root).join("packs").is_dir() {
@@ -797,6 +799,8 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let (_, mut normals) = b::two_sided_normals(&head, &base.triangles, &st);
         let mut positions = st.positions.clone();
         let mut triangles = st.triangles.clone();
+        let mut hat_covers: Vec<HatCover> = Vec::new();
+        let mut cover_head: Option<f64> = None;
         let mut worn = match (&shaped_report, spec.body.as_ref()) {
             (Some((_, manifest)), Some(b)) if !b.wearables.is_empty() => {
                 let frame = crate::tasks::wearable::BaseFrame::new(&pack, &controls, manifest, &dense);
@@ -841,6 +845,8 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 for ((_, _, _, tris), cut) in dressed.iter_mut().zip(&cuts) {
                     tris.retain(|t| !t.iter().all(|&v| cut[v as usize]));
                 }
+                cover_head = head_z;
+                hat_covers = dressed.iter().filter(|(_, item, ..)| !item.manifest.transparent).map(|(w, _, p, tris)| (p.clone(), tris.clone(), w.hair == "hide")).collect();
                 let mut meshes = Vec::new();
                 let strand_count = input.get("strands_preview").and_then(Value::as_u64).unwrap_or(STRANDS_PREVIEW) as usize;
                 for ((w, item, p, tris), cut) in dressed.iter().zip(&cuts) {
@@ -884,7 +890,20 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             let h = head.len() as u32;
             let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
             let surface = crate::tasks::wearable::Surface::new(points, &tris);
-            let (strands, report) = crate::tasks::groom::grow(&g, &head, &base.triangles, &dense, &surface).map_err(ApiError::invalid)?;
+            let (mut strands, report) = crate::tasks::groom::grow(&g, &head, &base.triangles, &dense, &surface).map_err(ApiError::invalid)?;
+            if let Some(head_z) = cover_head
+                && !hat_covers.is_empty()
+            {
+                let covers: Vec<crate::tasks::wearable::HairCover> = hat_covers.iter().map(|(p, t, hide)| crate::tasks::wearable::HairCover { positions: p, triangles: t, hide: *hide }).collect();
+                let under = crate::tasks::wearable::HairUnder::new(&covers, head_z);
+                for s in strands.iter_mut() {
+                    let (cut, _) = under.apply(&mut s.points);
+                    let from = cut.iter().position(|c| !c).unwrap_or(cut.len());
+                    s.points.drain(..from);
+                    s.colours.drain(..from.min(s.colours.len()));
+                }
+                strands.retain(|s| s.points.len() >= 2);
+            }
             let centre = head.iter().fold([0.0; 3], |a, q| [a[0] + q[0], a[1] + q[1], a[2] + q[2]]).map(|x| x / head.len().max(1) as f64);
             let (rp, rn, rt) = crate::tasks::strands::ribbons(&strands, STRAND_PREVIEW_WIDTH_M, centre);
             let srgb = g.colour.map(|c| if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 });
