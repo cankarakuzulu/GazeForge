@@ -1223,6 +1223,9 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             }
         }
     }
+    let caps0 = placed(times[0]);
+    let cap_reach: Vec<Vec<f64>> = start.iter().map(|&p| caps0.iter().map(|(a, b, r)| r.min(norm(sub(p, closest_on_segment(p, *a, *b))))).collect()).collect();
+    let mut beyond_cap = 0.0f64;
     let mut step = |t: f64, record: bool, x: &mut Vec<V3>, vel: &mut Vec<V3>| {
         let target = skinned(t);
         let caps_now = placed(t);
@@ -1258,11 +1261,12 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
                 if inv[v] <= 0.0 {
                     continue;
                 }
-                for (a, b, r) in &caps_now {
+                for (c, (a, b, _)) in caps_now.iter().enumerate() {
+                    let r = cap_reach[v][c];
                     let q = closest_on_segment(x[v], *a, *b);
                     let d = sub(x[v], q);
-                    if norm(d) < *r {
-                        x[v] = add(q, scale(if norm(d) > 1e-9 { unit(d) } else { [0.0, 0.0, 1.0] }, *r));
+                    if norm(d) < r {
+                        x[v] = add(q, scale(if norm(d) > 1e-9 { unit(d) } else { [0.0, 0.0, 1.0] }, r));
                     }
                 }
                 if BODY_COLLIDE
@@ -1287,9 +1291,11 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
                 if cloth.pin[v] >= PINNED_REPORT {
                     stats.0 = stats.0.max(norm(sub(x[v], target[v])));
                 }
-                for (a, b, r) in &caps_now {
+                for (c, (a, b, r)) in caps_now.iter().enumerate() {
                     if inv[v] > 0.0 {
-                        stats.1 = stats.1.max(r - CLOTH_THICKNESS_M - norm(sub(x[v], closest_on_segment(x[v], *a, *b))));
+                        let dist = norm(sub(x[v], closest_on_segment(x[v], *a, *b)));
+                        stats.1 = stats.1.max(r - CLOTH_THICKNESS_M - dist);
+                        beyond_cap = beyond_cap.max(cap_reach[v][c] - dist);
                     }
                 }
             }
@@ -1331,7 +1337,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
     }).fold(0.0, f64::max);
     let mm = |x: f64| (x * 1e6).round() / 1000.0;
     let report = json!({"node": scene.names[cloth.node], "vertices": n, "free_vertices": free, "edges": edges.len(), "bends": bends.len(),
-                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0, "max_stretch_free_partly_pinned_pinned": stretch_by.map(|s| (s * 1000.0).round() / 1000.0),
+                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "capsule_beyond_rest_mm": mm(beyond_cap.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0, "max_stretch_free_partly_pinned_pinned": stretch_by.map(|s| (s * 1000.0).round() / 1000.0),
                         "max_from_skinned_mm": mm(moved)});
     ClothRun { positions, report }
 }
@@ -1670,6 +1676,17 @@ mod tests {
         let inside = |p: &Vec<V3>| p.iter().map(|x| 0.04 - norm(sub(*x, closest_on_segment(*x, caps[0].head, caps[0].tail)))).fold(f64::NEG_INFINITY, f64::max);
         assert!(inside(free.positions.last().unwrap()) > 0.01, "without the capsule the sheet hangs through it");
         assert!(inside(held.positions.last().unwrap()) < 0.002, "with it the sheet stays outside: {}", inside(held.positions.last().unwrap()));
+    }
+
+    #[test]
+    fn cloth_resting_inside_a_capsule_is_not_thrown_out_and_goes_no_deeper() {
+        let scene = line_scene(0, [0.0; 3]);
+        let cloth = sheet(6, 0.3);
+        let caps = vec![Capsule { node: 0, ibm: matrix(&Trs { t: [0.0; 3], r: IDENTITY, s: [1.0; 3] }), head: [-0.1, 0.0, 0.0], tail: [0.4, 0.0, 0.0], radius: 0.07, name: "c".into() }];
+        let times: Vec<f64> = (0..=10).map(|k| k as f64 / 10.0).collect();
+        let run = simulate_cloth(&scene, &still(&scene), &cloth, &caps, None, &times, 1.0);
+        assert!(run.report["max_stretch"].as_f64().unwrap() < 1.1, "{}", run.report);
+        assert!(run.report["capsule_beyond_rest_mm"].as_f64().unwrap() < 0.5, "{}", run.report);
     }
 
     #[test]

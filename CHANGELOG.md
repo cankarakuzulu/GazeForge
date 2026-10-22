@@ -300,6 +300,13 @@ open, with its last measurement, rather than left out.
   cape's pinned rows sit inside a capsule at rest, now shows the conflict as stretch at its pinned edges (1.112,
   was 1.015) instead of as penetration (11.5 mm, was 13.6). The bake report gives the largest stretch for edges with
   free, partly pinned and fully pinned ends.
+- **Body capsules shoved baked cloth off its rest.** A capsule pushed every cloth vertex out to its full radius, even
+  a vertex that rests inside it (capsules are rounder than the body, and a cape at rest lies inside the neck and
+  shoulder capsules): a cape alone stood off the back, and a cape over a suit stretched 1.11 at its pinned rows.
+  Cloth now treats capsules as it already treats the body's surface (and as spring chains already treat capsules):
+  a vertex is kept no deeper in a capsule than it rests. Cape over a suit: stretch at most 1.037 on every level
+  (LOD2 1.112 -> 1.016); the cape alone hangs from the shoulders as fitted. The bake report gives how far any vertex
+  went into a capsule beyond its rest (0 to 0.11 mm here); nothing goes into the body beyond its rest.
 - **Specks of an inner garment showed through the one over it.** Worn layering tucked the inner item's vertices
   behind the outer one, but two flat-faceted meshes can still cross between their vertices: a cape over a suit
   showed suit-coloured dots near its top edge (8 sample points of the suit outside the cape, up to 0.72 mm, while
