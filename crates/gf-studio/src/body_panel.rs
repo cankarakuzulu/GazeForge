@@ -41,6 +41,7 @@ const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
     ("sides_m", 100.0, 0.1, 1),
     ("fade_m", 100.0, 0.1, 1),
     ("lift", 1.0, 0.01, 2),
+    ("forehead", 1.0, 0.01, 2),
     ("droop", 1.0, 0.01, 2),
     ("clumps", 1.0, 5.0, 0),
     ("clump", 1.0, 0.01, 2),

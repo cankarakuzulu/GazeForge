@@ -102,6 +102,8 @@
  "body.groom.fade_m_tip": "Height of the blend from the side length up to the top length, around a line a little above the ears; small is a hard undercut, large a soft fade",
  "body.groom.lift": "Lift",
  "body.groom.lift_tip": "How far the top hair stands off the scalp before it is combed, from 0 (flat) to 1 (straight up)",
+ "body.groom.forehead": "Forehead",
+ "body.groom.forehead_tip": "How high the front hairline sits above the brows, as a share of the brows-to-nose height: 1 is the classic thirds of the face, less brings the hairline down, more raises it. The edge thins out over about 1 cm",
  "body.groom.seed": "Seed",
  "body.groom.seed_tip": "Another seed grows another, equally likely head of hair from the same settings",
  "body.groom_colour": "Colour",

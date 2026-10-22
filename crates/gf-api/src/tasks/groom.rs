@@ -39,6 +39,12 @@ const UP_ROLL: Point = [0.0, 0.25, -0.15];
 const TIE_UP_BIAS: f64 = 0.3;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
+const HAIRLINE_SOFT_M: f64 = 0.006;
+const HAIRLINE_EARS_M: f64 = 0.02;
+const TEMPLE_DROP_M: f64 = 0.01;
+const MAX_ROOT_TRIES: usize = 10_000;
+const HAIRLINE_CENTRE_M: f64 = 0.02;
+const HAIRLINE_TEMPLE_SPAN: f64 = 0.5;
 const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
 const FACE_MARGIN_M: f64 = 0.01;
@@ -99,6 +105,42 @@ impl Face {
             (self.half_width, p[1])
         };
         Some([self.centre_x + if side >= 0.0 { dx } else { -dx }, y, p[2]])
+    }
+}
+
+fn smoothstep01(x: f64) -> f64 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+pub(crate) struct Hairline {
+    z: f64,
+    brows: f64,
+    ears_z: f64,
+    centre_x: f64,
+    half_width: f64,
+    eyes_y: f64,
+    ears_y: f64,
+}
+
+impl Hairline {
+    fn on(landmarks: &std::collections::BTreeMap<usize, Point>, face: &Face, forehead: f64) -> Result<Hairline, String> {
+        let z = |ids: &[usize]| -> Result<f64, String> {
+            ids.iter().map(|i| landmarks.get(i).map(|p| p[2]).ok_or_else(|| format!("landmark {i} is missing"))).sum::<Result<f64, String>>().map(|s| s / ids.len() as f64)
+        };
+        let brows = z(&[105, 334])?;
+        let middle = brows - z(&[2])?;
+        Ok(Hairline { z: brows + forehead * middle, brows, ears_z: z(&[234, 454])?, centre_x: face.centre_x, half_width: face.half_width, eyes_y: face.eyes_y, ears_y: face.ears_y })
+    }
+
+    fn keep(&self, p: Point) -> f64 {
+        let a = (p[0] - self.centre_x).abs() / self.half_width;
+        let temple = self.z - TEMPLE_DROP_M * (a * a).min(1.0);
+        let toward_ears = smoothstep01((p[1] - self.eyes_y) / (self.ears_y - self.eyes_y)) * smoothstep01((a - 1.0) / HAIRLINE_TEMPLE_SPAN);
+        let low = temple + (self.ears_z - temple) * toward_ears;
+        let behind_ears = smoothstep01((p[1] - self.ears_y) / HAIRLINE_EARS_M);
+        let ramp = smoothstep01((p[2] - (low - HAIRLINE_SOFT_M)) / (2.0 * HAIRLINE_SOFT_M));
+        1.0 - (1.0 - behind_ears) * (1.0 - ramp)
     }
 }
 
@@ -166,6 +208,7 @@ fn tangent(v: Point, n: Point) -> Point {
 pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]], surface: &Surface) -> Result<(Vec<Strand>, Value), String> {
     let landmarks = gf_core::base_landmarks::on(dense)?;
     let face = Face::on(&landmarks)?;
+    let hairline = Hairline::on(&landmarks, &face, g.forehead)?;
     let brim = [234usize, 454].iter().map(|i| landmarks.get(i).map_or(0.0, |p| p[2])).sum::<f64>() / 2.0;
     let mut hugged = 0usize;
     let mut kept_off_face = 0usize;
@@ -247,17 +290,27 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mut lines: Vec<Vec<Point>> = Vec::with_capacity(g.strands);
     let mut pushes = 0usize;
     for _ in 0..g.strands {
-        let r = rng.next();
-        let t = cumulative.partition_point(|&c| c < r).min(triangles.len() - 1);
-        let (mut u, mut w) = (rng.next(), rng.next());
-        if u + w > 1.0 {
-            u = 1.0 - u;
-            w = 1.0 - w;
-        }
-        let b = [1.0 - u - w, u, w];
-        let tri = triangles[t];
-        let p: Point = std::array::from_fn(|k| (0..3).map(|i| b[i] * head[tri[i] as usize][k]).sum());
-        let n = unit(std::array::from_fn(|k| (0..3).map(|i| b[i] * normals[tri[i] as usize][k]).sum()));
+        let mut tries = 0;
+        let (p, n) = loop {
+            tries += 1;
+            if tries > MAX_ROOT_TRIES {
+                return Err("no scalp above the hairline: lower the forehead".into());
+            }
+            let r = rng.next();
+            let t = cumulative.partition_point(|&c| c < r).min(triangles.len() - 1);
+            let (mut u, mut w) = (rng.next(), rng.next());
+            if u + w > 1.0 {
+                u = 1.0 - u;
+                w = 1.0 - w;
+            }
+            let b = [1.0 - u - w, u, w];
+            let tri = triangles[t];
+            let p: Point = std::array::from_fn(|k| (0..3).map(|i| b[i] * head[tri[i] as usize][k]).sum());
+            let n = unit(std::array::from_fn(|k| (0..3).map(|i| b[i] * normals[tri[i] as usize][k]).sum()));
+            if rng.next() < hairline.keep(p) {
+                break (p, n);
+            }
+        };
         roots.push((p, n));
         let mut line = vec![add(p, scale(n, ROOT_LIFT_M))];
         if let Some((tp, lean)) = tie_point {
@@ -465,7 +518,15 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         .sum::<f64>()
         / roots.len().min(500) as f64;
     let mean = lengths.iter().sum::<f64>() / lengths.len().max(1) as f64;
-    let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
+    let height = |ids: &[usize]| ids.iter().filter_map(|i| landmarks.get(i)).map(|p| p[2]).sum::<f64>() / ids.len() as f64;
+    let brows = hairline.brows;
+    let (subnasale, chin) = (height(&[2]), height(&[152]));
+    let lowest_front = roots.iter().filter(|(p, _)| (p[0] - face.centre_x).abs() < HAIRLINE_CENTRE_M && p[1] < crown[1]).map(|(p, _)| p[2]).fold(f64::INFINITY, f64::min);
+    let cm = |x: f64| (x * 1e4).round() / 1e4;
+    let face_report = json!({"hairline_above_brows_m": lowest_front.is_finite().then(|| cm(lowest_front - brows)), "hairline_asked_above_brows_m": cm(hairline.z - brows),
+                             "hairline_soft_m": HAIRLINE_SOFT_M, "landmark_10_above_brows_m": cm(height(&[10]) - brows),
+                             "brows_to_subnasale_m": cm(brows - subnasale), "subnasale_to_chin_m": cm(subnasale - chin)});
+    let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
                         "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_distance_mm": ((FLYAWAY_M + g.curl_radius_m) * 1e4).round() / 10.0, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),

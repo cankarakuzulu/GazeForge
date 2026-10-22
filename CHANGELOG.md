@@ -262,6 +262,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The groom's hairline sat low on the forehead.** It sat 1.8 cm above the brows, so from the front the edge of the
+  roots read as a short fringe on every style. It now sits a forehead above the brows: by default as high as the
+  brows-to-nose height (the classic thirds of the face; 4.8 cm on the test character, asked 5.2 cm), highest at the
+  centre, 1 cm lower at the temples, and down to the ears beside them. The roots thin out over 1.2 cm instead of
+  stopping at a hard line. A new groom field `forehead` (a Forehead row in both panels) sets the height as a share of
+  that third; styles keep it. The groom report gives the measured and asked hairline and the face's thirds.
 - **Curly grooms were zigzags and drew lines across the throat.** A strand kept its 16 points however many turns it
   curled, about two points per turn; a curled groom now gets at least 8 points per turn (up to 256). Points the face's
   keep-out moved went to the side each point happened to be on, so a curl crossing the middle jumped to the other

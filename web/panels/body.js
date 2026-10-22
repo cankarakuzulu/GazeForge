@@ -43,7 +43,7 @@ function withCompound(body, name, v) {
   return tidy(next);
 }
 
-const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['sides_m', 100, 0.1, 1], ['fade_m', 100, 0.1, 1], ['lift', 1, 0.01, 2], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
+const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['sides_m', 100, 0.1, 1], ['fade_m', 100, 0.1, 1], ['lift', 1, 0.01, 2], ['forehead', 1, 0.01, 2],['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
 
 function mount(root, api) {
   let key = '';
