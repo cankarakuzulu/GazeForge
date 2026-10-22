@@ -32,10 +32,15 @@ const MAX_SEGMENT_M: f64 = 0.015;
 const FADE_LINE_ABOVE_EARS_M: f64 = 0.035;
 const TAPER: f64 = 0.65;
 const TAPER_SPAN_M: f64 = 0.08;
-const UP_WORLD: f64 = 0.7;
-const UP_LEAN: Point = [0.0, 0.6, 1.0];
+const QUIFF_RISE_M: f64 = 0.05;
+const QUIFF_SPAN_M: f64 = 0.07;
+const QUIFF_BACK_SHARE: f64 = 0.3;
+const QUIFF_FORWARD: f64 = 0.25;
+const QUIFF_TURN_M: f64 = 0.03;
+const QUIFF_BACK: Point = [0.0, 1.0, -0.35];
+const QUIFF_PROFILE_HALF_M: f64 = 0.015;
+const QUIFF_PROFILE_BAND_M: f64 = 0.02;
 const UP_FRONT_M: f64 = 0.03;
-const UP_ROLL: Point = [0.0, 0.25, -0.15];
 const TIE_UP_BIAS: f64 = 0.3;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
@@ -521,7 +526,15 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             if dot(mixed, mixed) < 1e-10 { f } else { unit(mixed) }
         };
         tails.push(if free { 0 } else { points });
-        let mut dir = if free { unit(add(scale(n, 1.0 - UP_WORLD), scale(unit(UP_LEAN), UP_WORLD))) } else { unit(add(scale(n, lift), scale(comb(p, n), 1.0 - lift))) };
+        let frontness = ((crown[1] - UP_FRONT_M - p[1]) / QUIFF_SPAN_M).clamp(0.0, 1.0);
+        let rise = g.lift * QUIFF_RISE_M * (QUIFF_BACK_SHARE + (1.0 - QUIFF_BACK_SHARE) * frontness);
+        let rise_dir = unit([0.0, -QUIFF_FORWARD * frontness, 1.0]);
+        let quiff_dir = |s: f64| {
+            let w = smoothstep01((s - rise) / QUIFF_TURN_M);
+            unit(add(scale(rise_dir, 1.0 - w), scale(unit(QUIFF_BACK), w)))
+        };
+        let mut arc = 0.0;
+        let mut dir = if free { quiff_dir(0.0) } else { unit(add(scale(n, lift), scale(comb(p, n), 1.0 - lift))) };
         for _ in 1..points {
             let mut next = add(*line.last().unwrap(), scale(dir, seg));
             if let Some(q) = outside(surface, next) {
@@ -535,8 +548,9 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let step = sub(next, *line.last().unwrap());
             next = add(*line.last().unwrap(), scale(unit(step), seg));
             dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
+            arc += seg;
             if free {
-                dir = unit(add(dir, UP_ROLL));
+                dir = quiff_dir(arc);
             } else if next[2] > brim
                 && let Some(j) = surface.nearest(next, HUG_M)
             {
@@ -699,6 +713,12 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             !**f && s.points.iter().any(|p| (p[0] - face.centre_x).abs() < face.half_width - FACE_MARGIN_M && p[2] > brows && p[2] < hairline.low(*p) - HAIRLINE_SOFT_M - FOREHEAD_CLEAR_M && p[1] < face.eyes_y)
         })
         .count();
+    let mid = |q: &Point| (q[0] - face.centre_x).abs() < QUIFF_PROFILE_HALF_M;
+    let front_y = roots.iter().map(|(q, _)| *q).filter(mid).map(|q| q[1]).fold(f64::INFINITY, f64::min);
+    let in_front = |q: &Point| mid(q) && q[1] < front_y + QUIFF_PROFILE_BAND_M;
+    let front_scalp = roots.iter().map(|(q, _)| *q).filter(in_front).map(|q| q[2]).fold(f64::NEG_INFINITY, f64::max);
+    let front_hair = strands.iter().flat_map(|s| s.points.iter()).filter(|q| in_front(q)).map(|q| q[2]).fold(f64::NEG_INFINITY, f64::max);
+    let front_thickness = (front_hair - front_scalp).max(0.0);
     let fringe_below =strands.iter().zip(&fringe_of).filter(|(_, f)| **f).flat_map(|(s, _)| s.points.iter()).filter(|p| p[2] < hairline.brows).count();
     let cm = |x: f64| (x * 1e4).round() / 1e4;
     let face_report = json!({"hairline_above_brows_m": lowest_front.is_finite().then(|| cm(lowest_front - brows)), "hairline_asked_above_brows_m": cm(hairline.z - brows),
@@ -709,6 +729,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
                         "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed, "highlighted_strands": highlighted,
+                        "front_thickness_m": if front_thickness.is_finite() { (front_thickness * 1e4).round() / 1e4 } else { 0.0 },
+                        "quiff_rise_asked_m": if g.direction == Direction::Up { (g.lift * QUIFF_RISE_M * 1e4).round() / 1e4 } else { 0.0 },
                         "strands_over_eyes": over_eyes.len(), "strands_on_forehead": on_forehead, "over_eyes_roots": over_eyes.iter().take(6).map(|&i| roots[i].0.map(|x| (x * 1e4).round() / 1e4)).collect::<Vec<_>>(),"mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_distance_mm": ((FLYAWAY_M + g.curl_radius_m) * 1e4).round() / 10.0, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
                         "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); with sides_m set, a root below the fade line (3.5 cm above the ears, blended over fade_m) gets the sides length instead of length_m; each strand leaves the scalp lifted by lift (0.35; the top's own lift above the fade line) along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed (on the top, back, forward or up when direction says so, a styled top shortening toward the back to 35 % at 8 cm behind the crown; up stands the hair from 3 cm ahead of the crown forward free of the head, mostly toward world up leaning back and rolling back over, and combs the rest back) along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands (on the same side of the part), curled (fading in over 3 cm), frizzed toward the tip (a strand gets a point at least every 1.5 cm and, curled, at least 8 points per turn, up to 256), and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on its strand's side (the root's), so a curl that crosses the middle does not jump to the other side (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});

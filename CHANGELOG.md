@@ -282,6 +282,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The quiff was a low dome.** Measured down the middle of the head, its hair stood 0.9 cm above the scalp at the
+  front and 1.5 cm at most further back. The top hair combed up now rises from its root (straight up, a little
+  forward at the hairline), turns over within 3 cm and runs back: a pompadour, highest at the front (lift x 5 cm at
+  the hairline, 30 % of that at the back of the quiff; 4.4 cm on the test head) and tapering back. The groom
+  report gives the hair's height over the front 2 cm of the scalp and the rise asked.
 - **Ponytail hair lifted off the side of the head.** Hair combed to a ponytail's tie drifted outward on its way
   over the head (up to 15 mm, and on one seed 20 mm, more than 4 cm from the tie), and a few strands from low at the
   temples showed as thin arcs beside the head. It is now pulled back to 6 mm from the head until it is within 4 cm
