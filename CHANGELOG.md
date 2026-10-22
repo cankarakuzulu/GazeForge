@@ -15,8 +15,9 @@ open, with its last measurement, rather than left out.
   transparent, double-sided wearable through `wearable bind`, so it follows every shape and takes the hair ladder,
   the scalp cap and spring-bone physics. Gate (`tools/diag/groom_cards_gate.py`, not shipped, proven to fail on
   single-sided cards): deterministic, binding back within 0.01 mm, faces outward, worn and exported on six levels
-  with a masked double-sided material, strands traced back from the cards. Known: the far card sets and the scalp cap
-  ride the body's skin weights, not the spring chains.
+  with a masked double-sided material, strands traced back from the cards. Worn with spring-bone physics, every
+  level's cards follow the chains alike (mean chain weight 0.53 on LOD0-3, 0.56-0.59 on LOD4-5), so the far sets do
+  not pop when the level changes; the scalp cap and hair lying on the head stay with the head.
 - **Make game hair cards from the Grown hair section.** A button in both Body shape panels opens the task for the
   current character, with the store, the macro and the character already filled in.
 - **Groom cards have a scalp under them.** A cap over the head's scalp skin region (lifted 1.5 mm, decimated to
