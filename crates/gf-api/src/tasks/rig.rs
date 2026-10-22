@@ -101,7 +101,7 @@ pub fn merge_head_rig(body: &mut gltf::Rig, head: gltf::Rig, on: &OnBody) -> (Ve
 
 type Weights = Vec<(usize, f64)>;
 
-pub fn merge_influences(body: &[Weights], face: &[Weights], map: &[usize], head_bones: &[usize]) -> (Vec<Weights>, Vec<Weights>) {
+pub fn merge_influences(body: &[Weights], face: &[Weights], map: &[usize], head_bones: &[usize], cap: usize) -> (Vec<Weights>, Vec<Weights>) {
     let mut merged = Vec::with_capacity(body.len());
     let mut corrective = Vec::with_capacity(body.len());
     for (b, f) in body.iter().zip(face) {
@@ -123,7 +123,7 @@ pub fn merge_influences(body: &[Weights], face: &[Weights], map: &[usize], head_
             }
             corr.push((j, part));
         }
-        merged.push(gf_core::body_rig::strongest(&out, gf_core::face_rig2::MAX_INFLUENCES));
+        merged.push(gf_core::body_rig::strongest(&out, cap));
         corrective.push(corr.into_iter().filter(|e| e.1 > 0.0).collect());
     }
     (merged, corrective)
@@ -503,8 +503,10 @@ mod tests {
         let map = vec![1, 2, 3, 4, 5, 6];
         let body = vec![vec![(2, 0.8), (1, 0.2)], vec![(1, 1.0)]];
         let face = vec![vec![(0, 0.1), (1, 0.5), (5, 0.4)], vec![(0, 1.0)]];
-        let (merged, corrective) = merge_influences(&body, &face, &map, &[2]);
-        let (with_jaw, _) = merge_influences(&[vec![(2, 0.5), (3, 0.3), (1, 0.2)]], &[vec![(1, 0.5), (2, 0.5)]], &map, &[2, 3]);
+        let (merged, corrective) = merge_influences(&body, &face, &map, &[2], 8);
+        let (with_jaw, _) = merge_influences(&[vec![(2, 0.5), (3, 0.3), (1, 0.2)]], &[vec![(1, 0.5), (2, 0.5)]], &map, &[2, 3], 8);
+        let (capped, _) = merge_influences(&[vec![(2, 1.0)]], &[vec![(1, 0.3), (2, 0.25), (3, 0.2), (4, 0.15), (5, 0.1)]], &map, &[2], 2);
+        assert_eq!(capped[0].len(), 2, "the body's influence cap holds after the split: {:?}", capped[0]);
         assert_eq!(with_jaw[0].iter().find(|e| e.0 == 1).map(|e| e.1), Some(0.2), "only the neck share stays the body's: {:?}", with_jaw[0]);
         assert!((with_jaw[0].iter().find(|e| e.0 == 3).map_or(0.0, |e| e.1) - 0.4).abs() < 1e-12, "the preset jaw's own share is re-split with the head's: {:?}", with_jaw[0]);
         let get = |v: &[(usize, f64)], j: usize| v.iter().find(|e| e.0 == j).map_or(0.0, |e| e.1);

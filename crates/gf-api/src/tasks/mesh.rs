@@ -52,7 +52,7 @@ pub const GLB_KEYS: &[&str] = &[
 pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-front-deg", "lids-tolerance-mm", "lids-smooth"];
 pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
-pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates"];
+pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates", "body-influences"];
 const GENITAL_SINK_M: f64 = 0.002;
 const GENITAL_MIN_BODY_VERTICES: usize = 2500;
 
@@ -148,6 +148,7 @@ pub fn genital_mesh(pack: &gf_core::body::BodyPack, controls: &gf_core::body::Co
     Ok(GenitalMesh { level: l, positions, normals, triangles, uvs, rim: rim.len(), gap_mm, flipped })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn genital_lod(
     pack: &gf_core::body::BodyPack,
     controls: &gf_core::body::Controls,
@@ -156,6 +157,7 @@ fn genital_lod(
     body_normals: &[Point],
     by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>,
     name: String,
+    cap: usize,
 ) -> Result<(Lod, Value), String> {
     let GenitalMesh { level: l, positions, normals, triangles, uvs, rim, gap_mm, flipped } = genital_mesh(pack, controls, level, body_positions, body_normals)?;
     let g = pack.genital.as_ref().ok_or("the body has no helper-genital patch")?;
@@ -171,7 +173,7 @@ fn genital_lod(
                         .iter()
                         .map(|&(c, k)| (k, w.get(&pack.helpers.source[g.helpers[c as usize] as usize]).map(Vec::as_slice).unwrap_or(&none)))
                         .collect();
-                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), cap);
                     if x.is_empty() { vec![(0, 1.0)] } else { x }
                 })
                 .collect();
@@ -367,21 +369,21 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn binding_influences(item: &gf_io::wearable_store::Wearable, by_obj: &HashMap<u32, gf_core::body_rig::Influences>) -> Vec<gf_core::body_rig::Influences> {
+fn binding_influences(item: &gf_io::wearable_store::Wearable, by_obj: &HashMap<u32, gf_core::body_rig::Influences>, cap: usize) -> Vec<gf_core::body_rig::Influences> {
     let none: Vec<(usize, f64)> = Vec::new();
     item.binding
         .bound
         .iter()
         .map(|b| {
             let parts: Vec<(f64, &[(usize, f64)])> = (0..3).map(|k| (b.weights[k], by_obj.get(&b.vertices[k]).map(Vec::as_slice).unwrap_or(&none))).collect();
-            let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+            let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), cap);
             if x.is_empty() { vec![(0, 1.0)] } else { x }
         })
         .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
-fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize, pin: Option<&[f32]>, override_skin: Option<&[gf_core::body_rig::Influences]>) -> Lod {
+fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept: &[u32], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], by_obj: Option<&HashMap<u32, gf_core::body_rig::Influences>>, joint: Option<usize>, material: usize, pin: Option<&[f32]>, override_skin: Option<&[gf_core::body_rig::Influences]>, cap: usize) -> Lod {
     let normals = super::wearable::vertex_normals(positions, triangles);
     let surface = gm::split_seams(triangles, uvs);
     let skin = by_obj.map(|w| {
@@ -399,7 +401,7 @@ fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept
             .map(|&v| {
                 let b = &item.binding.bound[kept[v as usize] as usize];
                 let parts: Vec<(f64, &[(usize, f64)])> = (0..3).map(|k| (b.weights[k], w.get(&b.vertices[k]).map(Vec::as_slice).unwrap_or(&none))).collect();
-                let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4);
+                let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), cap);
                 if x.is_empty() { vec![(0, 1.0)] } else { x }
             })
             .collect();
@@ -422,16 +424,22 @@ fn garment_lod(item: &gf_io::wearable_store::Wearable, positions: &[Point], kept
 fn skin_data(influences: &[&[(usize, f64)]]) -> gltf::SkinData {
     let mut joints = Vec::with_capacity(influences.len());
     let mut weights = Vec::with_capacity(influences.len());
+    let wide = influences.iter().any(|i| i.len() > 4);
+    let (mut joints_1, mut weights_1) = (Vec::new(), Vec::new());
     for inf in influences {
-        let (mut j, mut w) = ([0u8; 4], [0.0f32; 4]);
-        for (k, &(joint, weight)) in inf.iter().take(4).enumerate() {
+        let (mut j, mut w) = ([0u8; 8], [0.0f32; 8]);
+        for (k, &(joint, weight)) in inf.iter().take(8).enumerate() {
             j[k] = joint as u8;
             w[k] = weight as f32;
         }
-        joints.push(j);
-        weights.push(w);
+        joints.push([j[0], j[1], j[2], j[3]]);
+        weights.push([w[0], w[1], w[2], w[3]]);
+        if wide {
+            joints_1.push([j[4], j[5], j[6], j[7]]);
+            weights_1.push([w[4], w[5], w[6], w[7]]);
+        }
     }
-    gltf::SkinData { joints, weights, joints_1: Vec::new(), weights_1: Vec::new() }
+    gltf::SkinData { joints, weights, joints_1, weights_1 }
 }
 
 fn body_options(opts: &Options) -> Result<Option<(gf_core::body::BodyPack, Value, gf_core::body::Controls)>, String> {
@@ -1145,6 +1153,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let body_cap: usize = match opts.get("body-influences").map(String::as_str) {
+        None | Some("8") => 8,
+        Some("4") => 4,
+        Some(other) => return Err(format!("--body-influences must be 8 or 4, got {other}")),
+    };
     let mut body_rig = match (opts.get("body-rig"), opts.get("body-weights")) {
         (None, None) => None,
         (None, Some(_)) => return Err("--body-weights goes with --body-rig".into()),
@@ -1201,7 +1214,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     let o = pack.cage_source.get(c as usize).ok_or_else(|| format!("cage corner {c} is outside the body's cage map"))?;
                     parts.push((k, br.by_obj.get(o).map(Vec::as_slice).unwrap_or(&none)));
                 }
-                out.push(gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4));
+                out.push(gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), body_cap));
             }
             Some(out)
         }
@@ -1627,7 +1640,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             None => weights.iter().map(|x| vec![(gf_core::rig::NECK, x[0]), (gf_core::rig::HEAD, x[1]), (2, x[2])]).collect(),
         };
         let taken: Vec<usize> = std::iter::once(br.head_joint).chain([on.jaw, on.eyes[0], on.eyes[1]].into_iter().flatten()).collect();
-        let (merged, corrective) = super::rig::merge_influences(hi, &face, &map, &taken);
+        let (merged, corrective) = super::rig::merge_influences(hi, &face, &map, &taken, body_cap);
         let changed = merged.iter().zip(hi.iter()).filter(|(a, b)| a != b).count();
         *hi = merged.clone();
         face_skin = Some(merged);
@@ -1743,9 +1756,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                                 match &pack.fine {
                                     Some(f) => {
                                         let parts: Vec<(f64, &[(usize, f64)])> = f.stencil.rows[k as usize].iter().map(|&(c, w)| (w, of_cage(c))).collect();
-                                        gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), 4)
+                                        gf_core::body_rig::strongest(&gf_core::body_rig::mix(&parts), body_cap)
                                     }
-                                    None => gf_core::body_rig::strongest(of_cage(k), 4),
+                                    None => gf_core::body_rig::strongest(of_cage(k), body_cap),
                                 }
                             }
                             (None, Some(&h)) => hi[level.map[h as usize] as usize].clone(),
@@ -1777,7 +1790,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             });
             if genitals && st.positions.len() >= GENITAL_MIN_BODY_VERTICES {
                 let level = pack.fine.as_ref().map_or(2, |f| f.level).saturating_sub(i);
-                let (lod, report) = genital_lod(pack, controls, level, &st.positions, &normals, body_rig.as_ref().map(|br| &br.by_obj), format!("Genitals_LOD{i}"))?;
+                let (lod, report) = genital_lod(pack, controls, level, &st.positions, &normals, body_rig.as_ref().map(|br| &br.by_obj), format!("Genitals_LOD{i}"), body_cap)?;
                 genital_rows.push(report);
                 body_lods.push(lod);
             }
@@ -1859,7 +1872,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                                 spring_skin.push(None);
                                 continue;
                             }
-                            let bound = binding_influences(item, &br.by_obj);
+                            let bound = binding_influences(item, &br.by_obj, body_cap);
                             let (blended, n) = super::wearable::opening_influences(positions, &ladder[0].1, &bound, &skin, reach);
                             opening_rows.push(json!({"reach_m": reach, "vertices_blended": n}));
                             spring_skin.push(Some(blended));
@@ -1868,7 +1881,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         opening_rows.push(Value::Null);
                         let tris = &ladder[0].1;
                         let pin: Vec<f32> = positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect();
-                        let body = binding_influences(item, &br.by_obj);
+                        let body = binding_influences(item, &br.by_obj, body_cap);
                         let dominant: Vec<usize> = body.iter().map(|b| b.iter().copied().max_by(|x, y| x.1.total_cmp(&y.1)).map_or(0, |x| x.0)).collect();
                         let (seed, anchor) = super::wearable::spring_seeds(positions, &pin, &dominant);
                         let chains = super::wearable::build_chains(positions, tris, &seed);
@@ -1904,7 +1917,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                                     let f = (t - lo as f64).clamp(0.0, 1.0);
                                     let chain_w = vec![(first[c] + lo, 1.0 - f), (first[c] + hi, f)];
                                     let p = if Some(dominant[v]) == anchor { pin[v] as f64 } else { 0.0 };
-                                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&[(p, body[v].as_slice()), (1.0 - p, chain_w.as_slice())]), 4);
+                                    let x = gf_core::body_rig::strongest(&gf_core::body_rig::mix(&[(p, body[v].as_slice()), (1.0 - p, chain_w.as_slice())]), body_cap);
                                     if x.is_empty() { vec![(0, 1.0)] } else { x }
                                 }
                                 None => body[v].clone(),
@@ -1919,7 +1932,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     let pin: Option<Vec<f32>> = (row["physics"] == "cloth").then(|| {
                         positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect()
                     });
-                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref(), override_skin.as_deref());
+                    let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref(), override_skin.as_deref(), body_cap);
                     wear_slots.push((body_lods.len(), *slot));
                     if pin.is_some() {
                         cloth_nodes.entry(item.manifest.name.clone()).or_default().push(format!("{}_LOD{i}", lod.name));

@@ -357,6 +357,7 @@ fn export() -> Value {
                  {"name": "body", "label": "Body pack", "widget": "folder"},
                  {"name": "body_rig", "label": "Body skeleton (a rig preset: game_engine, game_engine_with_breast, default, mixamo, mixamo_unity, cmu_mb, openpose; or a rig .json)"},
                  {"name": "body_gates", "label": "When the body's stitch gates fail"},
+                 {"name": "body_influences", "label": "Joints per body vertex (8 keeps the shoulders whole; 4 for engines that read only four)"},
                  {"name": "lids", "label": "Eyelid fitting"},
                  {"name": "rig", "label": "Face rig"},
                  {"name": "sparse", "label": "Sparse morphs"},

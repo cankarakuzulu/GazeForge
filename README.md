@@ -419,6 +419,10 @@ the whole character: the joints are evaluated on this body as MakeHuman places t
 mean of vertices of the base mesh), so they follow the macros, regional sliders and compounds; the body takes
 MakeHuman's weights per vertex, the head the bilinear mix of the weights of the head cage's corners around each vertex,
 and the seam vertices of both meshes share theirs, so the neck stays closed in any pose; the eyes ride the head bone.
+Each vertex keeps up to 8 joints (`JOINTS_1` / `WEIGHTS_1` carry the second four; Godot 4.7 imports all 8);
+`--body-influences 4` writes one set for engines that read only four, at a cost: MakeHuman's `default` weights name
+more than four bones on 926 shoulder vertices (up to 33 percent of a vertex's weight), and with four its shoulders tear
+when the arms go over the head.
 `body.joints` returns the joints alone. Bodies need their helper vertices: import them (`body.import`, `body.targets`)
 with this version. Measured: every joint equals an independent evaluation of MakeHuman's rule to 0.001 mm on all
 eight standard rigs; in Godot 4.7 the rest pose reproduces to 0.07 mm and the seam stays shut (gap 0) with the spine,

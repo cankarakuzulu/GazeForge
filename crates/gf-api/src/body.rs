@@ -566,7 +566,7 @@ pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weigh
     let meta = json!({"source": source, "head_joints": head_joints,
                       "bones": rig.bones.len(), "head_bone": rig.bones[head_joint].name, "weights_for_bones_not_in_the_rig": unknown, "unweighted_vertices": unweighted,
                       "joints": "one glTF joint per bone at the bone's head, evaluated on this body (MakeHuman's rule: a helper cube's mean, a vertex or a mean of vertices); translation-only rest, so each inverse bind is the joint's negated position; tails and rolls are not used",
-                      "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the 4 strongest, renormalised",
+                      "weights_method": "MakeHuman's weights per base.obj vertex: a body vertex takes its own; a head vertex mixes the weights of the cage corners around it bilinearly (its place on the cage, body.cage); a body seam vertex takes the weights of the head vertex it copies; then the strongest 8 (or 4 with --body-influences 4), renormalised; past 4 they go in JOINTS_1 / WEIGHTS_1",
                       "eyes": "rigid on the head bone"});
     Ok(BodyRig { heads, rig, by_obj, head_joint, meta })
 }

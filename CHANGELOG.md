@@ -99,6 +99,14 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **Up to 8 joints per body vertex.** With `--body-rig` the body, head, genitals and worn items now keep up to 8
+  joints per vertex (`JOINTS_1` / `WEIGHTS_1`); `--body-influences 4` (and the export task's field) keeps the old single
+  set, byte-identical to before. Why: MakeHuman's weights name more than four bones on many shoulder vertices (`default`:
+  926 of them, losing 7.8 percent of their weight on average and up to 33 percent; `game_engine`: 305, up to 24
+  percent), and cutting them made the `default` preset's shoulders tear with the arms over the head
+  (`tools/diag/arms_up.py`); with 8 they bend smoothly. The posed-garment results are unchanged; the skin gate (which
+  now reads both sets), the humanoid maps and Godot 4.7's import (8 weights per vertex) pass. A natural arms-up pose
+  also lifts the clavicles: turning the upper arms alone creases the top of the shoulder on any weights.
 - **A painted hair cap at far levels.** At LOD4 and LOD5, where a hair or beard keeps too few cards to cover the
   scalp, the head takes a second material: its skin texture (or plain white without skin) with the item's colour
   (its texture's alpha-weighted mean) painted wherever the item's opaque texels lie within 12 mm outside the skin at
