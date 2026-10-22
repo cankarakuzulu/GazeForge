@@ -39,6 +39,7 @@ const QUIFF_FORWARD: f64 = 0.25;
 const QUIFF_TURN_M: f64 = 0.03;
 const QUIFF_BACK: Point = [0.0, 1.0, -0.35];
 const QUIFF_PROFILE_HALF_M: f64 = 0.015;
+const DRAPE_PULL: f64 = 1.5;
 const QUIFF_PROFILE_BAND_M: f64 = 0.02;
 const UP_FRONT_M: f64 = 0.03;
 const TIE_UP_BIAS: f64 = 0.3;
@@ -317,6 +318,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mut fringe_of: Vec<bool> = Vec::with_capacity(g.strands);
     let mut gather_off = 0.0f64;
     let mut framed = 0usize;
+    let mut draped = 0usize;
     let fringe_half_width = face.half_width * if g.frame_m > 0.0 { FRINGE_WIDTH_WITH_FRAME } else { 1.0 };
     let fade_line = brim + FADE_LINE_ABOVE_EARS_M;
     let topness = |z: f64| -> f64 {
@@ -535,11 +537,14 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         };
         let mut arc = 0.0;
         let mut dir = if free { quiff_dir(0.0) } else { unit(add(scale(n, lift), scale(comb(p, n), 1.0 - lift))) };
+        let drape = unit([0.0, if p[1] > face.ears_y { 1.0 } else { -1.0 }, -1.0]);
         for _ in 1..points {
             let mut next = add(*line.last().unwrap(), scale(dir, seg));
+            let mut landed = false;
             if let Some(q) = outside(surface, next) {
                 next = q;
                 pushes += 1;
+                landed = next[2] <= brim;
             }
             if let Some(q) = face.keep_out_toward(next, face.side_of(p)) {
                 next = q;
@@ -548,6 +553,10 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let step = sub(next, *line.last().unwrap());
             next = add(*line.last().unwrap(), scale(unit(step), seg));
             dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
+            if landed {
+                dir = unit(add(dir, scale(drape, DRAPE_PULL)));
+                draped += 1;
+            }
             arc += seg;
             if free {
                 dir = quiff_dir(arc);
@@ -719,6 +728,16 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let front_scalp = roots.iter().map(|(q, _)| *q).filter(in_front).map(|q| q[2]).fold(f64::NEG_INFINITY, f64::max);
     let front_hair = strands.iter().flat_map(|s| s.points.iter()).filter(|q| in_front(q)).map(|q| q[2]).fold(f64::NEG_INFINITY, f64::max);
     let front_thickness = (front_hair - front_scalp).max(0.0);
+    let below_throat: Vec<&Strand> = strands.iter().filter(|s| s.points.iter().any(|q| q[2] < face.bottom)).collect();
+    let tips_outward = below_throat
+        .iter()
+        .filter(|s| {
+            let n = s.points.len();
+            let k = (n / 4).max(2).min(n - 1);
+            let d = sub(s.points[n - 1], s.points[n - 1 - k]);
+            dot(d, d) > 1e-12 && unit(d)[0].abs() > 0.5
+        })
+        .count();
     let fringe_below =strands.iter().zip(&fringe_of).filter(|(_, f)| **f).flat_map(|(s, _)| s.points.iter()).filter(|p| p[2] < hairline.brows).count();
     let cm = |x: f64| (x * 1e4).round() / 1e4;
     let face_report = json!({"hairline_above_brows_m": lowest_front.is_finite().then(|| cm(lowest_front - brows)), "hairline_asked_above_brows_m": cm(hairline.z - brows),
@@ -728,7 +747,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                              "brows_to_subnasale_m": cm(brows - subnasale), "subnasale_to_chin_m": cm(subnasale - chin)});
     let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
-                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed, "highlighted_strands": highlighted,
+                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed, "highlighted_strands": highlighted, "draped_steps": draped,
+                        "strands_below_throat": below_throat.len(), "tips_outward": tips_outward,
                         "front_thickness_m": if front_thickness.is_finite() { (front_thickness * 1e4).round() / 1e4 } else { 0.0 },
                         "quiff_rise_asked_m": if g.direction == Direction::Up { (g.lift * QUIFF_RISE_M * 1e4).round() / 1e4 } else { 0.0 },
                         "strands_over_eyes": over_eyes.len(), "strands_on_forehead": on_forehead, "over_eyes_roots": over_eyes.iter().take(6).map(|&i| roots[i].0.map(|x| (x * 1e4).round() / 1e4)).collect::<Vec<_>>(),"mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
