@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Opening the studio's Body shape panel changed a large groom seed.** Its seed box stopped at 1,000,000 while a
+  groom may use any seed up to 4,294,967,295 (the browser writes those), and the box pulled a larger seed down to
+  its limit and saved it as an edit: a character with seed 2,000,000 came out with 1,000,000 and new hair just by
+  being looked at. The box now takes the groom's whole range.
 - **Reports that described the wrong thing.** A grown groom's strands report and `.usda` header said the hair was
   traced from cards; they now say it was grown, and `--strands-count`, `--strands-seed` and `--strands-points`
   (which only shape traced hair) are refused next to a groom instead of ignored. `groom cards` counted far-level

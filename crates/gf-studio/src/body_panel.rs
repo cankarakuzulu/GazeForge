@@ -54,7 +54,6 @@ const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
     ("seed", 1.0, 1.0, 0),
 ];
 
-const GROOM_UI_MAX: f64 = 1e6;
 
 fn weight(body: &Value, id: &Option<String>) -> f64 {
     id.as_ref().and_then(|t| body["weights"][t].as_f64()).unwrap_or(0.0)
@@ -684,7 +683,7 @@ impl crate::studio::Studio<'_> {
                         ui.label(tr(&format!("body.groom.{key}"))).on_hover_text(tr(&format!("body.groom.{key}_tip")));
                         let live_key = format!("g:{key}");
                         let mut v = ui_state.live.get(&live_key).copied().unwrap_or(g[key].as_f64().unwrap_or(f.default) * unit);
-                        let r = ui.add(egui::DragValue::new(&mut v).range(f.lo * unit..=f.hi.min(GROOM_UI_MAX) * unit).speed(speed).max_decimals(decimals)).on_hover_text(tr(&format!("body.groom.{key}_tip")));
+                        let r = ui.add(egui::DragValue::new(&mut v).range(f.lo * unit..=f.hi * unit).speed(speed).max_decimals(decimals)).on_hover_text(tr(&format!("body.groom.{key}_tip")));
                         if r.changed() {
                             ui_state.live.insert(live_key.clone(), v);
                         }
