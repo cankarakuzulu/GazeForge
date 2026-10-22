@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 pub mod api;
 pub mod bake;
 pub mod data;
+pub mod groom;
 pub mod mesh;
 pub mod rig;
 pub mod strands;

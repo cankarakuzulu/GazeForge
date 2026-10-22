@@ -1173,6 +1173,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     if strand_settings.is_some() && !opts.contains_key("body") && spec.body.is_none() {
         return Err("--strands traces the hair a character wears, and this one wears none (no body)".into());
     }
+    let groom = match opts.get("groom") {
+        Some(path) => {
+            if strand_settings.is_none() {
+                return Err("--groom grows strands into the --strands file; give --strands OUT.usda too".into());
+            }
+            Some(super::groom::read(Path::new(path))?)
+        }
+        None => None,
+    };
     let mut strand_groups: Vec<(String, Vec<super::strands::Strand>)> = Vec::new();
     let mut strand_rows: Vec<Value> = Vec::new();
     if bake_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
@@ -1751,6 +1760,18 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             failures.extend(failed.into_iter().map(|f| format!("{}: {f}", level.name)));
             let (shared, normals) = gb::two_sided_normals(&game, &level.triangles, &st);
             seam_normals.push(shared.into_iter().collect());
+            if i == 0
+                && let Some(g) = &groom
+            {
+                let mut points = game.clone();
+                points.extend_from_slice(&st.positions);
+                let h = game.len() as u32;
+                let tris: Vec<[u32; 3]> = level.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+                let skin_surface = super::wearable::Surface::new(points, &tris);
+                let (strands, row) = super::groom::grow(g, &game, &level.triangles, &neutral_dense, &skin_surface)?;
+                strand_rows.push(row);
+                strand_groups.push((g.name.clone(), strands));
+            }
             if i == 0 && !pending.is_empty() {
                 let mut points = game.clone();
                 points.extend_from_slice(&st.positions);
@@ -1900,6 +1921,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     }
                 }
                 if i == 0
+                    && groom.is_none()
                     && let Some(st) = &strand_settings
                 {
                     let mut hairs = Vec::new();

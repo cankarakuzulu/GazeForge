@@ -1,3 +1,4 @@
+pub mod base_landmarks;
 pub mod body;
 pub mod body_rig;
 pub mod body_shape;

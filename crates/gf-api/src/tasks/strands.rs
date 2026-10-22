@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::Options;
 
-pub const KEYS: &[&str] = &["strands", "strands-count", "strands-seed", "strands-points"];
+pub const KEYS: &[&str] = &["strands", "strands-count", "strands-seed", "strands-points", "groom"];
 const DEFAULT_COUNT: usize = 20000;
 const DEFAULT_POINTS: usize = 16;
 const TRACE_STEPS: usize = 256;
