@@ -809,7 +809,7 @@ pub fn layer_depth(binding: &Binding, layer: Option<f64>) -> f64 {
 pub const CAP_REACH_M: f64 = 0.012;
 pub const CAP_BEHIND_M: f64 = 0.005;
 
-pub fn cap_mask(map: &gf_core::skin_map::TexelMap, head: &[Point], triangles: &[[u32; 3]], hair: &Surface, reach: f64) -> Vec<f32> {
+pub fn cap_mask(map: &gf_core::skin_map::TexelMap, head: &[Point], triangles: &[[u32; 3]], scalp: &[f64], hair: &Surface, reach: f64) -> Vec<f32> {
     let normals = vertex_normals(head, triangles);
     let n = map.size * map.size;
     let mut mask = vec![0f32; n];
@@ -828,7 +828,7 @@ pub fn cap_mask(map: &gf_core::skin_map::TexelMap, head: &[Point], triangles: &[
             let q = hair.points[j];
             let out = ((q[0] - p[0]) * nr[0] + (q[1] - p[1]) * nr[1] + (q[2] - p[2]) * nr[2]) / len;
             if out > -CAP_BEHIND_M {
-                *m = 1.0;
+                *m = (0..3).map(|c| b[c] * scalp.get(tri[c] as usize).copied().unwrap_or(0.0)).sum::<f64>().clamp(0.0, 1.0) as f32;
             }
         }
     }
@@ -1371,7 +1371,8 @@ mod tests {
             }
         }
         let surface = Surface::new(hair, &[]);
-        let mask = cap_mask(&map, &head, &triangles, &surface, CAP_REACH_M);
+        let everywhere = vec![1.0; head.len()];
+        let mask = cap_mask(&map, &head, &triangles, &everywhere, &surface, CAP_REACH_M);
         let at = |u: f32, v: f32| mask[(v * 63.0).round() as usize * 64 + (u * 63.0).round() as usize];
         assert!(at(0.2, 0.5) > 0.99, "under the hair: {}", at(0.2, 0.5));
         assert!(at(0.8, 0.5) < 0.01, "3 cm past the hair's edge: {}", at(0.8, 0.5));
@@ -1379,7 +1380,11 @@ mod tests {
         assert!(row.iter().any(|&m| m > 0.05 && m < 0.95), "the edge is feathered: {row:?}");
         assert!(row.windows(2).filter(|w| w[0] > 0.05 && w[0] < 0.95).all(|w| w[1] <= w[0] + 1e-6), "and falls away from the hair: {row:?}");
         let below = Surface::new(vec![[0.02, 0.05, -0.02]], &[]);
-        assert!(cap_mask(&map, &head, &triangles, &below, CAP_REACH_M).iter().all(|&m| m == 0.0), "hair behind the skin paints nothing");
+        assert!(cap_mask(&map, &head, &triangles, &everywhere, &below, CAP_REACH_M).iter().all(|&m| m == 0.0), "hair behind the skin paints nothing");
+        let face = vec![0.0; head.len()];
+        assert!(cap_mask(&map, &head, &triangles, &face, &surface, CAP_REACH_M).iter().all(|&m| m == 0.0), "hair over skin outside the scalp paints nothing");
+        let half = vec![0.5; head.len()];
+        assert!((cap_mask(&map, &head, &triangles, &half, &surface, CAP_REACH_M)[32 * 64 + 13] - 0.5).abs() < 1e-6, "the scalp weight is the paint's strength");
         let pixels = [200u8, 40, 20, 255, 0, 0, 250, 0];
         assert_eq!(hair_colour(&pixels), Some([200.0, 40.0, 20.0]));
         assert_eq!(hair_colour(&[9, 9, 9, 0]), None);

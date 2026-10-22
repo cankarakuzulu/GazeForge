@@ -230,6 +230,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The far-level scalp cap painted hair colour onto the face.** Hair passing within its reach of the cheeks, eyes or
+  forehead (cards hanging beside the face) painted them on LOD4 and LOD5. The cap now never paints the face's skin
+  regions (lips, mouth, nose, cheeks, forehead, chin, upper lip, under the eyes, eyelids, T-zone; weighted, so the
+  hairline is soft) and still paints the scalp, ears, neck and jaw where hair lies on them. Exports of characters
+  wearing alpha-card hair change on LOD4-5. The sidecar lists the regions (`scalp_cap.never_on`).
 - A VRM test held an approximate 1/sqrt(2) that the workspace clippy refuses, so the test target did not compile under
   clippy; one cloth test looped by index.
 - **Clothes showed through a coarse outer item, and cloth over clothes was barely pinned.** Layering pushed the

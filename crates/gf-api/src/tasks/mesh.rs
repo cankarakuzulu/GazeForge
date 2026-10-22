@@ -237,6 +237,7 @@ const NEUTRAL_COLOUR: [f32; 4] = [0.8, 0.8, 0.8, 1.0];
 const NEUTRAL_ROUGHNESS: f32 = 0.7;
 const CAP_SIZE: usize = 512;
 const CAP_PAD: usize = 8;
+const CAP_FACE: [&str; 10] = ["lips", "mouth_inner", "nose", "cheeks", "forehead", "chin", "upper_lip", "under_eye", "eyelids", "t_zone"];
 
 fn level_target(n: usize, body: usize, body0: usize, level: usize, power: f64) -> usize {
     let ratio = body as f64 / body0.max(1) as f64;
@@ -1909,6 +1910,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
                 if i == 0 && levels.len() > GENTLE_LEVELS + 1 && worn.iter().any(|w| w.4["scalp_cap"] == true) {
                     let cap_map = gf_core::skin_map::build(&base.triangle_uvs, cap_size, CAP_PAD);
+                    let regions = gf_core::skin_regions::build(&game, &gf_core::game_mesh::game_normals(&game, &base.triangles), &base.triangles, &gf_core::base_landmarks::on(&neutral_dense)?)?;
+                    let face: Vec<usize> = gf_core::skin_regions::NAMES.iter().enumerate().filter(|(_, n)| CAP_FACE.contains(n)).map(|(k, _)| k).collect();
+                    if face.len() != CAP_FACE.len() {
+                        return Err(format!("the scalp cap keeps off {CAP_FACE:?}, and the skin regions are {:?}", gf_core::skin_regions::NAMES));
+                    }
+                    let scalp: Vec<f64> = regions.weights.iter().map(|w| (1.0 - face.iter().map(|&k| w[k] as f64).sum::<f64>()).clamp(0.0, 1.0)).collect();
                     for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
                         if row["scalp_cap"] != true {
                             continue;
@@ -1920,7 +1927,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         };
                         let samples = super::wearable::hair_samples(positions, &ladder[0].1, &ladder[0].2, (w, h, &rgba), super::wearable::CAP_SAMPLE_M);
                         let hair = super::wearable::Surface::new(samples, &[]);
-                        let mask = super::wearable::cap_mask(&cap_map, &game, &base.triangles, &hair, super::wearable::CAP_REACH_M);
+                        let mask = super::wearable::cap_mask(&cap_map, &game, &base.triangles, &scalp, &hair, super::wearable::CAP_REACH_M);
                         cap_parts.push((item.manifest.name.clone(), mask, colour));
                     }
                 }
@@ -2327,7 +2334,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         if body_meta["wearables"].is_object() {
             body_meta["wearables"]["scalp_cap"] = json!({
-                "head_levels": (GENTLE_LEVELS + 1..lods.len()).collect::<Vec<_>>(), "texture_size": size, "reach_mm": super::wearable::CAP_REACH_M * 1000.0,
+                "head_levels": (GENTLE_LEVELS + 1..lods.len()).collect::<Vec<_>>(), "texture_size": size, "reach_mm": super::wearable::CAP_REACH_M * 1000.0, "never_on": CAP_FACE,
                 "on_skin": skin_index.is_some(), "live_skin_layers_dropped": dropped,
                 "items": cap_parts.iter().zip(&texels).map(|(p, &t)| if p.1.is_empty() { json!({"name": p.0, "skipped": "no colour texture"}) } else { json!({"name": p.0, "colour": p.2, "texels": t}) }).collect::<Vec<_>>(),
             });
