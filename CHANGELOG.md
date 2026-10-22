@@ -285,6 +285,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Specks of an inner garment showed through the one over it.** Worn layering tucked the inner item's vertices
+  behind the outer one, but two flat-faceted meshes can still cross between their vertices: a cape over a suit
+  showed suit-coloured dots near its top edge (8 sample points of the suit outside the cape, up to 0.72 mm, while
+  every vertex on both sides stayed clear). After the vertex tuck, the inner item's triangles whose centre or edge
+  midpoints still show through are now moved behind too (up to 3 passes); the layering report counts them. The cape
+  shows no dots in any baked frame; the suit sits no deeper in the body than before.
 - **Game hair cards kept the old low hairline.** The scalp cap under the cards still followed the head's scalp
   skin region, which starts low on the forehead, so every hair-card wearable showed an opaque band down to near the
   brows - a fringe on a quiff, an undercut, a curtain. The cap now follows the groom's hairline like the strands'

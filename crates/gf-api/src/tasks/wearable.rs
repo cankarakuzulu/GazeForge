@@ -634,6 +634,7 @@ pub const CLEARANCE_M: f64 = 0.002;
 const PUSH_REACH_M: f64 = 0.1;
 const FACING_REACH_M: f64 = 0.3;
 const TUCK_REACH_M: f64 = 0.02;
+const FACET_TUCK_PASSES: usize = 3;
 const PUSH_SPREAD_PASSES: usize = 2;
 const LIFT_ROUNDS: usize = 4;
 const LIFT_MAX_M: f64 = 0.01;
@@ -981,22 +982,48 @@ pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
                 around[v as usize].push(t);
             }
         }
-        let (mut tucked, mut deepest) = (0usize, 0.0f64);
+        let showing = |p: Point| -> Option<(f64, Point)> {
+            let j = outer.nearest(p, PUSH_REACH_M)?;
+            let ring: Vec<usize> = around[j].iter().flat_map(|&t| triangles[t].iter().flat_map(|&u| around[u as usize].iter().copied())).collect();
+            let (s, n) = ring.iter().find_map(|&t| under_triangle(p, triangles[t].map(|i| outer.points[i as usize]), outer.normals[j]))?;
+            (s > -CLEARANCE_M && s < TUCK_REACH_M).then_some((s + CLEARANCE_M, n))
+        };
+        let (mut tucked, mut deepest, mut facets) = (0usize, 0.0f64, 0usize);
         for &k in &inner {
             for v in garments[k].positions.iter_mut() {
-                let Some(j) = outer.nearest(*v, PUSH_REACH_M) else { continue };
-                let ring: Vec<usize> = around[j].iter().flat_map(|&t| triangles[t].iter().flat_map(|&u| around[u as usize].iter().copied())).collect();
-                let Some((s, n)) = ring.iter().find_map(|&t| under_triangle(*v, triangles[t].map(|i| outer.points[i as usize]), outer.normals[j])) else { continue };
-                if s > -CLEARANCE_M && s < TUCK_REACH_M {
-                    let by = s + CLEARANCE_M;
+                if let Some((by, n)) = showing(*v) {
                     *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
                     tucked += 1;
                     deepest = deepest.max(by);
                 }
             }
+            for _ in 0..FACET_TUCK_PASSES {
+                let mut push: Vec<Option<(f64, Point)>> = vec![None; garments[k].positions.len()];
+                for tri in &garments[k].triangles {
+                    let [a, b, c] = tri.map(|i| garments[k].positions[i as usize]);
+                    let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
+                    let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
+                    let Some((by, n)) = [centre, mid(a, b), mid(b, c), mid(c, a)].into_iter().filter_map(&showing).max_by(|x, y| x.0.total_cmp(&y.0)) else { continue };
+                    facets += 1;
+                    for &i in tri {
+                        if push[i as usize].is_none_or(|(old, _)| by > old) {
+                            push[i as usize] = Some((by, n));
+                        }
+                    }
+                }
+                if push.iter().all(Option::is_none) {
+                    break;
+                }
+                for (v, p) in garments[k].positions.iter_mut().zip(&push) {
+                    if let Some((by, n)) = p {
+                        *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
+                        deepest = deepest.max(*by);
+                    }
+                }
+            }
         }
-        report["tucked_under"] = json!({"vertices": tucked, "max_mm": deepest * 1000.0,
-                                        "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance"});
+        report["tucked_under"] = json!({"vertices": tucked, "facets": facets, "max_mm": deepest * 1000.0,
+                                        "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance; then their triangles whose centre or edge midpoints still showed through (facets crossing between vertices) moved behind it the same way, up to 3 passes"});
         reports[g] = report;
     }
     reports
