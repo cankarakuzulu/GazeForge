@@ -16,6 +16,8 @@ const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
 const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
+const FACE_MARGIN_M: f64 = 0.01;
+const FRINGE_M: f64 = 0.02;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Part {
@@ -99,6 +101,32 @@ pub fn read(path: &Path) -> Result<Groom, String> {
     parse(&serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?)
 }
 
+struct Face {
+    centre_x: f64,
+    half_width: f64,
+    bottom: f64,
+    top: f64,
+    eyes_y: f64,
+    ears_y: f64,
+}
+
+impl Face {
+    fn keep_out(&self, p: Point) -> Option<Point> {
+        let dx = (p[0] - self.centre_x).abs();
+        let ahead = (self.eyes_y - p[1]).max(0.0);
+        if dx >= self.half_width + ahead || p[2] <= self.bottom || p[2] >= self.top || p[1] >= self.ears_y {
+            return None;
+        }
+        let (dx, y) = if ahead > 0.0 {
+            let d = (self.half_width + ahead - dx) / 2.0;
+            if p[1] + d < self.eyes_y { (dx + d, p[1] + d) } else { (self.half_width, self.eyes_y) }
+        } else {
+            (self.half_width, p[1])
+        };
+        Some([self.centre_x + if p[0] >= self.centre_x { dx } else { -dx }, y, p[2]])
+    }
+}
+
 struct Rng(u64);
 
 impl Rng {
@@ -142,6 +170,17 @@ fn tangent(v: Point, n: Point) -> Point {
 
 pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]], surface: &Surface) -> Result<(Vec<Strand>, Value), String> {
     let landmarks = gf_core::base_landmarks::on(dense)?;
+    let lm = |i: usize| landmarks.get(&i).copied().ok_or_else(|| format!("landmark {i} is missing"));
+    let (eye_r, eye_l, chin, brow, ear_r, ear_l) = (lm(33)?, lm(263)?, lm(152)?, lm(10)?, lm(234)?, lm(454)?);
+    let face = Face {
+        centre_x: (eye_r[0] + eye_l[0]) / 2.0,
+        half_width: (eye_l[0] - eye_r[0]).abs() / 2.0 + FACE_MARGIN_M,
+        bottom: chin[2],
+        top: brow[2] - FRINGE_M,
+        eyes_y: (eye_r[1] + eye_l[1]) / 2.0,
+        ears_y: (ear_r[1] + ear_l[1]) / 2.0,
+    };
+    let mut kept_off_face = 0usize;
     let normals = game_normals(head, triangles);
     let regions = skin_regions::build(head, &normals, triangles, &landmarks)?;
     let scalp: Vec<f64> = regions.weights.iter().map(|w| w[SCALP] as f64).collect();
@@ -210,6 +249,10 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                     pushes += 1;
                 }
             }
+            if let Some(q) = face.keep_out(next) {
+                next = q;
+                kept_off_face += 1;
+            }
             let step = sub(next, *line.last().unwrap());
             next = add(*line.last().unwrap(), scale(unit(step), seg));
             dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
@@ -259,6 +302,12 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let frizz = scale([rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5], 2.0 * g.frizz_m * tip);
             line[k] = add(add(base[k], curl), frizz);
             if k > 0
+                && let Some(q) = face.keep_out(line[k])
+            {
+                line[k] = q;
+                kept_off_face += 1;
+            }
+            if k > 0
                 && let Some(j) = surface.nearest(line[k], NEAR_M)
             {
                 let s = surface.signed(line[k], j);
@@ -291,9 +340,9 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mean = lengths.iter().sum::<f64>() / lengths.len().max(1) as f64;
     let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": g.points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
-                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes,
+                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "kept_off_face": kept_off_face,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
-                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal and combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body; then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again"});
+                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal and combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body; then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from the chin to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
     Ok((strands, report))
 }
 
@@ -310,5 +359,20 @@ mod tests {
         assert!(parse(&json!({"format": FORMAT, "part": "middle"})).is_err());
         assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
         assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
+    }
+
+    #[test]
+    fn hair_in_front_of_the_face_moves_to_the_nearest_edge_beside_it() {
+        let face = Face { centre_x: 0.0, half_width: 0.05, bottom: 1.5, top: 1.7, eyes_y: -0.08, ears_y: 0.0 };
+        let inside = |p: Point| (p[0].abs() < face.half_width + (face.eyes_y - p[1]).max(0.0) - 1e-9) && p[1] < face.ears_y;
+        assert_eq!(face.keep_out([0.02, -0.05, 1.6]), Some([0.05, -0.05, 1.6]));
+        assert_eq!(face.keep_out([-0.02, -0.05, 1.6]), Some([-0.05, -0.05, 1.6]));
+        let q = face.keep_out([0.04, -0.12, 1.6]).unwrap();
+        assert!((q[0] - 0.065).abs() < 1e-12 && (q[1] + 0.095).abs() < 1e-12, "{q:?}");
+        assert!(!inside(q) && q[1] > -0.12);
+        assert_eq!(face.keep_out([0.0, -0.081, 1.6]), Some([0.05, -0.08, 1.6]));
+        for p in [[0.06, -0.05, 1.6], [0.1, -0.12, 1.6], [0.0, -0.05, 1.45], [0.0, -0.05, 1.75], [0.0, 0.01, 1.6]] {
+            assert_eq!(face.keep_out(p), None, "{p:?}");
+        }
     }
 }

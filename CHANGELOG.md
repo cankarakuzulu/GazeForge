@@ -12,9 +12,11 @@ open, with its last measurement, rather than left out.
   the character's own scalp (the head's `scalp` skin region, from 478 built-in landmarks on the dense base, so one groom
   fits every head), combed away from a part (left, right, centre or none; backwards behind the crown, back and
   sideways at the front hairline), bent by droop, kept 3 mm outside the head and body, then clumped, curled and
-  frizzed. Gate (`tools/diag/groom_gate.py`, not shipped, proven to fail on a groom grown inside the skin): roots on
+  frizzed, and kept off the face: no strand point between the outer eye corners (plus 1 cm, widening ahead of
+  the eyes) from the chin to the forehead; such a point moves to the zone's nearest edge, so front hair falls beside
+  the cheek. Gate (`tools/diag/groom_gate.py`, not shipped, proven to fail on a groom grown inside the skin): roots on
   the scalp (mean scalp weight 0.97), length as asked (0.249 of 0.25 m), at most 2 mm inside the skin, deterministic.
-  Known: front strands can still cross the face; grooms are a CLI option only, not yet stored or in the panels.
+  Known: a strand pressed onto the face zone's edge can read as a straight line beside the cheek; grooms are a CLI option only, not yet stored or in the panels.
 - **Strand hair (first step).** `export-glb --strands HAIR.usda [--strands-count 20000] [--strands-points 16]
   [--strands-seed 1]` (also in the export task): the worn hair as USD `BasisCurves`, traced from its cards (texture
   columns followed along each card where opaque, every opaque run of 1 cm or more a strand, the direction per card
