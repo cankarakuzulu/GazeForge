@@ -298,6 +298,14 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **No more wisps across the forehead.** Framed strands rooted at the front of the part were combed down and
+  sideways across the forehead, and a curl swung them further: 6 strands of the wavy framed groom (2 without the
+  curl). The face's keep-out stopped at the top of the brows, so nothing guarded the forehead above them. The last
+  pass now lifts any point of a strand outside the fringe that falls on the forehead (between the outer eye corners,
+  ahead of the eyes, above the brows, below the hairline less its soft edge) to that height, fading out over the
+  last 1 cm toward the eye corners. A forward-combed groom (the crop) is left as it was, since its hair lies on the
+  forehead by design. The strands report gives `lifted_off_forehead` and examples of any strand still on the
+  forehead.
 - **Baked cloth stretched at a partly pinned band.** A cloth vertex partly pinned to the skin was pulled toward its
   skinned place after the cloth's edges were solved, so the edges around it ended each step stretched: a cape over a
   suit, baked with sway, reached 1.31 (LOD0) and 1.34 (LOD1) times its rest length at the collar band, and its
