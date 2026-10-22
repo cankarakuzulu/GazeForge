@@ -523,7 +523,9 @@ more thinly than the painted cards (about 100000 come close); widths are fixed (
 In both Body shape panels a hair item has a **Strands** switch (undoable like every edit): the stitch preview then draws it as 4000 strands (ribbons 1.2 mm wide, in its average hair colour) in place of its cards, and `--strands` traces the items it is on (every hair when it is on for none). Hair can also be grown from scratch: `--groom GROOM.json` (format
 `gazeforge.groom/1`: strands, length, part left / right / centre / none, droop, curl, clumps, frizz, colour, seed) grows
 strands on the scalp of the character exported - roots sampled over the head's scalp region, so the same groom fits
-every head - combed away from the part, kept outside the head and body, and writes them into the `--strands` file.
+every head - combed away from the part, kept outside the head and body and off the face, and writes them into the
+`--strands` file. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
+hair** section to turn it on and set it, the stitch preview draws it, and an export with `--strands` grows it.
 Strands turned back into game cards come next.
 
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT

@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(joints[0]["gravityPower"], 0.1);
         assert_eq!(report["shrunk_copies"], 1);
         let mut rotated = doc.clone();
-        rotated["nodes"][2]["rotation"] = json!([0.0, 0.7071, 0.0, 0.7071]);
+        rotated["nodes"][2]["rotation"] = json!([0.0, std::f64::consts::FRAC_1_SQRT_2, 0.0, std::f64::consts::FRAC_1_SQRT_2]);
         assert!(spring_bone(&rotated).is_err(), "a rotated joint is refused, not written wrong");
     }
 

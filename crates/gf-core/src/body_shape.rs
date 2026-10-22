@@ -62,6 +62,8 @@ pub struct BodySpec {
     pub genitals: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wearables: Vec<WearableRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groom: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -159,6 +161,11 @@ impl BodySpec {
             if self.wearables[..i].iter().any(|o| o.asset == w.asset) {
                 out.push(format!("body.wearables[{i}]: {} is worn twice", w.asset));
             }
+        }
+        if let Some(g) = &self.groom
+            && let Err(e) = crate::groom::parse(g)
+        {
+            out.push(format!("body.groom: {e}"));
         }
         if let Err(e) = self.controls().check() {
             out.push(format!("body: {e}"));
@@ -307,8 +314,16 @@ mod tests {
     #[test]
     fn a_body_spec_checks_its_references_and_ranges() {
         let r = hash::reference(&"c".repeat(64));
-        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new() };
+        let ok = BodySpec { pack: r.clone(), targets: r.clone(), weights: BTreeMap::new(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new(), groom: None };
         assert!(ok.problems().is_empty(), "{:?}", ok.problems());
+        assert!(!serde_json::to_string(&ok).unwrap().contains("groom"), "no groom is not written");
+        let groomed = BodySpec { groom: Some(crate::groom::starter()), ..ok.clone() };
+        assert!(groomed.problems().is_empty(), "{:?}", groomed.problems());
+        let back: BodySpec = serde_json::from_str(&serde_json::to_string(&groomed).unwrap()).unwrap();
+        assert_eq!(back, groomed);
+        let mut typo = crate::groom::starter();
+        typo["droop"] = serde_json::json!(3.0);
+        assert!(BodySpec { groom: Some(typo), ..ok.clone() }.problems().iter().any(|x| x.starts_with("body.groom: groom droop")));
         let bad = BodySpec { pack: "x".into(), blend_mm: 900.0, weights: [("arms/x".to_string(), 3.0)].into(), compounds: [("wings".to_string(), 0.5), ("athletic".to_string(), 2.0)].into(), genitals: "female".into(), ..ok.clone() };
         let p = bad.problems().join(" | ");
         for needle in ["body.pack", "blend", "arms/x", "wings", "athletic = 2", "body.genitals \"female\""] {
@@ -354,7 +369,7 @@ mod tests {
     #[test]
     fn canonical_values_are_the_nearest_doubles_of_their_decimals() {
         let r = hash::reference(&"d".repeat(64));
-        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55, genitals: String::new(), wearables: Vec::new() };
+        let b = BodySpec { pack: r.clone(), targets: r, weights: [("a".to_string(), 0.8), ("b".to_string(), 0.30000000000000004)].into(), compounds: [("c".to_string(), -0.7)].into(), blend_mm: 60.1, neck_offset_mm: 0.0, body_scale: 1.1, smooth: 0, tangent: 0.55, genitals: String::new(), wearables: Vec::new(), groom: None };
         let s = serde_json::to_string(&b.canonical()).unwrap();
         for needle in ["\"a\":0.8,", "\"b\":0.3}", "\"c\":-0.7}", "60.1,", "1.1,", "0.55"] {
             assert!(s.contains(needle), "{needle} not in {s}");
@@ -379,7 +394,7 @@ mod tests {
             }
         }
         let r = hash::reference(&"c".repeat(64));
-        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new() };
+        let mut b = BodySpec { pack: r.clone(), targets: r, weights: [("legs/upperlegs-height-incr".to_string(), 0.25)].into(), compounds: BTreeMap::new(), blend_mm: 60.0, neck_offset_mm: 0.0, body_scale: 1.0, smooth: 0, tangent: 0.5, genitals: String::new(), wearables: Vec::new(), groom: None };
         b.compounds.insert("leg_length".into(), 0.5);
         let w = b.target_weights();
         assert_eq!(w["legs/upperlegs-height-incr"], 0.75);

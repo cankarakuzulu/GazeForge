@@ -193,7 +193,7 @@ const TEXT: &[(&str, &str)] = &[
     ("bake", "bake the spring-bone chains and the cloth offline against a clip and write the result as an animation named CLIP_baked: sway (built in: 4 s of head turns, a torso lean and a sideways sway with a bob, driving the bones the chains hang from) or the name of an animation already in the glb"),
     ("bake-format", "bones (the default): the chain joints get rotation keys beside the clip's channels; vertex: the chain joints are taken out of the skin and the swing becomes one morph target per frame played by a weights track, for engines with no skinning beyond the body"),
     ("strands", "also write the hair the character wears as strands, a USD text file (.usda) of BasisCurves in the glb's frame: each hair card's texture columns traced along the card where the texture is opaque, rooted at the end nearer the body"),
-    ("groom", "path of a groom file (gazeforge.groom/1: strands, length_m, part, droop, curl, clumps, frizz, colour, seed): hair grown on this character's scalp into the --strands file instead of strands traced from hair cards"),
+    ("groom", "path of a groom file (gazeforge.groom/1: strands, length_m, part, droop, curl, clumps, frizz, colour, seed): hair grown on this character's scalp into the --strands file instead of strands traced from hair cards; without it, the character's own body.groom is grown when there is one"),
     ("strands-count","how many strands in all (default 20000), shared out by each hair's opaque card area"),
     ("strands-seed", "seed of where the strands are taken on the cards (default 1)"),
     ("strands-points", "points per strand (default 16, 3 to 64)"),

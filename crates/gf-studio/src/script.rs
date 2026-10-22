@@ -814,9 +814,11 @@ impl Offscreen {
                     "coarse" => w.body_wear_coarse(text("asset").ok_or("body coarse needs asset")?, num("value"))?,
                     "cap" => w.body_wear_cap(text("asset").ok_or("body cap needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "strands" => w.body_wear_strands(text("asset").ok_or("body strands needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
+                    "groom" => w.body_groom(step.get("on").and_then(Value::as_bool).unwrap_or(true)),
+                    "groom_set" => w.body_groom_set(text("key").ok_or("body groom_set needs key (a groom setting)")?, step.get("value").cloned().ok_or("body groom_set needs value")?)?,
                     "reset" => w.body_reset(),
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, opening, coarse, cap, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, opening, coarse, cap, strands, groom, groom_set, reset or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;

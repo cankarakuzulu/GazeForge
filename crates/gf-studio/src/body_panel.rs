@@ -32,7 +32,22 @@ pub struct BodyUi {
     pub error: Option<String>,
     pub filter: String,
     live: BTreeMap<String, f64>,
+    groom_colour: Option<[u8; 3]>,
 }
+
+const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
+    ("strands", 1.0, 100.0, 0),
+    ("length_m", 100.0, 0.5, 1),
+    ("droop", 1.0, 0.01, 2),
+    ("clumps", 1.0, 5.0, 0),
+    ("clump", 1.0, 0.01, 2),
+    ("curl_radius_m", 1000.0, 0.1, 1),
+    ("curl_turns_per_m", 1.0, 0.5, 1),
+    ("frizz_m", 1000.0, 0.1, 1),
+    ("seed", 1.0, 1.0, 0),
+];
+
+const GROOM_UI_MAX: f64 = 1e6;
 
 fn weight(body: &Value, id: &Option<String>) -> f64 {
     id.as_ref().and_then(|t| body["weights"][t].as_f64()).unwrap_or(0.0)
@@ -310,6 +325,27 @@ impl World {
         }))
     }
 
+    pub fn body_groom(&mut self, on: bool) -> bool {
+        self.body_edit(|b| {
+            if !on {
+                b.remove("groom");
+            } else if !b.contains_key("groom") {
+                b.insert("groom".into(), gf_core::groom::starter());
+            }
+        })
+    }
+
+    pub fn body_groom_set(&mut self, key: &str, value: Value) -> Result<bool, String> {
+        let Some(s) = &self.session else { return Ok(false) };
+        let mut next = s.character.body.get("groom").and_then(Value::as_object).cloned().ok_or("the character has no groom: turn it on first")?;
+        next.insert(key.into(), value);
+        let next = Value::Object(next);
+        gf_core::groom::parse(&next)?;
+        Ok(self.body_edit(|b| {
+            b.insert("groom".into(), next);
+        }))
+    }
+
     pub fn body_reset(&mut self) -> bool {
         self.body_edit(|b| {
             b.remove("weights");
@@ -518,6 +554,59 @@ impl crate::studio::Studio<'_> {
                 });
             }
             ui.separator();
+            ui.label(egui::RichText::new(tr("body.groom")).strong());
+            let groom = body.get("groom").filter(|g| g.is_object()).cloned();
+            let mut groom_on = groom.is_some();
+            let mut groom_toggle = None;
+            let mut groom_commit: Option<(String, Value)> = None;
+            if ui.checkbox(&mut groom_on, tr("body.groom_on")).on_hover_text(tr("body.groom_on_tip")).changed() {
+                groom_toggle = Some(groom_on);
+            }
+            if let Some(g) = &groom {
+                let part = g["part"].as_str().unwrap_or("centre").to_string();
+                let part_label = |p: &str| tr(&format!("body.groom_part.{p}")).to_string();
+                egui::ComboBox::from_label(tr("body.groom_part")).selected_text(part_label(&part)).show_ui(ui, |ui| {
+                    for &p in gf_core::groom::PARTS {
+                        if ui.selectable_label(part == p, part_label(p)).clicked() && part != p {
+                            groom_commit = Some(("part".into(), json!(p)));
+                        }
+                    }
+                });
+                egui::Grid::new("body_groom").num_columns(2).show(ui, |ui| {
+                    for &(key, unit, speed, decimals) in GROOM_SHOWN {
+                        let Some(f) = gf_core::groom::FIELDS.iter().find(|f| f.key == key) else { continue };
+                        ui.label(tr(&format!("body.groom.{key}"))).on_hover_text(tr(&format!("body.groom.{key}_tip")));
+                        let live_key = format!("g:{key}");
+                        let mut v = ui_state.live.get(&live_key).copied().unwrap_or(g[key].as_f64().unwrap_or(f.default) * unit);
+                        let r = ui.add(egui::DragValue::new(&mut v).range(f.lo * unit..=f.hi.min(GROOM_UI_MAX) * unit).speed(speed).max_decimals(decimals)).on_hover_text(tr(&format!("body.groom.{key}_tip")));
+                        if r.changed() {
+                            ui_state.live.insert(live_key.clone(), v);
+                        }
+                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus())) && ui_state.live.remove(&live_key).is_some() {
+                            let x = v / unit;
+                            groom_commit = Some((key.into(), if f.integer { json!(x.round() as u64) } else { json!((x * 1e6).round() / 1e6) }));
+                        }
+                        ui.end_row();
+                    }
+                    ui.label(tr("body.groom_colour")).on_hover_text(tr("body.groom_colour_tip"));
+                    let hex = g["colour"].as_str().unwrap_or("#3b2416");
+                    let mut c = ui_state.groom_colour.unwrap_or_else(|| {
+                        let h = hex.trim_start_matches('#');
+                        [0, 1, 2].map(|i| h.get(2 * i..2 * i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).unwrap_or(0))
+                    });
+                    if egui::color_picker::color_edit_button_srgb(ui, &mut c).on_hover_text(tr("body.groom_colour_tip")).changed() {
+                        ui_state.groom_colour = Some(c);
+                    }
+                    ui.end_row();
+                });
+                if let Some(c) = ui_state.groom_colour
+                    && !egui::Popup::is_any_open(ui.ctx())
+                {
+                    ui_state.groom_colour = None;
+                    groom_commit = Some(("colour".into(), json!(format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))));
+                }
+            }
+            ui.separator();
             let shaped = body.get("weights").is_some() || body.get("compounds").is_some();
             let reset = ui.add_enabled(shaped, egui::Button::new(tr("body.reset"))).clicked();
             if let Some((id, v)) = pair_commit {
@@ -568,6 +657,14 @@ impl crate::studio::Studio<'_> {
             }
             if let Some(kind) = genitals_commit {
                 let _ = self.world.body_set_genitals(&kind);
+            }
+            if let Some(on) = groom_toggle {
+                self.world.body_groom(on);
+            }
+            if let Some((key, value)) = groom_commit
+                && let Err(e) = self.world.body_groom_set(&key, value)
+            {
+                self.world.body_ui.error = Some(e);
             }
             if reset {
                 self.world.body_reset();

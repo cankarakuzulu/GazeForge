@@ -1629,8 +1629,8 @@ mod tests {
         let run = simulate_cloth(&scene, &still(&scene), &cloth, &[], None, &times, 1.0);
         let last = run.positions.last().unwrap();
         assert!(run.report["pinned_error_mm"].as_f64().unwrap() < 1e-6, "{}", run.report);
-        for v in 0..=6 {
-            assert!(norm(sub(last[v], cloth.bind[v])) < 1e-9, "pinned vertices stay put");
+        for (p, b) in last.iter().zip(&cloth.bind).take(7) {
+            assert!(norm(sub(*p, *b)) < 1e-9, "pinned vertices stay put");
         }
         let far = last[cloth.bind.len() - 1];
         assert!(far[1] < -0.2, "the free edge hangs down: {far:?}");

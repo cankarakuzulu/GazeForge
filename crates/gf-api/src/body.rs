@@ -198,7 +198,8 @@ pub fn sliders_input() -> Value {
 pub fn sliders_output() -> Value {
     shape(json!({"pairs": {"type": "array"}, "compounds": {"type": "array"}, "shared_with_head": {"type": "integer"},
                  "genitals": {"type": "array", "items": {"type": "string"}, "description": "the body.genitals kinds this body can wear (empty when its pack has no helper-genital patch or its targets no helpers)"},
-                 "physics": {"type": "array", "items": {"type": "string"}, "description": "the body.wearables[].physics kinds besides none (cloth: pinned cloth an engine simulates; springbone: chains of joints, for hair, ropes and capes)"}}))
+                 "physics": {"type": "array", "items": {"type": "string"}, "description": "the body.wearables[].physics kinds besides none (cloth: pinned cloth an engine simulates; springbone: chains of joints, for hair, ropes and capes)"},
+                 "groom": {"type": "object", "description": "body.groom: starter (the groom a client turns on), fields (each number setting's key, default, lo, hi and whether it is an integer) and parts"}}))
 }
 
 pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -238,7 +239,8 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         .collect();
     let body: gf_io::body_store::BodyManifest = store.get_manifest("bodies", &targets.body).map_err(ApiError::not_found)?;
     let genitals: Vec<&str> = if body.files.contains_key("genital/quads.npy") && targets.helpers > 0 { bs::GENITALS.to_vec() } else { Vec::new() };
-    Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared, "genitals": genitals, "physics": bs::WEARABLE_PHYSICS}))
+    Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared, "genitals": genitals, "physics": bs::WEARABLE_PHYSICS,
+              "groom": {"starter": gf_core::groom::starter(), "parts": gf_core::groom::PARTS, "fields": gf_core::groom::FIELDS.iter().map(|f| json!({"key": f.key, "default": f.default, "lo": f.lo, "hi": f.hi, "integer": f.integer})).collect::<Vec<_>>()}}))
 }
 
 pub struct Shaped {
@@ -344,7 +346,7 @@ pub fn stitch_input() -> Value {
         "out_obj": {"type": "string", "description": "write the head and the stitched body as one OBJ"},
         "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
         "enforce": {"type": "boolean", "description": "fail with gate_failed when a gate fails (default true)"},
-        "strands_preview": {"type": "integer", "minimum": 1, "maximum": 50000, "description": "with return_mesh: how many strands a worn item with strands on is drawn with (default 4000; ribbons 1.2 mm wide at the root, in its average hair colour, in place of its cards)"},
+        "strands_preview": {"type": "integer", "minimum": 1, "maximum": 50000, "description": "with return_mesh: how many strands a worn item with strands on, or the body.groom, is drawn with at most (default 4000; ribbons 1.2 mm wide at the root, in its average hair colour or the groom's colour, in place of its cards)"},
         "plant": {"enum": ["gap", "crack", "crease", "flip", "penetrate"], "description": "gate self-test: plant this defect after stitching; the gates must fail"}
     });
     for (k, v) in control_props().as_object().unwrap() {
@@ -770,7 +772,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let (_, mut normals) = b::two_sided_normals(&head, &base.triangles, &st);
         let mut positions = st.positions.clone();
         let mut triangles = st.triangles.clone();
-        let worn = match (&shaped_report, spec.body.as_ref()) {
+        let mut worn = match (&shaped_report, spec.body.as_ref()) {
             (Some((_, manifest)), Some(b)) if !b.wearables.is_empty() => {
                 let frame = crate::tasks::wearable::BaseFrame::new(&pack, &controls, manifest, &dense);
                 let mut points = head.clone();
@@ -831,6 +833,22 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             }
             _ => Vec::new(),
         };
+        if let Some(v) = spec.body.as_ref().and_then(|b| b.groom.as_ref()).filter(|_| text(input, "body").is_empty()) {
+            let mut g = crate::tasks::groom::parse(v).map_err(|e| ApiError::invalid(format!("body.groom: {e}")))?;
+            g.strands = g.strands.min(input.get("strands_preview").and_then(Value::as_u64).unwrap_or(STRANDS_PREVIEW) as usize);
+            let mut points = head.clone();
+            points.extend_from_slice(&st.positions);
+            let h = head.len() as u32;
+            let tris: Vec<[u32; 3]> = base.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
+            let surface = crate::tasks::wearable::Surface::new(points, &tris);
+            let (strands, report) = crate::tasks::groom::grow(&g, &head, &base.triangles, &dense, &surface).map_err(ApiError::invalid)?;
+            let centre = head.iter().fold([0.0; 3], |a, q| [a[0] + q[0], a[1] + q[1], a[2] + q[2]]).map(|x| x / head.len().max(1) as f64);
+            let (rp, rn, rt) = crate::tasks::strands::ribbons(&strands, STRAND_PREVIEW_WIDTH_M, centre);
+            let srgb = g.colour.map(|c| if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 });
+            let idx: Vec<u8> = rt.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+            worn.push(json!({"groom": g.name, "name": g.name, "hide_body": false, "transparent": false, "strands": report["strands"], "color": srgb,
+                             "positions": f32s(&rp), "normals": f32s(&rn), "indices": b64(&idx), "vertices": rp.len(), "triangles": rt.len()}));
+        }
         if spec.body.as_ref().is_some_and(|s| !s.genitals.is_empty()) && text(input, "body").is_empty() {
             let level = pack.fine.as_ref().map_or(2, |f| f.level);
             let g = crate::tasks::mesh::genital_mesh(&pack, &controls, level, &st.positions, &normals).map_err(ApiError::invalid)?;

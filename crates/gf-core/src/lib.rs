@@ -9,6 +9,7 @@ pub mod face_rig2;
 pub mod fit;
 pub mod game_mesh;
 pub mod gates;
+pub mod groom;
 pub mod character;
 pub mod eye_inventory;
 pub mod eye_texture;

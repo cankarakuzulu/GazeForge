@@ -43,6 +43,8 @@ function withCompound(body, name, v) {
   return tidy(next);
 }
 
+const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
+
 function mount(root, api) {
   let key = '';
   let pairs = [];
@@ -61,9 +63,14 @@ function mount(root, api) {
   const genitalsRow = el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.genitals') }), genitalsPick]);
   const wearList = el('div', { class: 'gf-body-wear' });
   const wearAdd = el('select', { 'data-body': 'wear-add' });
+  let groomSchema = null;
+  const groomInputs = new Map();
+  const groomOn = el('input', { type: 'checkbox', 'data-body': 'groom', title: tr('body.groom_on_tip') });
+  const groomBox = el('div', { class: 'gf-body-groom' });
   const content = el('div', {}, [
     genitalsRow,
     el('div', { class: 'gf-body-head', text: tr('body.wearables') }), wearList, wearAdd,
+    el('div', { class: 'gf-body-head', text: tr('body.groom') }), el('label', { class: 'gf-stitch-row' }, [groomOn, el('span', { text: tr('body.groom_on') })]), groomBox,
     el('div', { class: 'gf-body-head', text: tr('body.compounds') }), compoundBox,
     el('div', { class: 'gf-body-head', text: tr('body.regional') }), filter, familyBox, reset,
   ]);
@@ -113,6 +120,7 @@ function mount(root, api) {
       }
       return details;
     }));
+    buildGroom();
     applyFilter();
   }
 
@@ -139,6 +147,67 @@ function mount(root, api) {
     next.wearables = edit(next.wearables || []);
     if (!next.wearables.length) delete next.wearables;
     return next;
+  }
+
+  function withGroom(body, key, value) {
+    const next = JSON.parse(JSON.stringify(body));
+    next.groom = { ...(next.groom || {}), [key]: value };
+    return next;
+  }
+
+  function buildGroom() {
+    groomInputs.clear();
+    if (!groomSchema) {
+      groomBox.replaceChildren();
+      return;
+    }
+    const part = el('select', { 'data-groom': 'part' });
+    part.replaceChildren(...groomSchema.parts.map((k) => el('option', { value: k, text: tr(`body.groom_part.${k}`) })));
+    part.addEventListener('change', () => {
+      const b = api.body.get();
+      if (b && b.groom) apply(withGroom(b, 'part', part.value), tr('body.groom_set_line', { setting: tr('body.groom_part'), value: tr(`body.groom_part.${part.value}`) }));
+    });
+    groomInputs.set('part', { input: part });
+    const out = [el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_part') }), part])];
+    for (const [k, unit, step, decimals] of GROOM_SHOWN) {
+      const f = groomSchema.fields.find((x) => x.key === k);
+      if (!f) continue;
+      const input = el('input', { type: 'number', min: String(f.lo * unit), max: String(Math.min(f.hi, 1e6) * unit), step: String(step), class: 'gf-wear-layer', 'data-groom': k, title: tr(`body.groom.${k}_tip`) });
+      input.addEventListener('change', () => {
+        const b = api.body.get();
+        const shown = Number(input.value);
+        let v = shown / unit;
+        v = f.integer ? Math.round(v) : Math.round(v * 1e6) / 1e6;
+        if (!b || !b.groom || !Number.isFinite(shown) || v < f.lo || v > f.hi) {
+          sync();
+          return;
+        }
+        apply(withGroom(b, k, v), tr('body.groom_set_line', { setting: tr(`body.groom.${k}`), value: input.value }));
+      });
+      groomInputs.set(k, { input, unit, decimals, f });
+      out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr(`body.groom.${k}`) }), input]));
+    }
+    const colour = el('input', { type: 'color', 'data-groom': 'colour', title: tr('body.groom_colour_tip') });
+    colour.addEventListener('change', () => {
+      const b = api.body.get();
+      if (b && b.groom) apply(withGroom(b, 'colour', colour.value), tr('body.groom_set_line', { setting: tr('body.groom_colour'), value: colour.value }));
+    });
+    groomInputs.set('colour', { input: colour });
+    out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_colour') }), colour]));
+    groomBox.replaceChildren(...out);
+  }
+
+  function syncGroom(body) {
+    const g = body.groom;
+    groomOn.checked = !!g;
+    groomOn.disabled = !groomSchema;
+    groomBox.style.display = g ? '' : 'none';
+    if (!g) return;
+    for (const [k, r] of groomInputs) {
+      if (k === 'part') r.input.value = g.part || 'centre';
+      else if (k === 'colour') r.input.value = /^#[0-9a-f]{6}$/i.test(g.colour || '') ? g.colour.toLowerCase() : '#3b2416';
+      else r.input.value = String(Number(((typeof g[k] === 'number' ? g[k] : r.f.default) * r.unit).toFixed(r.decimals)));
+    }
   }
 
   function syncWear(body) {
@@ -269,6 +338,7 @@ function mount(root, api) {
     const body = api.body.get();
     if (!body) return;
     syncWear(body);
+    syncGroom(body);
     for (const name of compounds) {
       const r = rows.get(`c:${name}`);
       const v = Number(body.compounds && body.compounds[name]) || 0;
@@ -308,6 +378,7 @@ function mount(root, api) {
         compounds = (r.compounds || []).filter((c) => !(c.missing && c.missing.length)).map((c) => c.name);
         genitals = r.genitals || [];
         physics = r.physics || [];
+        groomSchema = r.groom || null;
         if (character.store !== wearKey) {
           wearKey = character.store;
           storeWear = ((await api.call('wearable.list', { store: character.store })).wearables) || [];
@@ -318,6 +389,7 @@ function mount(root, api) {
         pairs = [];
         compounds = [];
         genitals = [];
+        groomSchema = null;
         build();
         note.textContent = tr('body.sliders_failed', { error: e && e.message ? e.message : e });
         content.style.display = 'none';
@@ -329,6 +401,14 @@ function mount(root, api) {
   }
 
   filter.addEventListener('input', applyFilter);
+  groomOn.addEventListener('change', () => {
+    const b = api.body.get();
+    if (!b || !groomSchema) return;
+    const next = JSON.parse(JSON.stringify(b));
+    if (!groomOn.checked) delete next.groom;
+    else if (!next.groom) next.groom = JSON.parse(JSON.stringify(groomSchema.starter));
+    apply(next, tr('body.groom_line', { state: groomOn.checked ? '✓' : '✗' }));
+  });
   wearAdd.addEventListener('change', () => {
     const asset = wearAdd.value;
     const b = api.body.get();

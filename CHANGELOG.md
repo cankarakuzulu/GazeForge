@@ -16,7 +16,12 @@ open, with its last measurement, rather than left out.
   the eyes) from the chin to the forehead; such a point moves to the zone's nearest edge, so front hair falls beside
   the cheek. Gate (`tools/diag/groom_gate.py`, not shipped, proven to fail on a groom grown inside the skin): roots on
   the scalp (mean scalp weight 0.97), length as asked (0.249 of 0.25 m), at most 2 mm inside the skin, deterministic.
-  Known: a strand pressed onto the face zone's edge can read as a straight line beside the cheek; grooms are a CLI option only, not yet stored or in the panels.
+  A character keeps its groom in `body.groom` (validated with the spec: a misspelt or out-of-range setting is refused),
+  and both Body shape panels have a **Grown hair** section (on/off, part, strands, length, droop, clumps, clump
+  strength, curl, frizz, seed, colour; every change undoable); the stitch preview draws up to 4000 of its strands and
+  `export-glb --strands` grows it when no `--groom` file is given (identical output to the same groom as a file).
+  Known: a strand pressed onto the face zone's edge can read as a straight line beside the cheek; a few strands can
+  hang under the jaw, and with a side part a few rise above it.
 - **Strand hair (first step).** `export-glb --strands HAIR.usda [--strands-count 20000] [--strands-points 16]
   [--strands-seed 1]` (also in the export task): the worn hair as USD `BasisCurves`, traced from its cards (texture
   columns followed along each card where opaque, every opaque run of 1 cm or more a strand, the direction per card
@@ -215,6 +220,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- A VRM test held an approximate 1/sqrt(2) that the workspace clippy refuses, so the test target did not compile under
+  clippy; one cloth test looped by index.
 - **Clothes showed through a coarse outer item, and cloth over clothes was barely pinned.** Layering pushed the
   outer item's vertices out, but a fine suit still rose between a coarse cape's vertices (visible patches at its top
   edge). Now the vertices of the items underneath that lie in front of one of the outer item's triangles (or behind

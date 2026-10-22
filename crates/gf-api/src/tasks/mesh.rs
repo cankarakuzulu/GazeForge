@@ -1180,8 +1180,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             Some(super::groom::read(Path::new(path))?)
         }
-        None => None,
+        None => match spec.body.as_ref().and_then(|b| b.groom.as_ref()) {
+            Some(v) if strand_settings.is_some() => Some(super::groom::parse(v).map_err(|e| format!("body.groom: {e}"))?),
+            _ => None,
+        },
     };
+    let groom_not_grown = groom.is_none() && spec.body.as_ref().is_some_and(|b| b.groom.is_some());
     let mut strand_groups: Vec<(String, Vec<super::strands::Strand>)> = Vec::new();
     let mut strand_rows: Vec<Value> = Vec::new();
     if bake_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
@@ -2436,6 +2440,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
                    "traced": "the worn items with strands on, or every alpha-card item when none is", "method": "per hair card piece, lines of the colour texture traced along the piece (along V, or along U where that axis gives longer opaque runs) through the card UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
         }
+        None if groom_not_grown => json!({"groom": "the character has a groom (body.groom) and none was grown: strands go to a .usda, give --strands OUT.usda"}),
         None => Value::Null,
     };
     let (bytes, bake_report) = match &bake_settings {

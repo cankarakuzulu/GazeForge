@@ -4,10 +4,11 @@ use gf_core::game_mesh::{Point, game_normals};
 use gf_core::skin_regions;
 use serde_json::{Value, json};
 
+pub use gf_core::groom::{FORMAT, Groom, Part, parse};
+
 use super::strands::Strand;
 use super::wearable::Surface;
 
-pub const FORMAT: &str = "gazeforge.groom/1";
 const SCALP: usize = 11;
 const ROOT_LIFT_M: f64 = 0.001;
 const CLEAR_M: f64 = 0.003;
@@ -18,83 +19,6 @@ const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
 const FACE_MARGIN_M: f64 = 0.01;
 const FRINGE_M: f64 = 0.02;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Part {
-    Left,
-    Right,
-    Centre,
-    None,
-}
-
-#[derive(Clone, Debug)]
-pub struct Groom {
-    pub name: String,
-    pub strands: usize,
-    pub points: usize,
-    pub length_m: f64,
-    pub part: Part,
-    pub droop: f64,
-    pub curl_radius_m: f64,
-    pub curl_turns_per_m: f64,
-    pub clumps: usize,
-    pub clump: f64,
-    pub frizz_m: f64,
-    pub colour: [f32; 3],
-    pub seed: u64,
-}
-
-fn linear(c: f64) -> f32 {
-    let s = c.clamp(0.0, 1.0);
-    (if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }) as f32
-}
-
-pub fn parse(v: &Value) -> Result<Groom, String> {
-    if v["format"].as_str() != Some(FORMAT) {
-        return Err(format!("a groom file says \"format\": \"{FORMAT}\""));
-    }
-    let num = |key: &str, default: f64, lo: f64, hi: f64| -> Result<f64, String> {
-        let x = match v.get(key) {
-            None | Some(Value::Null) => default,
-            Some(x) => x.as_f64().ok_or_else(|| format!("groom {key} must be a number"))?,
-        };
-        if !(lo..=hi).contains(&x) {
-            return Err(format!("groom {key} must be from {lo} to {hi}, got {x}"));
-        }
-        Ok(x)
-    };
-    let part = match v["part"].as_str().unwrap_or("centre") {
-        "left" => Part::Left,
-        "right" => Part::Right,
-        "centre" | "center" => Part::Centre,
-        "none" => Part::None,
-        other => return Err(format!("groom part is left, right, centre or none, got {other}")),
-    };
-    let colour = match v["colour"].as_str() {
-        None => [0.18, 0.11, 0.07].map(linear),
-        Some(hex) => {
-            let h = hex.trim_start_matches('#');
-            let c = (h.len() == 6).then(|| (0..3).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>()).flatten();
-            let c = c.ok_or_else(|| format!("groom colour is #rrggbb, got {hex}"))?;
-            [0, 1, 2].map(|i| linear(c[i] as f64 / 255.0))
-        }
-    };
-    Ok(Groom {
-        name: v["name"].as_str().unwrap_or("groom").to_string(),
-        strands: num("strands", 20000.0, 1.0, 500_000.0)? as usize,
-        points: num("points", 16.0, 3.0, 64.0)? as usize,
-        length_m: num("length_m", 0.15, 0.005, 2.0)?,
-        part,
-        droop: num("droop", 0.5, 0.0, 1.0)?,
-        curl_radius_m: num("curl_radius_m", 0.0, 0.0, 0.1)?,
-        curl_turns_per_m: num("curl_turns_per_m", 0.0, 0.0, 200.0)?,
-        clumps: num("clumps", 0.0, 0.0, 5000.0)? as usize,
-        clump: num("clump", 0.0, 0.0, 1.0)?,
-        frizz_m: num("frizz_m", 0.0, 0.0, 0.05)?,
-        colour,
-        seed: num("seed", 1.0, 0.0, u32::MAX as f64)? as u64,
-    })
-}
 
 pub fn read(path: &Path) -> Result<Groom, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -349,17 +273,6 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_groom_file_reads_with_defaults_and_refuses_nonsense() {
-        let g = parse(&json!({"format": FORMAT, "length_m": 0.3, "part": "left", "colour": "#806040"})).unwrap();
-        assert_eq!((g.length_m, g.part, g.points, g.strands), (0.3, Part::Left, 16, 20000));
-        assert!((g.colour[0] - linear(128.0 / 255.0)).abs() < 1e-6);
-        assert!(parse(&json!({"length_m": 0.3})).is_err(), "the format is required");
-        assert!(parse(&json!({"format": FORMAT, "part": "middle"})).is_err());
-        assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
-        assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
-    }
 
     #[test]
     fn hair_in_front_of_the_face_moves_to_the_nearest_edge_beside_it() {
