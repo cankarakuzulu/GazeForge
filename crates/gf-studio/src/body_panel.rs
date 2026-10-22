@@ -38,6 +38,9 @@ pub struct BodyUi {
 const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
     ("strands", 1.0, 100.0, 0),
     ("length_m", 100.0, 0.5, 1),
+    ("sides_m", 100.0, 0.1, 1),
+    ("fade_m", 100.0, 0.1, 1),
+    ("lift", 1.0, 0.01, 2),
     ("droop", 1.0, 0.01, 2),
     ("clumps", 1.0, 5.0, 0),
     ("clump", 1.0, 0.01, 2),
@@ -579,7 +582,7 @@ impl crate::studio::Studio<'_> {
                 egui::ComboBox::from_label(tr("body.groom_style"))
                     .selected_text(style_label(style))
                     .show_ui(ui, |ui| {
-                        for &(name, _, _) in gf_core::groom::STYLES {
+                        for name in gf_core::groom::STYLES.iter().map(|s| s.name) {
                             if ui.selectable_label(style == name, style_label(name)).clicked() && style != name {
                                 groom_style = Some(name.to_string());
                             }
@@ -609,6 +612,19 @@ impl crate::studio::Studio<'_> {
                     })
                     .response
                     .on_hover_text(tr("body.groom_tie_tip"));
+                let direction = g["direction"].as_str().unwrap_or("part").to_string();
+                let direction_label = |d: &str| tr(&format!("body.groom_direction.{d}")).to_string();
+                egui::ComboBox::from_label(tr("body.groom_direction"))
+                    .selected_text(direction_label(&direction))
+                    .show_ui(ui, |ui| {
+                        for &d in gf_core::groom::DIRECTIONS {
+                            if ui.selectable_label(direction == d, direction_label(d)).clicked() && direction != d {
+                                groom_commit = Some(("direction".into(), json!(d)));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("body.groom_direction_tip"));
                 egui::Grid::new("body_groom").num_columns(2).show(ui, |ui| {
                     for &(key, unit, speed, decimals) in GROOM_SHOWN {
                         let Some(f) = gf_core::groom::FIELDS.iter().find(|f| f.key == key) else { continue };

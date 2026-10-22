@@ -8,6 +8,13 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Fades, undercuts, crops, quiffs.** A groom has a sides length (`sides_m`, 0 keeps the sides as long as the top),
+  a fade (`fade_m`, the height of the blend from the side length up to the top length, centred a little above the
+  ears), a top direction (`direction`: from the part, back, forward or up) and a lift for the top (`lift`, how far it
+  stands off the scalp before it is combed). Hair combed back or forward from a styled top shortens a little toward
+  the back of the crown, so a combed-back top does not run on down the neck as a tail; hair combed up rolls over at
+  the front into a quiff, and the rest of the top lies back. New styles: buzz cut, crop, undercut, quiff, slick back.
+  Both panels have the four fields and a Top direction choice; a style sets them too (one undo step).
 - **Game hair cards from a groom.** `groom cards` (task "Make game hair cards from a groom"): the groom grown on the
   character, its strands grouped by shape (root, middle and tip, so strands combed apart never share a card) into
   600 cards by default, each a strip along its group's mean strand as wide as the group, a 1024 px strand atlas

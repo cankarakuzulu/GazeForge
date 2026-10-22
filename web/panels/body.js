@@ -43,7 +43,7 @@ function withCompound(body, name, v) {
   return tidy(next);
 }
 
-const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
+const GROOM_SHOWN = [['strands', 1, 100, 0], ['length_m', 100, 0.5, 1], ['sides_m', 100, 0.1, 1], ['fade_m', 100, 0.1, 1], ['lift', 1, 0.01, 2], ['droop', 1, 0.01, 2], ['clumps', 1, 5, 0], ['clump', 1, 0.01, 2], ['curl_radius_m', 1000, 0.1, 1], ['curl_turns_per_m', 1, 0.5, 1], ['frizz_m', 1000, 0.1, 1], ['seed', 1, 1, 0]];
 
 function mount(root, api) {
   let key = '';
@@ -173,6 +173,8 @@ function mount(root, api) {
       const next = JSON.parse(JSON.stringify(b));
       if (!s.tie || s.tie === 'none') delete next.groom.tie;
       else next.groom.tie = s.tie;
+      if (!s.direction || s.direction === 'part') delete next.groom.direction;
+      else next.groom.direction = s.direction;
       for (const [k, v] of Object.entries(s.settings)) {
         const f = groomSchema.fields.find((x) => x.key === k);
         next.groom[k] = f && f.integer ? Math.round(v) : v;
@@ -198,7 +200,18 @@ function mount(root, api) {
       apply(next, tr('body.groom_set_line', { setting: tr('body.groom_tie'), value: tr(`body.groom_tie.${tie.value}`) }));
     });
     groomInputs.set('tie', { input: tie });
-    const out = [el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_style') }), style]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_part') }), part]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_tie') }), tie])];
+    const direction = el('select', { 'data-groom': 'direction', title: tr('body.groom_direction_tip') });
+    direction.replaceChildren(...(groomSchema.directions || ['part']).map((k) => el('option', { value: k, text: tr(`body.groom_direction.${k}`) })));
+    direction.addEventListener('change', () => {
+      const b = api.body.get();
+      if (!b || !b.groom) return;
+      const next = JSON.parse(JSON.stringify(b));
+      if (direction.value === 'part') delete next.groom.direction;
+      else next.groom.direction = direction.value;
+      apply(next, tr('body.groom_set_line', { setting: tr('body.groom_direction'), value: tr(`body.groom_direction.${direction.value}`) }));
+    });
+    groomInputs.set('direction', { input: direction });
+    const out = [el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_style') }), style]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_part') }), part]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_tie') }), tie]), el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_direction') }), direction])];
     for (const [k, unit, step, decimals] of GROOM_SHOWN) {
       const f = groomSchema.fields.find((x) => x.key === k);
       if (!f) continue;
@@ -234,7 +247,7 @@ function mount(root, api) {
 
   function styleOf(g) {
     const value = (k) => (typeof g[k] === 'number' ? g[k] : (groomSchema.fields.find((f) => f.key === k) || {}).default);
-    const hit = (groomSchema.styles || []).find((s) => (s.tie || 'none') === (g.tie || 'none') && Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
+    const hit = (groomSchema.styles || []).find((s) => (s.tie || 'none') === (g.tie || 'none') && (s.direction || 'part') === (g.direction || 'part') &&Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
     return hit ? hit.name : 'custom';
   }
 
@@ -248,6 +261,7 @@ function mount(root, api) {
       if (k === 'style') r.input.value = styleOf(g);
       else if (k === 'part') r.input.value = g.part || 'centre';
       else if (k === 'tie') r.input.value = g.tie || 'none';
+      else if (k === 'direction') r.input.value = g.direction || 'part';
       else if (k === 'colour') r.input.value = /^#[0-9a-f]{6}$/i.test(g.colour || '') ? g.colour.toLowerCase() : '#3b2416';
       else r.input.value = String(Number(((typeof g[k] === 'number' ? g[k] : r.f.default) * r.unit).toFixed(r.decimals)));
     }

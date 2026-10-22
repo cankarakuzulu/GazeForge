@@ -17,6 +17,14 @@ pub enum Tie {
     High,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Direction {
+    Part,
+    Back,
+    Forward,
+    Up,
+}
+
 #[derive(Clone, Debug)]
 pub struct Groom {
     pub name: String,
@@ -25,6 +33,10 @@ pub struct Groom {
     pub length_m: f64,
     pub part: Part,
     pub tie: Tie,
+    pub direction: Direction,
+    pub sides_m: f64,
+    pub fade_m: f64,
+    pub lift: f64,
     pub droop: f64,
     pub curl_radius_m: f64,
     pub curl_turns_per_m: f64,
@@ -52,6 +64,9 @@ pub const FIELDS: &[Field] = &[
     Field { key: "strands", default: 20000.0, lo: 1.0, hi: 500_000.0, integer: true },
     Field { key: "points", default: 16.0, lo: 3.0, hi: 64.0, integer: true },
     Field { key: "length_m", default: 0.15, lo: 0.005, hi: 2.0, integer: false },
+    Field { key: "sides_m", default: 0.0, lo: 0.0, hi: 2.0, integer: false },
+    Field { key: "fade_m", default: 0.03, lo: 0.002, hi: 0.2, integer: false },
+    Field { key: "lift", default: 0.35, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "droop", default: 0.5, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "curl_radius_m", default: 0.0, lo: 0.0, hi: 0.1, integer: false },
     Field { key: "curl_turns_per_m", default: 0.0, lo: 0.0, hi: 200.0, integer: false },
@@ -65,26 +80,40 @@ pub const PARTS: &[&str] = &["centre", "left", "right", "none"];
 
 pub const TIES: &[&str] = &["none", "low", "high"];
 
-pub type Style = (&'static str, &'static str, &'static [(&'static str, f64)]);
+pub const DIRECTIONS: &[&str] = &["part", "back", "forward", "up"];
+
+pub struct Style {
+    pub name: &'static str,
+    pub tie: &'static str,
+    pub direction: &'static str,
+    pub settings: &'static [(&'static str, f64)],
+}
 
 pub const STYLES: &[Style] = &[
-    ("short", "none", &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("bob", "none", &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("long", "none", &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
-    ("wavy", "none", &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0)]),
-    ("curly", "none", &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0)]),
-    ("ponytail", "high", &[("length_m", 0.45), ("droop", 0.8), ("clumps", 300.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    Style { name: "short", tie: "none", direction: "part", settings: &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "bob", tie: "none", direction: "part", settings: &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "long", tie: "none", direction: "part", settings: &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "wavy", tie: "none", direction: "part", settings: &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "curly", tie: "none", direction: "part", settings: &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "ponytail", tie: "high", direction: "part", settings: &[("length_m", 0.45), ("droop", 0.8), ("clumps", 300.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "buzz", tie: "none", direction: "back", settings: &[("length_m", 0.01), ("droop", 0.2), ("clumps", 0.0), ("clump", 0.0), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.005), ("fade_m", 0.03), ("lift", 0.2)] },
+    Style { name: "crop", tie: "none", direction: "forward", settings: &[("length_m", 0.05), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.003), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.008), ("fade_m", 0.02), ("lift", 0.3)] },
+    Style { name: "undercut", tie: "none", direction: "back", settings: &[("length_m", 0.14), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.004), ("fade_m", 0.005), ("lift", 0.35)] },
+    Style { name: "quiff", tie: "none", direction: "up", settings: &[("length_m", 0.1), ("droop", 0.15), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.01), ("fade_m", 0.03), ("lift", 0.9)] },
+    Style { name: "slick_back", tie: "none", direction: "back", settings: &[("length_m", 0.12), ("droop", 0.3), ("clumps", 400.0), ("clump", 0.6), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.015), ("fade_m", 0.03), ("lift", 0.25)] },
 ];
 
 pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
-    let (_, tie, settings) = STYLES.iter().find(|(n, _, _)| *n == name)?;
+    let style = STYLES.iter().find(|s| s.name == name)?;
     let mut out = groom.as_object()?.clone();
-    if *tie == "none" {
-        out.remove("tie");
-    } else {
-        out.insert("tie".into(), serde_json::json!(tie));
+    for (key, value, plain) in [("tie", style.tie, "none"), ("direction", style.direction, "part")] {
+        if value == plain {
+            out.remove(key);
+        } else {
+            out.insert(key.into(), serde_json::json!(value));
+        }
     }
-    for &(key, v) in settings.iter() {
+    for &(key, v) in style.settings.iter() {
         let integer = FIELDS.iter().any(|f| f.key == key && f.integer);
         out.insert(key.into(), if integer { serde_json::json!(v as u64) } else { serde_json::json!(v) });
     }
@@ -93,8 +122,12 @@ pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
 
 pub fn style_of(groom: &Value) -> Option<&'static str> {
     let value = |key: &str| groom.get(key).and_then(Value::as_f64).or_else(|| FIELDS.iter().find(|f| f.key == key).map(|f| f.default));
-    let tie = groom.get("tie").and_then(Value::as_str).unwrap_or("none");
-    STYLES.iter().find(|(_, t, settings)| *t == tie && settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9))).map(|(n, _, _)| *n)
+    let word = |key: &str, plain: &'static str| groom.get(key).and_then(Value::as_str).unwrap_or(plain).to_string();
+    let (tie, direction) = (word("tie", "none"), word("direction", "part"));
+    STYLES
+        .iter()
+        .find(|s| s.tie == tie && s.direction == direction && s.settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9)))
+        .map(|s| s.name)
 }
 
 pub fn starter() -> Value {
@@ -106,7 +139,7 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         return Err(format!("a groom file says \"format\": \"{FORMAT}\""));
     }
     if let Some(o) = v.as_object()
-        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
+        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "direction", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
     {
         return Err(format!("groom {k} is not a groom setting"));
     }
@@ -134,6 +167,13 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         "high" => Tie::High,
         other => return Err(format!("groom tie is none, low or high, got {other}")),
     };
+    let direction = match v["direction"].as_str().unwrap_or("part") {
+        "part" => Direction::Part,
+        "back" => Direction::Back,
+        "forward" => Direction::Forward,
+        "up" => Direction::Up,
+        other => return Err(format!("groom direction is part, back, forward or up, got {other}")),
+    };
     let colour = match v["colour"].as_str() {
         None => [0.18, 0.11, 0.07].map(linear),
         Some(hex) => {
@@ -150,6 +190,10 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         length_m: num("length_m")?,
         part,
         tie,
+        direction,
+        sides_m: num("sides_m")?,
+        fade_m: num("fade_m")?,
+        lift: num("lift")?,
         droop: num("droop")?,
         curl_radius_m: num("curl_radius_m")?,
         curl_turns_per_m: num("curl_turns_per_m")?,
@@ -176,10 +220,10 @@ mod tests {
         assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
         assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
         assert!(parse(&json!({"format": FORMAT, "lenght_m": 0.3})).is_err(), "a misspelt setting is refused, not ignored");
-        for (name, _, _) in STYLES {
+        for name in STYLES.iter().map(|s| s.name) {
             let styled = with_style(&starter(), name).unwrap();
             assert!(parse(&styled).is_ok(), "{name}");
-            assert_eq!(style_of(&styled), Some(*name));
+            assert_eq!(style_of(&styled), Some(name));
             assert_eq!(styled["colour"], starter()["colour"], "a style keeps the colour, part and seed");
         }
         assert_eq!(style_of(&json!({"format": FORMAT})), None, "the defaults are no style");
