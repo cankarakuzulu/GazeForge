@@ -744,6 +744,55 @@ fn push_floats(doc: &mut Value, bin: &mut Vec<u8>, values: &[f32], width: usize,
     a
 }
 
+fn widen_weights(doc: &mut Value, bin: &mut Vec<u8>, mesh: usize, existing: usize, added: usize) -> Result<(), String> {
+    if existing == 0 {
+        return Ok(());
+    }
+    let nodes: Vec<u64> = doc["nodes"].as_array().into_iter().flatten().enumerate().filter(|(_, n)| n["mesh"].as_u64() == Some(mesh as u64)).map(|(i, _)| i as u64).collect();
+    let animations = doc["animations"].as_array().map_or(0, Vec::len);
+    for a in 0..animations {
+        let mut done: Vec<u64> = Vec::new();
+        let channels = doc["animations"][a]["channels"].as_array().cloned().unwrap_or_default();
+        for ch in channels {
+            if ch["target"]["path"] != "weights" || !ch["target"]["node"].as_u64().is_some_and(|n| nodes.contains(&n)) {
+                continue;
+            }
+            let Some(s) = ch["sampler"].as_u64() else { continue };
+            if done.contains(&s) {
+                continue;
+            }
+            done.push(s);
+            let Some(output) = doc["animations"][a]["samplers"][s as usize]["output"].as_u64() else { continue };
+            let old = floats_of(doc, bin, output)?;
+            if old.len() % existing != 0 {
+                return Err(format!("animation {a} drives a mesh of {existing} morph targets with {} weights, not a whole number of keys", old.len()));
+            }
+            let wide: Vec<f32> = old.chunks(existing).flat_map(|row| row.iter().map(|&x| x as f32).chain(std::iter::repeat_n(0.0, added))).collect();
+            let widened = push_floats(doc, bin, &wide, 1, None, false);
+            doc["animations"][a]["samplers"][s as usize]["output"] = json!(widened);
+        }
+    }
+    Ok(())
+}
+
+fn drop_copied_weights(samplers: &mut Vec<Value>, channels: &mut Vec<Value>, copied: usize) {
+    let written: Vec<u64> = channels[copied..].iter().filter(|c| c["target"]["path"] == "weights").filter_map(|c| c["target"]["node"].as_u64()).collect();
+    let keep: Vec<Value> = channels.iter().enumerate().filter(|(i, c)| *i >= copied || c["target"]["path"] != "weights" || !c["target"]["node"].as_u64().is_some_and(|n| written.contains(&n))).map(|(_, c)| c.clone()).collect();
+    let mut used: Vec<u64> = keep.iter().filter_map(|c| c["sampler"].as_u64()).collect();
+    used.sort_unstable();
+    used.dedup();
+    let renumber: HashMap<u64, usize> = used.iter().enumerate().map(|(k, &s)| (s, k)).collect();
+    *samplers = used.iter().map(|&s| samplers[s as usize].clone()).collect();
+    *channels = keep
+        .into_iter()
+        .map(|mut c| {
+            let s = c["sampler"].as_u64().unwrap_or(0);
+            c["sampler"] = json!(renumber.get(&s).copied().unwrap_or(0));
+            c
+        })
+        .collect();
+}
+
 fn clip_channels(doc: &mut Value, bin: &mut Vec<u8>, clip: &Clip, skip: &[usize], input: usize, samplers: &mut Vec<Value>, channels: &mut Vec<Value>) {
     match clip.source {
         Some(index) => {
@@ -929,6 +978,7 @@ fn write_vertex(doc: &mut Value, bin: &mut Vec<u8>, scene: &Scene, clip: &Clip, 
             new_attributes[format!("JOINTS_{set}")] = json!(push_bytes(doc, bin, &joints, UNSIGNED_SHORT, n, "VEC4", Some(ARRAY_BUFFER)));
             new_attributes[format!("WEIGHTS_{set}")] = json!(push_floats(doc, bin, &weights, 4, Some(ARRAY_BUFFER), false));
         }
+        widen_weights(doc, bin, mesh, existing, frames)?;
         let m = &mut doc["meshes"][mesh];
         for p in m["primitives"].as_array_mut().into_iter().flatten() {
             p["attributes"] = new_attributes.clone();
@@ -1191,7 +1241,8 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
     edges.sort_by_key(|e| (e.0, e.1));
     let mut bends: Vec<(usize, usize, f64)> = opposite.values().filter(|o| o.len() == 2 && o[0] != o[1]).map(|o| (o[0].min(o[1]), o[0].max(o[1]), norm(sub(start[o[0]], start[o[1]])))).collect();
     bends.sort_by_key(|e| (e.0, e.1));
-    let inv: Vec<f64> = cloth.pin.iter().map(|&p| (1.0 - p).clamp(0.0, 1.0)).collect();
+    let (pin, unpinned_islands) = held_islands(n, &cloth.triangles, &cloth.pin);
+    let inv: Vec<f64> = pin.iter().map(|&p| (1.0 - p).clamp(0.0, 1.0)).collect();
     let mut x = start.clone();
     let mut vel = vec![[0.0; 3]; n];
     let dt = 1.0 / CLOTH_HZ;
@@ -1238,7 +1289,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             } else {
                 x[v] = target[v];
             }
-            x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
+            x[v] = add(x[v], scale(sub(target[v], x[v]), pin[v].clamp(0.0, 1.0)));
         }
         for _ in 0..CLOTH_ITERATIONS {
             for &(list, stiffness) in &[(&edges, 1.0), (&bends, CLOTH_BEND)] {
@@ -1281,14 +1332,14 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
             }
         }
         for v in 0..n {
-            if cloth.pin[v] >= PINNED_REPORT {
-                x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
+            if pin[v] >= PINNED_REPORT {
+                x[v] = add(x[v], scale(sub(target[v], x[v]), pin[v].clamp(0.0, 1.0)));
             }
             vel[v] = scale(sub(x[v], old[v]), 1.0 / dt);
         }
         if record {
             for v in 0..n {
-                if cloth.pin[v] >= PINNED_REPORT {
+                if pin[v] >= PINNED_REPORT {
                     stats.0 = stats.0.max(norm(sub(x[v], target[v])));
                 }
                 for (c, (a, b, r)) in caps_now.iter().enumerate() {
@@ -1304,7 +1355,7 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
                     let s = norm(sub(x[a], x[b])) / rest;
                     stats.2 = stats.2.max(s);
                     let class = |p: f64| if p >= PINNED_REPORT { 2 } else if p > 0.0 { 1 } else { 0 };
-                    let k = class(cloth.pin[a]).max(class(cloth.pin[b]));
+                    let k = class(pin[a]).max(class(pin[b]));
                     stretch_by[k] = stretch_by[k].max(s);
                 }
             }
@@ -1330,16 +1381,44 @@ fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule
         }
         positions.push(x.clone());
     }
-    let free = cloth.pin.iter().filter(|&&p| p < 0.5).count();
+    let free = pin.iter().filter(|&&p| p < 0.5).count();
     let moved = positions.iter().zip(times).map(|(p, &t)| {
         let s = skinned(t);
         p.iter().zip(&s).map(|(a, b)| norm(sub(*a, *b))).fold(0.0, f64::max)
     }).fold(0.0, f64::max);
     let mm = |x: f64| (x * 1e6).round() / 1000.0;
     let report = json!({"node": scene.names[cloth.node], "vertices": n, "free_vertices": free, "edges": edges.len(), "bends": bends.len(),
-                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "capsule_beyond_rest_mm": mm(beyond_cap.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0, "max_stretch_free_partly_pinned_pinned": stretch_by.map(|s| (s * 1000.0).round() / 1000.0),
-                        "max_from_skinned_mm": mm(moved)});
+                        "pinned_vertices": pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "capsule_beyond_rest_mm": mm(beyond_cap.max(0.0)), "inside_at_rest_mm": if body.is_some() { json!(mm(at_rest.max(0.0))) } else { Value::Null }, "inside_beyond_rest_mm": if body.is_some() { json!(mm(stats.3.max(0.0))) } else { Value::Null }, "max_stretch": (stats.2 * 1000.0).round() / 1000.0, "max_stretch_free_partly_pinned_pinned": stretch_by.map(|s| (s * 1000.0).round() / 1000.0),
+                        "max_from_skinned_mm": mm(moved), "unpinned_islands": unpinned_islands.0, "unpinned_island_vertices": unpinned_islands.1});
     ClothRun { positions, report }
+}
+
+fn held_islands(n: usize, triangles: &[[usize; 3]], pin: &[f64]) -> (Vec<f64>, (usize, usize)) {
+    let mut root: Vec<usize> = (0..n).collect();
+    fn find(root: &mut [usize], mut v: usize) -> usize {
+        while root[v] != v {
+            root[v] = root[root[v]];
+            v = root[v];
+        }
+        v
+    }
+    for t in triangles {
+        for k in 0..3 {
+            let (a, b) = (find(&mut root, t[k]), find(&mut root, t[(k + 1) % 3]));
+            if a != b {
+                root[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let island: Vec<usize> = (0..n).map(|v| find(&mut root, v)).collect();
+    let mut pinned = vec![false; n];
+    for v in 0..n {
+        pinned[island[v]] |= pin[v] > 0.0;
+    }
+    let held: Vec<bool> = (0..n).map(|v| !pinned[island[v]]).collect();
+    let islands = (0..n).filter(|&v| island[v] == v && held[v]).count();
+    let out = (0..n).map(|v| if held[v] { 1.0 } else { pin[v] }).collect();
+    (out, (islands, held.iter().filter(|h| **h).count()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1365,6 +1444,7 @@ fn write_cloth(doc: &mut Value, bin: &mut Vec<u8>, scene: &Scene, clip: &Clip, c
         }
         targets.push(target);
     }
+    widen_weights(doc, bin, cloth.mesh, existing, frames)?;
     let m = &mut doc["meshes"][cloth.mesh];
     for p in m["primitives"].as_array_mut().into_iter().flatten() {
         let mut list = p["targets"].as_array().cloned().unwrap_or_default();
@@ -1551,6 +1631,7 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
     let (mut samplers, mut channels) = (Vec::new(), Vec::new());
     let chain_nodes: Vec<usize> = chains.iter().flat_map(|c| c.nodes.iter().copied()).collect();
     clip_channels(&mut doc, &mut bin, &clip, &chain_nodes, input, &mut samplers, &mut channels);
+    let copied = channels.len();
     let mut report = baked.report.clone();
     match s.format {
         Format::Bones => {
@@ -1578,8 +1659,9 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
         }
         report["cloth"] = json!(rows);
         report["cloth_collides_with"] = json!(body.as_ref().map(|b| b.names.clone()).unwrap_or_default());
-        report["cloth_method"] = json!("position-based cloth on each cloth node's own mesh (every level of detail simulated on its own): the mesh's edges at their length in the clip's first pose (hard) and the pairs across each edge (bending, 0.2), gravity 9.81 m/s2, 240 Hz steps of 12 iterations, pushed out of each body capsule by its radius plus 4 mm and kept 4 mm outside the skinned surface of the body, the head and every other opaque item worn (their finest level, within 25 cm) - or, where the cloth's own rest already lies closer or inside, no deeper than it lies at rest - each vertex pulled to its skinned place by its _PIN (1 follows the skin exactly); written as one morph target per frame in either --bake-format, since cloth has no joints");
+        report["cloth_method"] = json!("position-based cloth on each cloth node's own mesh (every level of detail simulated on its own): the mesh's edges at their length in the clip's first pose (hard) and the pairs across each edge (bending, 0.2), gravity 9.81 m/s2, 240 Hz steps of 12 iterations, pushed out of each body capsule by its radius plus 4 mm and kept 4 mm outside the skinned surface of the body, the head and every other opaque item worn (their finest level, within 25 cm) - or, where the cloth's own rest already lies closer or inside, no deeper than it lies at rest - each vertex pulled to its skinned place by its _PIN (1 follows the skin exactly; a piece of the mesh with no pinned vertex at all follows the skin as if pinned, counted as unpinned_islands); written as one morph target per frame in either --bake-format, since cloth has no joints");
     }
+    drop_copied_weights(&mut samplers, &mut channels, copied);
     let format = if s.format == Format::Bones { "bones" } else { "vertex" };
     doc["animations"].as_array_mut().expect("animations set").push(json!({"name": name, "samplers": samplers, "channels": channels,
         "extras": {"gazeforge": {"baked": {"clip": clip.name, "format": format}}}}));
@@ -1663,6 +1745,25 @@ mod tests {
         let shake = Clip { name: "shake".into(), duration: 1.0, tracks: vec![Track { node: 0, path: PathKind::Translation, times: times.clone(), values, step: false }], source: None };
         let run = simulate_cloth(&scene, &shake, &cloth, &[], None, &times, 1.0);
         assert!(run.report["max_stretch"].as_f64().unwrap() < 1.1, "{}", run.report);
+    }
+
+    #[test]
+    fn a_cloth_island_with_no_pin_follows_the_skin_instead_of_falling() {
+        let scene = line_scene(0, [0.0; 3]);
+        let mut cloth = sheet(6, 0.3);
+        let base = cloth.bind.len();
+        for p in [[0.5, 0.0, 0.0], [0.55, 0.0, 0.0], [0.5, 0.0, 0.05]] {
+            cloth.bind.push(p);
+            cloth.weights.push(vec![(0, 1.0)]);
+            cloth.pin.push(0.0);
+        }
+        cloth.triangles.push([base, base + 1, base + 2]);
+        let times: Vec<f64> = (0..=40).map(|k| k as f64 / 10.0).collect();
+        let run = simulate_cloth(&scene, &still(&scene), &cloth, &[], None, &times, 1.0);
+        let last = run.positions.last().unwrap();
+        assert!(norm(sub(last[base], [0.5, 0.0, 0.0])) < 1e-9, "the loose triangle stays where the skin puts it: {:?}", last[base]);
+        assert_eq!((run.report["unpinned_islands"].clone(), run.report["unpinned_island_vertices"].clone()), (json!(1), json!(3)));
+        assert!(last[..base].iter().any(|p| p[1] < -0.01), "the pinned sheet still hangs and swings as before");
     }
 
     #[test]
@@ -1826,5 +1927,27 @@ mod tests {
         assert!(norm(sub(x, [0.7, 0.1, -0.2])) < 1e-12);
         assert!(qangle(rotation_of(&m), p.r) < 1e-9);
         assert!(qangle(from_to([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2)) < 1e-9);
+    }
+
+    #[test]
+    fn a_second_bake_widens_the_first_one_s_weights_and_does_not_drive_a_node_twice() {
+        let mut doc = json!({"nodes": [{"mesh": 0}, {"mesh": 0}, {}], "meshes": [{}], "accessors": [], "bufferViews": [], "animations": []});
+        let mut bin = Vec::new();
+        let input = push_floats(&mut doc, &mut bin, &[0.0, 1.0], 1, None, true);
+        let output = push_floats(&mut doc, &mut bin, &[1.0, 0.0, 0.0, 1.0], 1, None, false);
+        doc["animations"] = json!([{"name": "first", "samplers": [{"input": input, "output": output}], "channels": [{"sampler": 0, "target": {"node": 0, "path": "weights"}}, {"sampler": 0, "target": {"node": 1, "path": "weights"}}]}]);
+        widen_weights(&mut doc, &mut bin, 0, 2, 3).unwrap();
+        let widened = doc["animations"][0]["samplers"][0]["output"].as_u64().unwrap();
+        assert_eq!(floats_of(&doc, &bin, widened).unwrap(), vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], "each key keeps its weights and gains zeros for the new targets, once for a shared sampler");
+        let mut samplers = vec![json!({"input": 0, "output": 1}), json!({"input": 0, "output": 2}), json!({"input": 0, "output": 3})];
+        let mut channels = vec![
+            json!({"sampler": 0, "target": {"node": 0, "path": "weights"}}),
+            json!({"sampler": 1, "target": {"node": 2, "path": "rotation"}}),
+            json!({"sampler": 2, "target": {"node": 0, "path": "weights"}}),
+        ];
+        drop_copied_weights(&mut samplers, &mut channels, 2);
+        assert_eq!(channels.len(), 2, "the copied weights of a node the bake writes are dropped: {channels:?}");
+        assert_eq!(samplers, vec![json!({"input": 0, "output": 2}), json!({"input": 0, "output": 3})], "and their sampler with them");
+        assert_eq!((channels[0]["sampler"].clone(), channels[1]["sampler"].clone()), (json!(0), json!(1)));
     }
 }

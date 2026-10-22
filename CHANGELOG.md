@@ -301,6 +301,15 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A second bake into the same file wrote invalid glTF.** Each bake adds morph targets to the cloth (and vertex-baked)
+  meshes, so an earlier bake's weight tracks on them came up short, and a bake made from a baked clip copied that
+  clip's weight tracks next to its own on the same nodes. Earlier tracks now gain zero weights for the new targets
+  (the first animation plays exactly as before) and copied weight tracks of the nodes a bake writes are left out:
+  sway baked from sway_baked, 18 glTF problems -> 0.
+- **A piece of cloth with no pinned vertex fell without end.** Nothing held a separate piece of a cloth mesh with
+  no pin (a loose pocket or trim): a test triangle fell 9.6 m. Such a piece now follows the skin as if pinned; the
+  cloth report counts them (`unpinned_islands`, `unpinned_island_vertices`). The test cape has none and bakes
+  unchanged.
 - **With a ponytail, changing the length or adding a fringe reshuffled all the hair.** Where each strand joins the
   tail was drawn from the same random sequence that places the roots, and whether a strand reaches the tie depends
   on its length: 0.45 -> 0.08 m moved 2,999 of 3,000 roots (median 94 mm). The tail now has its own random draw per
