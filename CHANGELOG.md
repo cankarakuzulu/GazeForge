@@ -8,6 +8,9 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Bob with bangs, curtain bangs, long layers.** Three more styles (fourteen in all); a style now also sets the
+  fringe (and every style sets face framing, so picking a style without them takes them away). The colours,
+  highlights and forehead stay as they are, like the part.
 - **Ombre, highlights, balayage.** A groom's `tip_colour` (the colour blends from the roots to it along each
   strand; absent keeps it even), `highlights` (the share of locks that are highlighted, a lock being one clump, so
   they read as streaks) and `highlight_colour` (default #b8925a; faint at the root, full a third of the way down).

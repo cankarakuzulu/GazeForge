@@ -175,6 +175,8 @@ function mount(root, api) {
       else next.groom.tie = s.tie;
       if (!s.direction || s.direction === 'part') delete next.groom.direction;
       else next.groom.direction = s.direction;
+      if (!s.fringe || s.fringe === 'none') delete next.groom.fringe;
+      else next.groom.fringe = s.fringe;
       for (const [k, v] of Object.entries(s.settings)) {
         const f = groomSchema.fields.find((x) => x.key === k);
         next.groom[k] = f && f.integer ? Math.round(v) : v;
@@ -260,7 +262,7 @@ function mount(root, api) {
 
   function styleOf(g) {
     const value = (k) => (typeof g[k] === 'number' ? g[k] : (groomSchema.fields.find((f) => f.key === k) || {}).default);
-    const hit = (groomSchema.styles || []).find((s) => (s.tie || 'none') === (g.tie || 'none') && (s.direction || 'part') === (g.direction || 'part') &&Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
+    const hit = (groomSchema.styles || []).find((s) => (s.tie || 'none') === (g.tie || 'none') && (s.direction || 'part') === (g.direction || 'part') && (s.fringe || 'none') === (g.fringe || 'none') && Object.entries(s.settings).every(([k, v]) => Math.abs((value(k) ?? NaN) - v) < 1e-9));
     return hit ? hit.name : 'custom';
   }
 

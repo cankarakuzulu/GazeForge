@@ -106,27 +106,31 @@ pub struct Style {
     pub name: &'static str,
     pub tie: &'static str,
     pub direction: &'static str,
+    pub fringe: &'static str,
     pub settings: &'static [(&'static str, f64)],
 }
 
 pub const STYLES: &[Style] = &[
-    Style { name: "short", tie: "none", direction: "part", settings: &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "bob", tie: "none", direction: "part", settings: &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "long", tie: "none", direction: "part", settings: &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "wavy", tie: "none", direction: "part", settings: &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "curly", tie: "none", direction: "part", settings: &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "ponytail", tie: "high", direction: "part", settings: &[("length_m", 0.45), ("droop", 0.8), ("clumps", 300.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
-    Style { name: "buzz", tie: "none", direction: "back", settings: &[("length_m", 0.01), ("droop", 0.2), ("clumps", 0.0), ("clump", 0.0), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.005), ("fade_m", 0.03), ("lift", 0.2)] },
-    Style { name: "crop", tie: "none", direction: "forward", settings: &[("length_m", 0.05), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.003), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.008), ("fade_m", 0.02), ("lift", 0.3)] },
-    Style { name: "undercut", tie: "none", direction: "back", settings: &[("length_m", 0.14), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.004), ("fade_m", 0.005), ("lift", 0.35)] },
-    Style { name: "quiff", tie: "none", direction: "up", settings: &[("length_m", 0.1), ("droop", 0.15), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.01), ("fade_m", 0.03), ("lift", 0.9)] },
-    Style { name: "slick_back", tie: "none", direction: "back", settings: &[("length_m", 0.12), ("droop", 0.3), ("clumps", 400.0), ("clump", 0.6), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.015), ("fade_m", 0.03), ("lift", 0.25)] },
+    Style { name: "short", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "bob", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "long", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "wavy", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "curly", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "ponytail", tie: "high", direction: "part", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.45), ("droop", 0.8), ("clumps", 300.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "buzz", tie: "none", direction: "back", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.01), ("droop", 0.2), ("clumps", 0.0), ("clump", 0.0), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.005), ("fade_m", 0.03), ("lift", 0.2)] },
+    Style { name: "crop", tie: "none", direction: "forward", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.05), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.003), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.008), ("fade_m", 0.02), ("lift", 0.3)] },
+    Style { name: "undercut", tie: "none", direction: "back", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.14), ("droop", 0.4), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.004), ("fade_m", 0.005), ("lift", 0.35)] },
+    Style { name: "quiff", tie: "none", direction: "up", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.1), ("droop", 0.15), ("clumps", 300.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.01), ("fade_m", 0.03), ("lift", 0.9)] },
+    Style { name: "slick_back", tie: "none", direction: "back", fringe: "none", settings: &[("frame_m", 0.0), ("length_m", 0.12), ("droop", 0.3), ("clumps", 400.0), ("clump", 0.6), ("frizz_m", 0.0005), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.015), ("fade_m", 0.03), ("lift", 0.25)] },
+    Style { name: "bob_bangs", tie: "none", direction: "part", fringe: "straight", settings: &[("frame_m", 0.0), ("fringe_m", 0.1), ("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "curtain_bangs", tie: "none", direction: "part", fringe: "curtain", settings: &[("frame_m", 0.2), ("fringe_m", 0.14), ("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
+    Style { name: "layered", tie: "none", direction: "part", fringe: "none", settings: &[("frame_m", 0.15), ("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0), ("sides_m", 0.0), ("fade_m", 0.03), ("lift", 0.35)] },
 ];
 
 pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
     let style = STYLES.iter().find(|s| s.name == name)?;
     let mut out = groom.as_object()?.clone();
-    for (key, value, plain) in [("tie", style.tie, "none"), ("direction", style.direction, "part")] {
+    for (key, value, plain) in [("tie", style.tie, "none"), ("direction", style.direction, "part"), ("fringe", style.fringe, "none")] {
         if value == plain {
             out.remove(key);
         } else {
@@ -143,10 +147,10 @@ pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
 pub fn style_of(groom: &Value) -> Option<&'static str> {
     let value = |key: &str| groom.get(key).and_then(Value::as_f64).or_else(|| FIELDS.iter().find(|f| f.key == key).map(|f| f.default));
     let word = |key: &str, plain: &'static str| groom.get(key).and_then(Value::as_str).unwrap_or(plain).to_string();
-    let (tie, direction) = (word("tie", "none"), word("direction", "part"));
+    let (tie, direction, fringe) = (word("tie", "none"), word("direction", "part"), word("fringe", "none"));
     STYLES
         .iter()
-        .find(|s| s.tie == tie && s.direction == direction && s.settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9)))
+        .find(|s| s.tie == tie && s.direction == direction && s.fringe == fringe && s.settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9)))
         .map(|s| s.name)
 }
 
@@ -267,6 +271,10 @@ mod tests {
         }
         assert_eq!(style_of(&json!({"format": FORMAT})), None, "the defaults are no style");
         assert!(with_style(&starter(), "mohawk").is_none());
+        let back = with_style(&with_style(&starter(), "curtain_bangs").unwrap(), "long").unwrap();
+        assert!(back.get("fringe").is_none(), "a style without a fringe takes the fringe away");
+        assert_eq!(back["frame_m"], json!(0.0));
+        assert_eq!(style_of(&back), Some("long"));
         let mut edited = with_style(&starter(), "bob").unwrap();
         edited["length_m"] = json!(0.2);
         assert_eq!(style_of(&edited), None, "an edited style is custom");
