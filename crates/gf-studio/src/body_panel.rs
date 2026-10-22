@@ -42,6 +42,7 @@ const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
     ("fade_m", 100.0, 0.1, 1),
     ("lift", 1.0, 0.01, 2),
     ("forehead", 1.0, 0.01, 2),
+    ("fringe_m", 100.0, 0.5, 1),
     ("droop", 1.0, 0.01, 2),
     ("clumps", 1.0, 5.0, 0),
     ("clump", 1.0, 0.01, 2),
@@ -613,6 +614,19 @@ impl crate::studio::Studio<'_> {
                     })
                     .response
                     .on_hover_text(tr("body.groom_tie_tip"));
+                let fringe = g["fringe"].as_str().unwrap_or("none").to_string();
+                let fringe_label = |f: &str| tr(&format!("body.groom_fringe.{f}")).to_string();
+                egui::ComboBox::from_label(tr("body.groom_fringe"))
+                    .selected_text(fringe_label(&fringe))
+                    .show_ui(ui, |ui| {
+                        for &f in gf_core::groom::FRINGES {
+                            if ui.selectable_label(fringe == f, fringe_label(f)).clicked() && fringe != f {
+                                groom_commit = Some(("fringe".into(), json!(f)));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("body.groom_fringe_tip"));
                 let direction = g["direction"].as_str().unwrap_or("part").to_string();
                 let direction_label = |d: &str| tr(&format!("body.groom_direction.{d}")).to_string();
                 egui::ComboBox::from_label(tr("body.groom_direction"))

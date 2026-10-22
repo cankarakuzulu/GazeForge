@@ -4,7 +4,7 @@ use gf_core::game_mesh::{Point, game_normals};
 use gf_core::skin_regions;
 use serde_json::{Value, json};
 
-pub use gf_core::groom::{Direction, FORMAT, Groom, Part, Tie, parse};
+pub use gf_core::groom::{Direction, FORMAT, Fringe, Groom, Part, Tie, parse};
 
 use super::strands::Strand;
 use super::wearable::Surface;
@@ -45,6 +45,9 @@ const TEMPLE_DROP_M: f64 = 0.01;
 const MAX_ROOT_TRIES: usize = 10_000;
 const HAIRLINE_CENTRE_M: f64 = 0.02;
 const HAIRLINE_TEMPLE_SPAN: f64 = 0.5;
+const FRINGE_BAND_M: f64 = 0.04;
+const FRINGE_ABOVE_BROWS_M: f64 = 0.008;
+const CURTAIN_SWEEP: f64 = 0.9;
 const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
 const FACE_MARGIN_M: f64 = 0.01;
@@ -106,6 +109,33 @@ impl Face {
         };
         Some([self.centre_x + if side >= 0.0 { dx } else { -dx }, y, p[2]])
     }
+}
+
+fn cut_below(line: &[Point], z: f64, points: usize) -> Vec<Point> {
+    let Some(k) = (1..line.len()).find(|&k| line[k][2] < z) else { return line.to_vec() };
+    let (a, b) = (line[k - 1], line[k]);
+    let t = if a[2] > b[2] { ((a[2] - z) / (a[2] - b[2])).clamp(0.0, 1.0) } else { 0.0 };
+    let mut kept = line[..k].to_vec();
+    kept.push(add(a, scale(sub(b, a), t)));
+    if kept.len() < 2 {
+        return line.to_vec();
+    }
+    let arcs: Vec<f64> = std::iter::once(0.0)
+        .chain(kept.windows(2).scan(0.0, |s, w| {
+            *s += dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt();
+            Some(*s)
+        }))
+        .collect();
+    let total = *arcs.last().unwrap();
+    (0..points)
+        .map(|i| {
+            let want = total * i as f64 / (points - 1) as f64;
+            let j = arcs.partition_point(|&s| s < want).clamp(1, kept.len() - 1);
+            let span = arcs[j] - arcs[j - 1];
+            let f = if span > 0.0 { (want - arcs[j - 1]) / span } else { 0.0 };
+            add(kept[j - 1], scale(sub(kept[j], kept[j - 1]), f.clamp(0.0, 1.0)))
+        })
+        .collect()
 }
 
 fn smoothstep01(x: f64) -> f64 {
@@ -252,6 +282,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         }
     };
     let mut tails: Vec<usize> = Vec::new();
+    let mut fringe_of: Vec<bool> = Vec::with_capacity(g.strands);
     let fade_line = brim + FADE_LINE_ABOVE_EARS_M;
     let topness = |z: f64| -> f64 {
         if g.sides_m <= 0.0 {
@@ -313,6 +344,54 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         };
         roots.push((p, n));
         let mut line = vec![add(p, scale(n, ROOT_LIFT_M))];
+        let in_fringe = g.fringe != Fringe::None && (p[0] - face.centre_x).abs() < face.half_width && p[1] < crown[1] && p[2] < hairline.z + FRINGE_BAND_M;
+        fringe_of.push(in_fringe);
+        if in_fringe {
+            let side = face.side_of(p);
+            let want = if g.fringe == Fringe::Curtain { [side * CURTAIN_SWEEP, -0.1, -1.0] } else { [0.0, -0.15, -1.0] };
+            let comb = |m: Point| {
+                let f = tangent(want, m);
+                if dot(f, f) > 1e-10 { unit(f) } else { unit(tangent(down, m)) }
+            };
+            let seg = g.fringe_m / (points - 1) as f64;
+            let mut dir = unit(add(scale(n, LIFT), scale(comb(n), 1.0 - LIFT)));
+            for _ in 1..points {
+                let last = *line.last().unwrap();
+                let mut next = add(last, scale(dir, seg));
+                if let Some(q) = outside(surface, next) {
+                    next = q;
+                    pushes += 1;
+                }
+                if let Some(q) = face.keep_out_toward(next, side) {
+                    next = q;
+                    kept_off_face += 1;
+                }
+                let step = sub(next, last);
+                next = add(last, scale(unit(step), seg));
+                dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
+                if next[2] > brim
+                    && let Some(j) = surface.nearest(next, HUG_M)
+                {
+                    let m = surface.normals[j];
+                    dir = unit(add(scale(dir, 1.0 - STEER), scale(comb(m), STEER)));
+                    let out = dot(dir, m);
+                    if out > 0.0 {
+                        dir = unit(sub(dir, scale(m, out)));
+                        hugged += 1;
+                    }
+                } else if next[2] > brim {
+                    dir = unit(add(dir, scale(down, FALL)));
+                }
+                line.push(next);
+            }
+            if g.fringe == Fringe::Straight {
+                line = cut_below(&line, hairline.brows + FRINGE_ABOVE_BROWS_M, points);
+            }
+            asked += line.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum::<f64>();
+            tails.push(points);
+            lines.push(line);
+            continue;
+        }
         if let Some((tp, lean)) = tie_point {
             let mut tail: Option<Point> = None;
             let mut tied_at = points;
@@ -421,7 +500,13 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     if g.clumps > 0 && g.clump > 0.0 {
         let k = g.clumps.min(lines.len());
         let centres: Vec<usize> = (0..k).map(|i| i * lines.len() / k).collect();
-        let side = |i: usize| part_x.map(|x| roots[i].0[0] >= x);
+        let side = |i: usize| {
+            if fringe_of[i] {
+                (true, (g.fringe == Fringe::Curtain).then(|| roots[i].0[0] >= face.centre_x))
+            } else {
+                (false, part_x.map(|x| roots[i].0[0] >= x))
+            }
+        };
         for s in 0..lines.len() {
             let Some(&c) = centres.iter().filter(|&&a| side(a) == side(s)).min_by(|&&a, &&b| dot(sub(roots[a].0, roots[s].0), sub(roots[a].0, roots[s].0)).total_cmp(&dot(sub(roots[b].0, roots[s].0), sub(roots[b].0, roots[s].0)))) else {
                 continue;
@@ -522,9 +607,20 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let brows = hairline.brows;
     let (subnasale, chin) = (height(&[2]), height(&[152]));
     let lowest_front = roots.iter().filter(|(p, _)| (p[0] - face.centre_x).abs() < HAIRLINE_CENTRE_M && p[1] < crown[1]).map(|(p, _)| p[2]).fold(f64::INFINITY, f64::min);
+    let fringe_low = strands
+        .iter()
+        .zip(&fringe_of)
+        .filter(|(_, f)| **f)
+        .flat_map(|(s, _)| s.points.iter())
+        .filter(|p| (p[0] - face.centre_x).abs() < HAIRLINE_CENTRE_M)
+        .map(|p| p[2])
+        .fold(f64::INFINITY, f64::min);
+    let fringe_below = strands.iter().zip(&fringe_of).filter(|(_, f)| **f).flat_map(|(s, _)| s.points.iter()).filter(|p| p[2] < hairline.brows).count();
     let cm = |x: f64| (x * 1e4).round() / 1e4;
     let face_report = json!({"hairline_above_brows_m": lowest_front.is_finite().then(|| cm(lowest_front - brows)), "hairline_asked_above_brows_m": cm(hairline.z - brows),
-                             "hairline_soft_m": HAIRLINE_SOFT_M, "landmark_10_above_brows_m": cm(height(&[10]) - brows),
+                             "hairline_soft_m": HAIRLINE_SOFT_M, "fringe_strands": fringe_of.iter().filter(|f| **f).count(),
+                             "fringe_lowest_above_brows_m": fringe_low.is_finite().then(|| cm(fringe_low - brows)), "fringe_end_above_brows_m": FRINGE_ABOVE_BROWS_M, "fringe_points_below_brows": fringe_below,
+                             "landmark_10_above_brows_m": cm(height(&[10]) - brows),
                              "brows_to_subnasale_m": cm(brows - subnasale), "subnasale_to_chin_m": cm(subnasale - chin)});
     let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),

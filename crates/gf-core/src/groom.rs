@@ -18,6 +18,13 @@ pub enum Tie {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fringe {
+    None,
+    Straight,
+    Curtain,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Direction {
     Part,
     Back,
@@ -33,6 +40,8 @@ pub struct Groom {
     pub length_m: f64,
     pub part: Part,
     pub tie: Tie,
+    pub fringe: Fringe,
+    pub fringe_m: f64,
     pub direction: Direction,
     pub sides_m: f64,
     pub fade_m: f64,
@@ -69,6 +78,7 @@ pub const FIELDS: &[Field] = &[
     Field { key: "fade_m", default: 0.03, lo: 0.002, hi: 0.2, integer: false },
     Field { key: "lift", default: 0.35, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "forehead", default: 1.0, lo: 0.3, hi: 1.6, integer: false },
+    Field { key: "fringe_m", default: 0.1, lo: 0.01, hi: 0.5, integer: false },
     Field { key: "droop", default: 0.5, lo: 0.0, hi: 1.0, integer: false },
     Field { key: "curl_radius_m", default: 0.0, lo: 0.0, hi: 0.1, integer: false },
     Field { key: "curl_turns_per_m", default: 0.0, lo: 0.0, hi: 200.0, integer: false },
@@ -81,6 +91,7 @@ pub const FIELDS: &[Field] = &[
 pub const PARTS: &[&str] = &["centre", "left", "right", "none"];
 
 pub const TIES: &[&str] = &["none", "low", "high"];
+pub const FRINGES: &[&str] = &["none", "straight", "curtain"];
 
 pub const DIRECTIONS: &[&str] = &["part", "back", "forward", "up"];
 
@@ -141,7 +152,7 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         return Err(format!("a groom file says \"format\": \"{FORMAT}\""));
     }
     if let Some(o) = v.as_object()
-        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "direction", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
+        && let Some(k) = o.keys().find(|k| !["format", "name", "part", "tie", "fringe", "direction", "colour"].contains(&k.as_str()) && !FIELDS.iter().any(|f| f.key == k.as_str()))
     {
         return Err(format!("groom {k} is not a groom setting"));
     }
@@ -169,6 +180,12 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         "high" => Tie::High,
         other => return Err(format!("groom tie is none, low or high, got {other}")),
     };
+    let fringe = match v["fringe"].as_str().unwrap_or("none") {
+        "none" => Fringe::None,
+        "straight" => Fringe::Straight,
+        "curtain" => Fringe::Curtain,
+        other => return Err(format!("groom fringe is none, straight or curtain, got {other}")),
+    };
     let direction = match v["direction"].as_str().unwrap_or("part") {
         "part" => Direction::Part,
         "back" => Direction::Back,
@@ -192,6 +209,8 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         length_m: num("length_m")?,
         part,
         tie,
+        fringe,
+        fringe_m: num("fringe_m")?,
         direction,
         sides_m: num("sides_m")?,
         fade_m: num("fade_m")?,

@@ -8,6 +8,13 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Fringes.** A groom's `fringe` (none, straight, curtain; a Fringe choice in both panels) and `fringe_m` (its
+  length): the hair rooted in a 4 cm band above the front hairline, between the outer eye corners, is combed down
+  over the forehead instead of with the rest. A straight fringe is cut 8 mm above the brows; a curtain fringe parts
+  at the centre and sweeps out past the eyes, where the face keep-out lays it beside the face. A ponytail leaves the
+  fringe out, so a ponytail can have bangs. Fringe hair clumps only with fringe hair (a curtain with its own side).
+  The groom report counts the fringe strands, how low the fringe reaches at the centre and how many fringe points lie
+  below the brows.
 - **Fades, undercuts, crops, quiffs.** A groom has a sides length (`sides_m`, 0 keeps the sides as long as the top),
   a fade (`fade_m`, the height of the blend from the side length up to the top length, centred a little above the
   ears), a top direction (`direction`: from the part, back, forward or up) and a lift for the top (`lift`, how far it
