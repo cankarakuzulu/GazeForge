@@ -144,6 +144,13 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **Equal layer depths: the later item is outer.** Two worn items with the same `layer` / `z_depth` were never layered
+  against each other (only a strictly lower depth counted as underneath); now the item listed later in
+  `body.wearables` goes over the earlier one. A cape worn after a suit (both 50) started 24.6 mm inside the suit;
+  now 2.7 mm. Characters without tied overlapping items export unchanged (a five-item outfit: identical hash).
+- **`wearable bind` turns inside-out garments the right way.** When most of a garment's normals point at the body
+  it is bound to, it is stored with every face reversed (and `vn` negated) and the report says so (`faces`). The
+  test cape was inside out (403 of 403 vertices): layering skipped it as an "inner face" and Godot culled it.
 - **Spring chains start at rest.** Every export fits each spring chain's colliders to its modelled shape
   (`GAZEFORGE_physics.springs[].collider_radii` and `hit_radius_m`): a capsule a chain starts inside is shrunk to the
   chain's rest distance for that chain only. Before, a short tuft at the ponytail's nape started 11.6 mm inside the head
@@ -199,6 +206,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Baked cloth went through the body and the clothes.** It collided only with the body's capsules, which sit inside
+  the skin; a cape sank up to 17.5 mm into the hips. It now also keeps 4 mm off the skinned surface of the body, the
+  head and every other opaque item worn - or, where its rest already lies closer or inside, no deeper than at rest.
+  Measured on the cape: 0 mm inside the body at every level (was 17.5 / 15.2 / 8.3), over a suit 0.02 mm beyond its
+  rest; the report gives `inside_at_rest_mm` and `inside_beyond_rest_mm` and lists the surfaces it collided with.
 - A mesh exported without a material (the head and body of a character without skin, plain eyes) took glTF's default
   material, which is fully metallic and renders black in viewers that follow the specification (three.js, Babylon;
   Blender and Godot substitute grey). Such meshes now carry a neutral material: light grey, metallic 0, roughness 0.7.

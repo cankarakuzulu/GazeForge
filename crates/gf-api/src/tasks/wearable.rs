@@ -422,6 +422,51 @@ fn covered_base(base: &std::collections::BTreeMap<u32, Point>, body: &HashMap<u3
 }
 const SCALE_PAIRS: [(u32, u32); 3] = [(5399, 11998), (791, 881), (962, 5320)];
 
+fn facing_body(garment: &[Point], triangles: &[[u32; 3]], frame: &BaseFrame, faces: &[[u32; 3]]) -> (usize, usize) {
+    let mut ids: Vec<u32> = frame.body.keys().chain(frame.head.keys()).copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let index: HashMap<u32, u32> = ids.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+    let points: Vec<Point> = ids.iter().filter_map(|&v| frame.resolve(v)).collect();
+    let tris: Vec<[u32; 3]> = faces.iter().filter_map(|f| Some([*index.get(&f[0])?, *index.get(&f[1])?, *index.get(&f[2])?])).collect();
+    let surface = Surface::new(points, &tris);
+    let base_normals = surface.normals.clone();
+    let normals = vertex_normals(garment, triangles);
+    let (mut toward, mut measured) = (0, 0);
+    for (p, n) in garment.iter().zip(&normals) {
+        let Some(j) = surface.nearest(*p, FACING_REACH_M) else { continue };
+        measured += 1;
+        let m = base_normals[j];
+        if n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0.0 {
+            toward += 1;
+        }
+    }
+    (toward, measured)
+}
+
+fn rewind_obj(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("f") => {
+                let mut corners: Vec<&str> = parts.collect();
+                corners.reverse();
+                out.push_str("f ");
+                out.push_str(&corners.join(" "));
+            }
+            Some("vn") => {
+                let v: Vec<String> = parts.map(|x| x.parse::<f64>().map_or(x.to_string(), |f| format!("{}", -f))).collect();
+                out.push_str("vn ");
+                out.push_str(&v.join(" "));
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub fn bind(opts: &Options) -> Result<Value, String> {
     only(opts, "wearable bind", &[BIND_KEYS])?;
     let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
@@ -473,6 +518,20 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
         }
         None => Value::Null,
     };
+    let (toward, measured) = facing_body(&canonical, &triangles_of(&garment.faces), &frame, &faces);
+    let flipped = measured > 0 && 2 * toward > measured;
+    let rewound;
+    let obj_path = if flipped {
+        let text = std::fs::read_to_string(obj_path).map_err(|e| format!("{}: {e}", obj_path.display()))?;
+        let out = rewind_obj(&text);
+        let dir = store.root.join("cache").join("rewound").join(gf_core::hash::sha256_hex(text.as_bytes()));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        rewound = dir.join(obj_path.file_name().unwrap_or_default());
+        std::fs::write(&rewound, out).map_err(|e| format!("{}: {e}", rewound.display()))?;
+        rewound.as_path()
+    } else {
+        obj_path
+    };
     let back = frame.evaluate(&binding)?;
     let worst = back.iter().zip(&canonical).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0f64, f64::max);
     let offsets: Vec<f64> = binding.bound.iter().map(|b| (b.offset[0].powi(2) + b.offset[1].powi(2) + b.offset[2].powi(2)).sqrt() * frame.unit * 1000.0).collect();
@@ -482,6 +541,8 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
     let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
     Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent,
               "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared, "from_glb": from_glb,
+              "faces": {"facing_the_body": toward, "measured": measured, "rewound": flipped,
+                        "meaning": "a vertex faces the body when its normal points against the nearest body or head normal; when most do, the garment was modelled inside out and is stored with every face reversed (and its vn normals negated), so it renders and layers outward"},
               "meaning": "each garment vertex bound to the nearest point of the character's base surface (body and head), with its offset; the reprojection is the binding evaluated back on that character against the garment"}))
 }
 
@@ -562,6 +623,7 @@ impl BaseFrame {
 
 pub const CLEARANCE_M: f64 = 0.002;
 const PUSH_REACH_M: f64 = 0.1;
+const FACING_REACH_M: f64 = 0.3;
 const PUSH_SPREAD_PASSES: usize = 2;
 const LIFT_ROUNDS: usize = 4;
 const LIFT_MAX_M: f64 = 0.01;
@@ -883,11 +945,11 @@ pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
     let mut order: Vec<usize> = (0..garments.len()).collect();
     order.sort_by(|&a, &b| garments[a].depth.total_cmp(&garments[b].depth));
     let mut reports = vec![Value::Null; garments.len()];
-    for &g in &order {
+    for (at, &g) in order.iter().enumerate() {
         if !garments[g].opaque {
             continue;
         }
-        let inner: Vec<usize> = order.iter().copied().filter(|&k| garments[k].opaque && garments[k].depth < garments[g].depth).collect();
+        let inner: Vec<usize> = order[..at].iter().copied().filter(|&k| garments[k].opaque).collect();
         if inner.is_empty() {
             continue;
         }
@@ -1186,6 +1248,17 @@ pub fn check(opts: &Options) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewinding_reverses_faces_and_normals_and_keeps_the_rest() {
+        let text = "# cape\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\nusemtl cloth\nf 1/1/1 2/1/1 3/1/1\nf 1 2 3 4\n";
+        let out = rewind_obj(text);
+        assert_eq!(out, "# cape\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn -0 -0 -1\nusemtl cloth\nf 3/1/1 2/1/1 1/1/1\nf 4 3 2 1\n");
+        let garment = [[0.0, 0.0, 0.1], [0.1, 0.0, 0.1], [0.0, 0.1, 0.1]];
+        let normals = vertex_normals(&garment, &[[0, 1, 2]]);
+        let reversed = vertex_normals(&garment, &[[2, 1, 0]]);
+        assert!(normals[0][2] > 0.9 && reversed[0][2] < -0.9, "reversing a face turns its normal round");
+    }
 
     #[test]
     fn the_cap_covers_the_skin_under_the_hair_and_the_colour_ignores_clear_pixels() {

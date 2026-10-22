@@ -487,7 +487,8 @@ gazeforge wearable attach --store DIR --spec FILE --obj SOLID.obj|.glb --bone NA
   frame, placed on any character at its modelled size (or scaled with the bone), weighted wholly to that bone.
 
 When worn, each item is pushed out of the body (opaque items), layered over the items under it (by its `layer`, or
-MakeHuman's `z_depth` when it has none: lower is closer to the skin), and the body it covers is left out unless
+MakeHuman's `z_depth` when it has none: lower is closer to the skin; on equal depths the item listed later in the spec
+is outer), and the body it covers is left out unless
 `hide_body` is false. Near its open edges (`opening_m`, default 6 cm, 0 off) an opaque item fitted to the body takes
 on the skin weights of the body beyond them, so a cuff follows a bent hand and a collar a turned head. `export-glb` writes every item textured (colour,
 normal, occlusion packed into the metallic-roughness texture; alpha cards as a mask) on every level of detail, decimated
