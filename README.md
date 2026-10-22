@@ -524,11 +524,16 @@ In both Body shape panels a hair item has a **Strands** switch (undoable like ev
 `gazeforge.groom/1`: strands, length, part left / right / centre / none, droop, curl, clumps, frizz, colour, seed) grows
 strands on the scalp of the character exported - roots sampled over the head's scalp region, so the same groom fits
 every head - combed away from the part, kept outside the head and body and off the face, and writes them into the
-`--strands` file. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
+`--strands` file. A groom can also have shorter sides with a fade (`sides_m`, `fade_m`), a top combed back, forward
+or up into a quiff (`direction`, `lift`), a ponytail (`tie` low or high), a straight or curtain fringe (`fringe`,
+`fringe_m`), face-framing layers (`frame_m`), a hairline set by the face's proportions (`forehead`), and ombre and
+highlights (`tip_colour`, `highlights`, `highlight_colour`); eleven ready styles (short, bob, long, wavy, curly,
+ponytail, buzz cut, crop, undercut, quiff, slick back) set the cut in one step. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
 hair** section to turn it on and set it, the stitch preview draws it, and an export with `--strands` grows it.
 A groom becomes game hair with `groom cards --store DIR --spec FILE --base BASE_OBJ [--groom GROOM.json]
 [--cards 600] [--atlas 1024]` (or the "Make game hair cards from a groom" task): its strands are grouped by shape,
-each group becomes a card along its mean strand, a strand texture is painted in the groom's colour, and the cards are
+each group becomes a card along its mean strand, a strand texture is painted in the groom's colours (root to tip,
+with highlight columns for highlighted locks), and the cards are
 stored as a double-sided hair wearable bound to the character like any garment - wear it like MakeHuman hair, on
 every level of detail (the far levels get fewer, wider cards made from the same strands), with spring-bone
 physics if you like.
