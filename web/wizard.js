@@ -72,6 +72,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const ctx = await prepare();
     W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: ctx.values });
     W.prepared = await ctx.after(W.state.dir);
+    if (W.prepared?.character) W.state = await api("wizards.state", { run: W.state.run });
     W.at = 0;
     box.querySelector(".wz-title").textContent = tr(`wizard.${W.def.id}.title`, null, W.def.title);
     render();
@@ -301,5 +302,10 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   box.querySelector(".wz-next").addEventListener("click", () => { W.at++; render(); });
   box.querySelector(".wz-back").addEventListener("click", () => { W.at--; render(); });
   box.querySelector(".wz-home").addEventListener("click", () => { clearTimeout(W.polling); W.def = null; W.state = null; open().catch((e) => fail(e)); });
-  return { open, close, state: () => W };
+  async function openTask(id) {
+    box.classList.remove("hidden");
+    await begin(id);
+  }
+
+  return { open, openTask, close, state: () => W };
 }

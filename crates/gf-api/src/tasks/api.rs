@@ -256,7 +256,10 @@ pub fn options(input: &Value) -> Options {
     for (key, value) in input.as_object().into_iter().flatten() {
         let text = match value {
             Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
+            Value::Number(n) => match n.as_f64() {
+                Some(x) if n.is_f64() && x.fract() == 0.0 && x.abs() < 9.0e15 => format!("{}", x as i64),
+                _ => n.to_string(),
+            },
             other => other.to_string(),
         };
         out.insert(key.replace('_', "-"), text);
@@ -543,6 +546,16 @@ mod tests {
         for key in INTEGERS.iter().chain(NUMBERS).chain(ANY) {
             assert!(!key.contains('_'));
         }
+    }
+
+    #[test]
+    fn a_whole_float_reaches_a_command_as_a_whole_number() {
+        let o = options(&json!({"cards": 300.0, "frizz_m": 0.5, "strands_count": 7, "big": 1e20, "name": "x"}));
+        assert_eq!(o["cards"], "300");
+        assert_eq!(o["frizz-m"], "0.5");
+        assert_eq!(o["strands-count"], "7");
+        assert_eq!(o["big"], json!(1e20).to_string(), "a float too big to be a whole number keeps its own form");
+        assert_eq!(o["name"], "x");
     }
 
     #[test]

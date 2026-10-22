@@ -1382,6 +1382,7 @@ function makeApi(panelId) {
     poseExtraMesh: (id, rotation, centre) => { const ok = V.poseExtra(String(id), rotation || null, centre || null); request(false); return ok; },
     setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
     pushUndo,
+    tasks: { open: (id) => D.wizards.openTask(id) },
     requestRender: () => request(false),
     grid: gridApi(),
     eyes: { get: () => (D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null), set: setEyeballs, rig: () => D.eyerig, placed: () => D.eyesPlaced, hasEyes: () => !!D.eyeBase?.length,
@@ -1900,7 +1901,7 @@ function wireTasks() {
       if (!store || !D.base) return { project: P.name || "untitled", values: store ? { store } : {}, after: async () => ({}) };
       return {
         project: P.name || "untitled",
-        values: { store, ...D.base },
+        values: { store, ...D.base, ...(opt("macro") ? { macro: opt("macro") } : {}) },
         after: async (dir) => {
           const spec = `${dir}/character.gfchar.json`;
           const input = { ...settleInput(), out: spec };

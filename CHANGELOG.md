@@ -17,6 +17,8 @@ open, with its last measurement, rather than left out.
   single-sided cards): deterministic, binding back within 0.01 mm, faces outward, worn and exported on six levels
   with a masked double-sided material, strands traced back from the cards. Known: the far card sets and the scalp cap
   ride the body's skin weights, not the spring chains.
+- **Make game hair cards from the Grown hair section.** A button in both Body shape panels opens the task for the
+  current character, with the store, the macro and the character already filled in.
 - **Groom cards have a scalp under them.** A cap over the head's scalp skin region (lifted 1.5 mm, decimated to
   700 vertices on the head's own UVs) rides with the near cards, painted in the atlas's eighth column: opaque hair
   where the scalp weight is full, fading in streaks where it falls, so no bare skin shows between cards and the
@@ -242,6 +244,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Tasks that work on "the character it was modelled on" did not get it.** In both clients, Fit a garment, Attach a
+  solid and Make game hair cards opened with that field empty: the current character is saved into the run after
+  the run starts, and the run's values never named it. A run now takes the character saved into it as its spec,
+  and the macro definition the client was opened with fills the Macro field. Integer fields from the studio's task
+  form reached commands as `300.0` and were refused; they are sent as integers, and the API turns a whole-valued
+  number into a whole number for every command.
 - **Grown hair no longer strays under the jaw or flies off the temples.** Strands from the front of the part slid
   down the forehead, along the face's edge and in under the chin (49 of 20000). While on the head, each step now turns
   halfway back to the comb direction, so front hair keeps combing back; a strand that leaves the head above the ears

@@ -7,6 +7,7 @@ use crate::error::ApiError;
 use crate::{Ctx, Kind, check_input, find, jobs, project};
 
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
+pub const SAVED_CHARACTER: &str = "character.gfchar.json";
 
 pub fn definitions() -> Vec<Value> {
     vec![setup(), build_base(), lods(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), groom_cards(), attach_solid(), check(), lids(), macros()]
@@ -176,7 +177,7 @@ fn bind_garment() -> Value {
                  {"name": "spec", "label": "The character it was modelled on (spec)", "bind": "$run.spec", "common": true},
                  {"name": "obj", "label": "Garment .obj", "common": true},
                  {"name": "base", "label": "MakeHuman base.obj", "common": true},
-                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "macro", "label": "Macro definition", "bind": "$run.macro", "common": true},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
                  {"name": "name", "label": "Name"},
                  {"name": "double_sided", "label": "Both faces (hair cards, thin sheets)"},
@@ -198,7 +199,7 @@ fn attach_solid() -> Value {
                  {"name": "spec", "label": "The character it was modelled on (spec)", "bind": "$run.spec", "common": true},
                  {"name": "obj", "label": "Solid .obj", "common": true},
                  {"name": "bone", "label": "Bone", "common": true},
-                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "macro", "label": "Macro definition", "bind": "$run.macro", "common": true},
                  {"name": "rig", "label": "Rig"},
                  {"name": "scale", "label": "Scale"},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
@@ -220,7 +221,7 @@ fn groom_cards() -> Value {
                  {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "spec", "label": "Character with the groom (spec)", "bind": "$run.spec", "common": true},
                  {"name": "base", "label": "MakeHuman base.obj", "common": true},
-                 {"name": "macro", "label": "Macro definition", "common": true},
+                 {"name": "macro", "label": "Macro definition", "bind": "$run.macro", "common": true},
                  {"name": "groom", "label": "Groom file (instead of the character's own)"},
                  {"name": "cards", "label": "Cards"},
                  {"name": "atlas", "label": "Texture size (px)"},
@@ -677,7 +678,11 @@ fn finish_job(ctx: &Ctx, dir: &Path, id: &str) -> Result<(), ApiError> {
 }
 
 fn state_of(ctx: &Ctx, dir: &Path) -> Result<Value, ApiError> {
-    let run = read_json(&dir.join("run.json")).ok_or_else(|| ApiError::internal(format!("{}: the run record does not read", dir.display())))?;
+    let mut run = read_json(&dir.join("run.json")).ok_or_else(|| ApiError::internal(format!("{}: the run record does not read", dir.display())))?;
+    let saved = dir.join(SAVED_CHARACTER);
+    if run["values"]["spec"].is_null() && saved.is_file() {
+        run["values"]["spec"] = json!(saved.display().to_string());
+    }
     let w = definition(run["wizard"].as_str().unwrap_or_default())?;
     let mut done: Map<String, Value> = Map::new();
     let mut rows = Vec::new();
@@ -852,6 +857,24 @@ mod tests {
         assert_eq!(resolve(&json!("=left"), &run, &steps, "D").unwrap(), json!("left"));
         assert_eq!(resolve(&json!("$run.store"), &run, &steps, "D").unwrap(), json!("S"));
         assert!(resolve(&json!("$run.missing"), &run, &steps, "D").is_none());
+    }
+
+    #[test]
+    fn the_character_a_client_saved_into_the_run_is_the_runs_spec() {
+        let root = std::env::temp_dir().join(format!("gf-wizard-saved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.clone() };
+        let s = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"store": "S", "macro": "M"}})).unwrap();
+        assert!(s["steps"][0]["proposed"].get("spec").is_none(), "nothing saved yet: {}", s["steps"][0]["proposed"]);
+        assert_eq!(s["steps"][0]["proposed"]["macro"], "M");
+        let saved = PathBuf::from(s["dir"].as_str().unwrap()).join(SAVED_CHARACTER);
+        std::fs::write(&saved, "{}").unwrap();
+        let s = state(&ctx, &json!({"run": s["run"]})).unwrap();
+        assert_eq!(Path::new(s["steps"][0]["proposed"]["spec"].as_str().unwrap()), saved.as_path());
+        let given = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"store": "S", "spec": "mine.gfchar.json"}})).unwrap();
+        std::fs::write(PathBuf::from(given["dir"].as_str().unwrap()).join(SAVED_CHARACTER), "{}").unwrap();
+        assert_eq!(state(&ctx, &json!({"run": given["run"]})).unwrap()["steps"][0]["proposed"]["spec"], "mine.gfchar.json", "a spec given at the start wins");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

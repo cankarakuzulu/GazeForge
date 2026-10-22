@@ -194,6 +194,11 @@ function mount(root, api) {
     });
     groomInputs.set('colour', { input: colour });
     out.push(el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.groom_colour') }), colour]));
+    const cards = el('button', { type: 'button', 'data-groom': 'cards', text: tr('body.groom_cards'), title: tr('body.groom_cards_tip') });
+    cards.addEventListener('click', () => {
+      api.tasks.open('groom_cards').catch((e) => { note.textContent = tr('body.groom_cards_failed', { error: e && e.message ? e.message : e }); });
+    });
+    out.push(cards);
     groomBox.replaceChildren(...out);
   }
 

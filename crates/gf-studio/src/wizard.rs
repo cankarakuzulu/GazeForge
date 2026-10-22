@@ -53,7 +53,7 @@ fn load_png(path: &str) -> Option<egui::ColorImage> {
 
 pub fn run_values(world: &crate::world::World) -> Value {
     match &world.session {
-        Some(s) => json!({"store": s.store, "pack": s.pack, "catalog": s.catalog, "game": s.game}),
+        Some(s) => json!({"store": s.store, "pack": s.pack, "catalog": s.catalog, "game": s.game, "macro": s.macro_file}),
         None => json!({}),
     }
 }
@@ -100,15 +100,16 @@ impl Wizards {
     pub fn start(&mut self, id: &str, values: Value, character: Option<Value>, project: &str) -> Result<(), String> {
         let store = values["store"].as_str().unwrap_or_default().to_string();
         let def = call("wizards.get", json!({"id": id}))?;
-        let state = call("wizards.start", json!({"wizard": id, "project": project, "values": values}))?;
+        let mut state = call("wizards.start", json!({"wizard": id, "project": project, "values": values}))?;
         let dir = PathBuf::from(state["dir"].as_str().unwrap_or_default());
         let mut prepared = Map::new();
         if let Some(mut input) = character {
-            let spec = dir.join("character.gfchar.json").display().to_string();
+            let spec = dir.join(gf_api::wizards::SAVED_CHARACTER).display().to_string();
             input["out"] = json!(spec);
             input.as_object_mut().map(|o| o.remove("uvs"));
             call("designer.save", input)?;
             prepared.insert("character".into(), json!({"store": store, "spec": spec}));
+            state = call("wizards.state", json!({"run": state["run"]}))?;
         }
         prepared.insert("export".into(), json!({"out": dir.join("export.glb").display().to_string()}));
         self.def = Some(def);
@@ -206,7 +207,8 @@ impl Wizards {
             let structured = t.starts_with('{') || t.starts_with('[');
             let v = match schema["type"].as_str() {
                 _ if schema["enum"].is_array() => json!(t),
-                Some("number") | Some("integer") => json!(t.parse::<f64>().map_err(|_| trf("wizard.not_number", &[("field", &name), ("text", &t)]))?),
+                Some("integer") => json!(t.parse::<i64>().map_err(|_| trf("wizard.not_number", &[("field", &name), ("text", &t)]))?),
+                Some("number") => json!(t.parse::<f64>().map_err(|_| trf("wizard.not_number", &[("field", &name), ("text", &t)]))?),
                 Some("object") | Some("array") => gf_api::exactjson::text(&t).map_err(|e| trf("wizard.not_json", &[("field", &name), ("text", &e)]))?,
                 None if structured => gf_api::exactjson::text(&t).map_err(|e| trf("wizard.not_json", &[("field", &name), ("text", &e)]))?,
                 None => gf_api::exactjson::text(&t).unwrap_or(json!(t)),

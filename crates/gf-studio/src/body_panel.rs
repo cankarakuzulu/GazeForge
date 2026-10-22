@@ -559,6 +559,7 @@ impl crate::studio::Studio<'_> {
             let mut groom_on = groom.is_some();
             let mut groom_toggle = None;
             let mut groom_commit: Option<(String, Value)> = None;
+            let mut groom_cards = false;
             if ui.checkbox(&mut groom_on, tr("body.groom_on")).on_hover_text(tr("body.groom_on_tip")).changed() {
                 groom_toggle = Some(groom_on);
             }
@@ -604,6 +605,9 @@ impl crate::studio::Studio<'_> {
                 {
                     ui_state.groom_colour = None;
                     groom_commit = Some(("colour".into(), json!(format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))));
+                }
+                if ui.button(tr("body.groom_cards")).on_hover_text(tr("body.groom_cards_tip")).clicked() {
+                    groom_cards = true;
                 }
             }
             ui.separator();
@@ -665,6 +669,13 @@ impl crate::studio::Studio<'_> {
                 && let Err(e) = self.world.body_groom_set(&key, value)
             {
                 self.world.body_ui.error = Some(e);
+            }
+            if groom_cards {
+                let slot = self.world.project.slot();
+                match self.s.wizards.start("groom_cards", crate::wizard::run_values(self.world), self.world.settle_input(), &slot) {
+                    Ok(()) => self.s.wizards.open = true,
+                    Err(e) => self.world.body_ui.error = Some(e),
+                }
             }
             if reset {
                 self.world.body_reset();
