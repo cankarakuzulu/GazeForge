@@ -73,7 +73,33 @@ pub struct Rig {
     pub animations: Vec<Animation>,
 }
 
+impl Lod {
+    pub fn scale(&mut self, s: f32) {
+        for p in self.positions.iter_mut().chain(self.morphs.iter_mut().flat_map(|m| m.positions.iter_mut())) {
+            *p = p.map(|x| x * s);
+        }
+    }
+}
+
+impl PartMesh {
+    pub fn scale(&mut self, s: f32) {
+        for p in self.positions.iter_mut() {
+            *p = p.map(|x| x * s);
+        }
+        self.translation = self.translation.map(|x| x * s);
+    }
+}
+
 impl Rig {
+    pub fn scale(&mut self, s: f32) {
+        for g in self.global.iter_mut().chain(self.attachments.iter_mut().flat_map(|a| a.positions.iter_mut())) {
+            *g = g.map(|x| x * s);
+        }
+        for c in self.animations.iter_mut().flat_map(|a| a.channels.iter_mut()) {
+            c.translation = c.translation.map(|t| t.map(|x| x * s));
+        }
+    }
+
     pub fn local(&self) -> Vec<[f32; 3]> {
         (0..self.names.len())
             .map(|j| match self.parents[j] {

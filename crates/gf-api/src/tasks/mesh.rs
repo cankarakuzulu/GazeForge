@@ -1167,13 +1167,16 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
     let bake_settings = super::bake::settings(opts)?;
     let strand_settings = super::strands::settings(opts)?;
+    if strand_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
+        return Err("--strands goes with --format glb: the strands are written in the glb's frame, and a .vrm folds the root's scale into its meshes".into());
+    }
     if strand_settings.is_some() && !opts.contains_key("body") && spec.body.is_none() {
         return Err("--strands traces the hair a character wears, and this one wears none (no body)".into());
     }
     let mut strand_groups: Vec<(String, Vec<super::strands::Strand>)> = Vec::new();
     let mut strand_rows: Vec<Value> = Vec::new();
     if bake_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
-        return Err("--bake goes with --format glb: the .vrm leaves GAZEFORGE_physics out (its colliders are placed for the A-pose rest)".into());
+        return Err("--bake goes with --format glb: a .vrm carries its spring chains as VRMC_springBone for the reader to simulate".into());
     }
     let vrm_meta: Option<Value> = match opts.get("format").map(String::as_str).unwrap_or("glb") {
         "glb" => {
@@ -2292,7 +2295,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
     }
     crate::jobs::progress("write", 0, 1, "glb");
-    let root = world.map(|w| {
+    let mut root = world.map(|w| {
         let t = w.translation_for_origin();
         let q = w.quaternion();
         gltf::Root { name: "Character".into(), translation: [t[0], t[2], -t[1]], rotation: [q[0], q[2], -q[1], q[3]], scale: w.scale }
@@ -2344,10 +2347,39 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         lods.truncate(1);
         body_lods.retain(|l| l.name.ends_with("_LOD0") || !l.name.contains("_LOD"));
         let mut meshes: Vec<&mut Lod> = lods.iter_mut().chain(body_lods.iter_mut()).collect();
-        vrm_report = super::vrm::tpose(rig, &turns, &mut meshes);
+        let mut ends: Vec<(usize, [f64; 3])> = Vec::new();
+        if let Some(ext) = &physics_ext {
+            for c in ext["colliders"].as_array().into_iter().flatten() {
+                let j = c["joint"].as_u64().unwrap_or(0) as usize;
+                for key in ["head", "tail"] {
+                    ends.push((j, c[key].as_array().map(|a| [0, 1, 2].map(|k| a[k].as_f64().unwrap_or(0.0))).unwrap_or([0.0; 3])));
+                }
+            }
+        }
+        vrm_report = super::vrm::tpose(rig, &turns, &mut meshes, &mut ends);
         vrm_bones = map.iter().filter_map(|(p, b)| super::vrm::vrm_bone(p).map(|v| (v, b.clone()))).collect();
-        if physics_ext.take().is_some() {
-            vrm_report["physics"] = json!("GAZEFORGE_physics is left out of the .vrm: its colliders are placed for the A-pose rest (VRMC_springBone is not written yet)");
+        let s = root.as_ref().map_or(1.0, |r| r.scale);
+        if let Some(ext) = physics_ext.as_mut() {
+            for (k, c) in ext["colliders"].as_array_mut().into_iter().flatten().enumerate() {
+                c["head"] = json!(ends[2 * k].1.map(|x| (x * s) as f32));
+                c["tail"] = json!(ends[2 * k + 1].1.map(|x| (x * s) as f32));
+                c["radius"] = json!((c["radius"].as_f64().unwrap_or(0.0) * s) as f32);
+            }
+            let hit = ext["spring_defaults"]["hit_radius_m"].as_f64().unwrap_or(0.02);
+            ext["spring_defaults"]["hit_radius_m"] = json!(hit * s);
+        }
+        if s != 1.0 {
+            for m in meshes.iter_mut() {
+                m.scale(s as f32);
+            }
+            rig.scale(s as f32);
+            for p in eye_parts.iter_mut() {
+                p.scale(s as f32);
+            }
+            if let Some(r) = root.as_mut() {
+                r.scale = 1.0;
+            }
+            vrm_report["scale_folded"] = json!({"root_scale_was": s, "meaning": "the Character root's scale is folded into the meshes, morphs, joints, eyes, animation translations and physics lengths, so the .vrm has scale 1 everywhere: VRM readers differ on whether collider and joint radii follow node scale (three-vrm 3.3.3 does not, Godot's does)"});
         }
     }
     let (bytes, report) = gltf::glb_with_root(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r).or(body_gltf_rig.as_ref()), &eye_parts, &materials, root.as_ref())?;
@@ -2388,10 +2420,19 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(meta) => {
             let mut made = Value::Null;
             let out_bytes = gltf::with_document(&bytes, |doc| {
-                let (ext, report) = super::vrm::extension(doc, &vrm_bones, meta.clone(), "Head_LOD0", &glb_names)?;
+                let (ext, mut report) = super::vrm::extension(doc, &vrm_bones, meta.clone(), "Head_LOD0", &glb_names)?;
                 doc["extensions"]["VRMC_vrm"] = ext;
                 let mut used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
                 used.push(json!("VRMC_vrm"));
+                if let Some((springs, spring_report)) = super::vrm::spring_bone(doc)? {
+                    doc["extensions"]["VRMC_springBone"] = springs;
+                    used.push(json!("VRMC_springBone"));
+                    report["spring_bone"] = spring_report;
+                }
+                if let Some(e) = doc["extensions"].as_object_mut() {
+                    e.remove("GAZEFORGE_physics");
+                }
+                used.retain(|u| u != "GAZEFORGE_physics");
                 doc["extensionsUsed"] = json!(used);
                 made = report;
                 Ok(())

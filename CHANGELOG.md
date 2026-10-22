@@ -37,8 +37,15 @@ open, with its last measurement, rather than left out.
   character's own skinning (the rest of the body as exported), `VRMC_vrm` with the meta, the humanoid bones and
   expression presets from the ARKit-named face morphs. Verified with three.js + `@pixiv/three-vrm` 3.3.3 in Chrome
   (`tools/diag/vrm_reader_check.mjs`, not shipped): VRM 1.0, all required bones, arms level to 0.00001 degrees in the
-  world, `aa` drives its morph to 1, no metallic mesh. The physics data and coarser levels are left out; spring bones
-  in VRM (`VRMC_springBone`) are not written yet.
+  world, `aa` drives its morph to 1, no metallic mesh. The coarser levels and cloth are left out.
+- **Spring bones in VRM.** `--format vrm` writes the spring-bone chains as `VRMC_springBone` 1.0 (body capsules moved
+  into the T-pose with the arms and fitted per chain, one spring and collider group per chain) and leaves
+  `GAZEFORGE_physics` out of the `.vrm`. The `.vrm` now has scale 1 everywhere: the Character root's scale is folded
+  into meshes, morphs, joints, eyes and animation translations (three-vrm 3.3.3 takes collider radii unscaled, Godot
+  scales them). Verified with three-vrm in Chrome (`tools/diag/vrm_spring_check.mjs`, `vrm_world_compare.mjs`, not
+  shipped): settled tips equal to the bake's (0.001 mm without contact, within 0.2 mm with), the capsules hold the hair
+  in a 60-degree head turn (10.9 mm against 49.7 mm without), world positions unchanged by the fold (0.0001 mm, 13
+  morphs), animation translations scaled exactly. `--strands` and `--bake` are refused with `--format vrm`.
 - **The face rig on the body.** `--rig head|face|face2` now works together with `--body-rig`: one skeleton, the body's
   bones first (indices unchanged), the face joints under the body's head bone; the preset's jaw and eyes are taken over
   by the face rig, its other bones under the head are left out with their weights folded into their nearest kept
