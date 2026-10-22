@@ -519,7 +519,7 @@ strand and point it reads is the one written, every point lies on the glb's card
 the cards match them in shape and colour. Limits: they are the cards' strands, layered like the cards (a layer's edge
 can show as a ledge where the card would fade out); where cards fan out wide over the crown, 20000 strands cover it
 more thinly than the painted cards (about 100000 come close); widths are fixed (0.08 mm at the root to 0.02 mm).
-Strands for Unreal (Alembic), strands turned back into game cards, and grooms made from scratch come later.
+In both Body shape panels a hair item has a **Strands** switch (undoable like every edit): the stitch preview then draws it as 4000 strands (ribbons 1.2 mm wide, in its average hair colour) in place of its cards, and `--strands` traces the items it is on (every hair when it is on for none). Strands for Unreal (Alembic), strands turned back into game cards, and grooms made from scratch come later.
 
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
 --bake CLIP` on a file already exported, or the "Bake hair physics into a glb" task) simulates the spring chains offline

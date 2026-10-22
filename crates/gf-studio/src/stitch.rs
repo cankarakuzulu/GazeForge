@@ -22,6 +22,7 @@ pub struct WearMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    pub color: Option<[f32; 3]>,
 }
 
 pub struct StitchMesh {
@@ -94,6 +95,7 @@ fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
             positions: floats(&w["positions"], "wearable positions")?,
             normals: floats(&w["normals"], "wearable normals")?,
             indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+            color: w["color"].as_array().filter(|c| c.len() == 3).map(|c| [0, 1, 2].map(|k| c[k].as_f64().unwrap_or(0.5) as f32)),
         });
     }
     Ok(StitchMesh {
@@ -284,7 +286,7 @@ impl World {
         };
         self.set_extra("stitch-body", body);
         let wear: Vec<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])> = match &self.stitch.last {
-            Some(m) if visible => m.wearables.iter().enumerate().map(|(i, w)| (w.positions.clone(), w.normals.clone(), w.indices.clone(), WEAR[i % WEAR.len()])).collect(),
+            Some(m) if visible => m.wearables.iter().enumerate().map(|(i, w)| (w.positions.clone(), w.normals.clone(), w.indices.clone(), w.color.unwrap_or(WEAR[i % WEAR.len()]))).collect(),
             _ => Vec::new(),
         };
         let drawn = wear.len();

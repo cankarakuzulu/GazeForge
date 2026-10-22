@@ -813,6 +813,7 @@ impl Offscreen {
                     "opening" => w.body_wear_opening(text("asset").ok_or("body opening needs asset")?, num("metres").ok_or("body opening needs metres (0 to 0.2)")?)?,
                     "coarse" => w.body_wear_coarse(text("asset").ok_or("body coarse needs asset")?, num("value"))?,
                     "cap" => w.body_wear_cap(text("asset").ok_or("body cap needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
+                    "strands" => w.body_wear_strands(text("asset").ok_or("body strands needs asset")?, step.get("on").and_then(Value::as_bool).unwrap_or(true)),
                     "reset" => w.body_reset(),
                     "summary" => false,
                     other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, opening, coarse, cap, reset or summary, got {other}")),

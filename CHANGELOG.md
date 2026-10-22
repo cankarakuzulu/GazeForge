@@ -15,7 +15,11 @@ open, with its last measurement, rather than left out.
   texture in linear colour, shared out by opaque card area in 3D). Verified with Blender 5.2's USD importer
   (`tools/diag/strands_blender_check.py`, not shipped): counts identical, every point on the glb's cards within 0.37 mm
   (ponytail) and 0.03 mm (long hair), renders beside the cards. Limits: layered like the cards; thinner than the cards
-  over a long hair's crown at 20000 strands; fixed widths.
+  over a long hair's crown at 20000 strands; fixed widths. A **Strands** switch per hair item in both Body shape
+  panels (spec `body.wearables[].strands`, undo/redo, studio script op `body do=strands`): the stitch preview
+  (`character.stitch` with `return_mesh`, new `strands_preview` count) draws that item as strand ribbons in its hair
+  colour, and `--strands` traces only the items it is on. Gates: the studio undo gate with the switch (19 edits),
+  the browser wearables gate (off, on, undo, redo; absent on opaque items), pseudo-locale scan clean.
 - **Baked spring-bone physics.** `export-glb --bake sway|ANIMATION [--bake-format bones|vertex] [--bake-fps 30]`, the
   same as `wearable bake --glb IN --out OUT` on an exported file, and the "Bake hair physics into a glb" task: the
   chains of wearables worn with spring bones are simulated offline (VRM's spring bone against the body's capsules, 60 Hz,

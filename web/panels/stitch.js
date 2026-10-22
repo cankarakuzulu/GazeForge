@@ -117,7 +117,7 @@ function mount(root, api) {
     if (!visible) api.setExtraMesh('stitch-body', null);
     else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
     const wear = visible ? last.wearables : [];
-    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: WEAR_COLORS[i % WEAR_COLORS.length], label: w.name }));
+    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name }));
     for (let i = wear.length; i < drawnWear; i++) api.setExtraMesh(`wear-${i}`, null);
     drawnWear = wear.length;
     if (!last || !state.seam || stale) api.setOverlay('stitch-seam', null);
@@ -154,6 +154,7 @@ function mount(root, api) {
         positions: new Float32Array(bytes(w.positions)),
         normals: new Float32Array(bytes(w.normals)),
         indices: new Uint32Array(bytes(w.indices)),
+        color: Array.isArray(w.color) ? w.color : null,
       })),
       values: { ...state.values },
     };

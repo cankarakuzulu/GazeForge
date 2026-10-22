@@ -336,6 +336,45 @@ pub fn from_cards(positions: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::
     (strands, report)
 }
 
+pub fn rank_on(surface: &super::wearable::Surface, positions: &[Point], triangles: &[[u32; 3]]) -> (Vec<f64>, usize) {
+    let seed: Vec<bool> = positions.iter().map(|&p| surface.nearest(p, 0.1).is_some_and(|j| super::wearable::pin_weight(surface.signed(p, j)) >= super::wearable::PINNED)).collect();
+    let roots = seed.iter().filter(|&&s| s).count();
+    (super::wearable::mesh_distances(positions, triangles, &seed).0, roots)
+}
+
+pub fn ribbons(strands: &[Strand], width: f64, centre: Point) -> (Vec<Point>, Vec<Point>, Vec<[u32; 3]>) {
+    let (mut positions, mut normals, mut triangles) = (Vec::new(), Vec::new(), Vec::new());
+    let sub = |a: Point, b: Point| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let cross = |a: Point, b: Point| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let unit = |a: Point| {
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        if l < 1e-12 { a } else { a.map(|x| x / l) }
+    };
+    for s in strands {
+        let n = s.points.len();
+        if n < 2 {
+            continue;
+        }
+        let first = positions.len() as u32;
+        for i in 0..n {
+            let tangent = unit(sub(s.points[(i + 1).min(n - 1)], s.points[i.saturating_sub(1)]));
+            let side = unit(cross(tangent, sub(s.points[i], centre)));
+            let normal = unit(cross(side, tangent));
+            let half = width / 2.0 * (1.0 - 0.7 * i as f64 / (n - 1) as f64);
+            for k in [-1.0, 1.0] {
+                positions.push(std::array::from_fn(|j| s.points[i][j] + k * half * side[j]));
+                normals.push(normal);
+            }
+        }
+        for i in 0..n as u32 - 1 {
+            let (a, b, c, d) = (first + 2 * i, first + 2 * i + 1, first + 2 * i + 2, first + 2 * i + 3);
+            triangles.push([a, b, c]);
+            triangles.push([b, d, c]);
+        }
+    }
+    (positions, normals, triangles)
+}
+
 fn num(x: f64) -> String {
     let s = format!("{x:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');

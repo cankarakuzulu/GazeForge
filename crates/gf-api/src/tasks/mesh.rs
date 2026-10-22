@@ -244,7 +244,7 @@ fn level_target(n: usize, body: usize, body0: usize, level: usize, power: f64) -
     (n as f64 * ratio.powf(p)).round() as usize
 }
 
-fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize], power: f64) -> Vec<GarmentLevel> {
+pub fn garment_triangles(item: &gf_io::wearable_store::Wearable, garment: &[Point]) -> (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) {
     let mut triangles = Vec::new();
     let mut uvs: Vec<[gf_geom::Uv; 3]> = Vec::new();
     let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
@@ -260,6 +260,12 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
             uvs.push(if textured { [uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)] } else { [stand_in(f[0].0), stand_in(f[k].0), stand_in(f[k + 1].0)] });
         }
     }
+    (triangles, uvs)
+}
+
+fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], body_counts: &[usize], power: f64) -> Vec<GarmentLevel> {
+    let (triangles, uvs) = garment_triangles(item, garment);
+    let textured = item.faces.iter().all(|f| f.iter().all(|c| c.1.is_some())) && !item.uvs.is_empty();
     let n = garment.len();
     let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
     let cards = if item.manifest.transparent { card_levels(garment, &triangles, &uvs, body_counts, power) } else { None };
@@ -1726,7 +1732,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             }
             let coarse_power = w.coarse_power.unwrap_or(if item.manifest.transparent { gf_core::body_shape::COARSE_POWER_CARDS } else { 1.0 });
             let scalp_cap = item.manifest.transparent && item.manifest.attach.is_none() && w.scalp_cap.unwrap_or(true);
-            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power, "scalp_cap": scalp_cap,
+            let row = json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "physics": w.physics, "layer": w.layer, "opening_m": w.opening_m, "coarse_power": coarse_power, "scalp_cap": scalp_cap, "strands": w.strands,
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
@@ -1894,8 +1900,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     && let Some(st) = &strand_settings
                 {
                     let mut hairs = Vec::new();
-                    for ((item, _, _, ladder, _), positions) in worn.iter().zip(&placed) {
-                        if !item.manifest.transparent || item.manifest.attach.is_some() {
+                    let chosen = worn.iter().any(|w| w.4["strands"] == true);
+                    for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
+                        if !item.manifest.transparent || item.manifest.attach.is_some() || (chosen && row["strands"] != true) {
                             continue;
                         }
                         let Some((w, h, rgba)) = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok()) else {
@@ -1909,11 +1916,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     for (k, (name, positions, lod, (w, h, rgba), area)) in hairs.iter().enumerate() {
                         let count = if total > 0.0 { ((area / total) * st.count as f64).round().max(1.0) as usize } else { 0 };
                         let tex = super::strands::Texture { width: *w, height: *h, rgba };
-                        let seed: Vec<bool> = positions.iter().map(|&p| surface.nearest(p, 0.1).is_some_and(|j| super::wearable::pin_weight(surface.signed(p, j)) >= super::wearable::PINNED)).collect();
-                        let rank = super::wearable::mesh_distances(positions, &lod.1, &seed).0;
+                        let (rank, roots) = super::strands::rank_on(&surface, positions, &lod.1);
                         let (strands, mut row) = super::strands::from_cards(positions, &lod.1, &lod.2, &tex, count, st.points, st.seed.wrapping_add(k as u64), &rank);
                         row["wearable"] = json!(name);
-                        row["root_vertices"] = json!(seed.iter().filter(|&&s| s).count());
+                        row["root_vertices"] = json!(roots);
                         strand_rows.push(row);
                         strand_groups.push((name.clone(), strands));
                     }
@@ -2361,7 +2367,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             let text = super::strands::usda(&strand_groups, root.as_ref(), &tool);
             std::fs::write(&st.out, &text).map_err(|e| format!("{}: {e}", st.out))?;
             json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
-                   "method": "per hair card piece, columns of the colour texture (fixed U) traced along V through the card's UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
+                   "traced": "the worn items with strands on, or every alpha-card item when none is", "method": "per hair card piece, lines of the colour texture traced along the piece (along V, or along U where that axis gives longer opaque runs) through the card UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
         }
         None => Value::Null,
     };

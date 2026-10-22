@@ -26,6 +26,9 @@ fn number(input: &Value, key: &str, default: f64) -> Result<f64, ApiError> {
 
 pub const DEFAULT_FINE_LODS: [usize; 3] = [24000, 8000, 3000];
 pub const DEFAULT_SUBDIVIDE: u64 = 2;
+const STRANDS_PREVIEW: u64 = 4000;
+const STRAND_PREVIEW_POINTS: usize = 12;
+const STRAND_PREVIEW_WIDTH_M: f64 = 0.0012;
 
 fn lods(input: &Value, key: &str, default: &[usize]) -> Result<Vec<usize>, ApiError> {
     match input.get(key) {
@@ -341,6 +344,7 @@ pub fn stitch_input() -> Value {
         "out_obj": {"type": "string", "description": "write the head and the stitched body as one OBJ"},
         "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
         "enforce": {"type": "boolean", "description": "fail with gate_failed when a gate fails (default true)"},
+        "strands_preview": {"type": "integer", "minimum": 1, "maximum": 50000, "description": "with return_mesh: how many strands a worn item with strands on is drawn with (default 4000; ribbons 1.2 mm wide at the root, in its average hair colour, in place of its cards)"},
         "plant": {"enum": ["gap", "crack", "crease", "flip", "penetrate"], "description": "gate self-test: plant this defect after stitching; the gates must fail"}
     });
     for (k, v) in control_props().as_object().unwrap() {
@@ -796,7 +800,24 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     crate::tasks::wearable::layer(&mut layers);
                 }
                 let mut meshes = Vec::new();
+                let strand_count = input.get("strands_preview").and_then(Value::as_u64).unwrap_or(STRANDS_PREVIEW) as usize;
                 for (w, item, p, tris) in &dressed {
+                    if w.strands && item.manifest.transparent && item.manifest.attach.is_none() {
+                        let texture = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok());
+                        if let Some((tw, th, rgba)) = texture {
+                            let (ctris, uvs) = crate::tasks::mesh::garment_triangles(item, p);
+                            let (rank, _) = crate::tasks::strands::rank_on(&surface, p, &ctris);
+                            let tex = crate::tasks::strands::Texture { width: tw, height: th, rgba: &rgba };
+                            let (strands, report) = crate::tasks::strands::from_cards(p, &ctris, &uvs, &tex, strand_count, STRAND_PREVIEW_POINTS, 1, &rank);
+                            let centre = head.iter().fold([0.0; 3], |a, q| [a[0] + q[0], a[1] + q[1], a[2] + q[2]]).map(|x| x / head.len().max(1) as f64);
+                            let (rp, rn, rt) = crate::tasks::strands::ribbons(&strands, STRAND_PREVIEW_WIDTH_M, centre);
+                            let colour = crate::tasks::wearable::hair_colour(&rgba).map(|c| c.map(|x| x / 255.0));
+                            let idx: Vec<u8> = rt.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+                            meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": false, "strands": report["strands"], "color": colour,
+                                               "positions": f32s(&rp), "normals": f32s(&rn), "indices": b64(&idx), "vertices": rp.len(), "triangles": rt.len()}));
+                            continue;
+                        }
+                    }
                     let n = crate::tasks::wearable::vertex_normals(p, tris);
                     let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
                     meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": item.manifest.transparent,

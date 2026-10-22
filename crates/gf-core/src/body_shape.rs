@@ -79,6 +79,8 @@ pub struct WearableRef {
     pub coarse_power: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scalp_cap: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strands: bool,
 }
 
 pub const COARSE_POWER_CARDS: f64 = 0.5;
@@ -314,7 +316,7 @@ mod tests {
         }
         assert!(BodySpec { genitals: "none".into(), ..ok.clone() }.canonical().genitals.is_empty());
         assert!(BodySpec { genitals: "male".into(), ..ok.clone() }.problems().is_empty());
-        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None, scalp_cap: None };
+        let worn = |asset: &str| WearableRef { asset: asset.into(), hide_body: true, physics: String::new(), layer: None, opening_m: OPENING_DEFAULT_M, coarse_power: None, scalp_cap: None, strands: false };
         let dressed = BodySpec { wearables: vec![worn(&r), worn("nope")], ..ok.clone() };
         let p = dressed.problems();
         assert!(p.iter().any(|x| x.starts_with("body.wearables[1].asset")), "{p:?}");
@@ -345,6 +347,8 @@ mod tests {
         for bad in [0.2, 1.01, f64::NAN] {
             assert!(BodySpec { wearables: vec![WearableRef { coarse_power: Some(bad), ..worn(&r) }], ..ok.clone() }.problems().iter().any(|x| x.contains("coarse_power")), "{bad}");
         }
+        assert!(!read.wearables[0].strands && !serde_json::to_string(&worn(&r)).unwrap().contains("strands"), "strands off is the default and not written");
+        assert!(serde_json::to_string(&WearableRef { strands: true, ..worn(&r) }).unwrap().contains("\"strands\":true"));
     }
 
     #[test]
