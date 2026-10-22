@@ -346,6 +346,15 @@ impl World {
         }))
     }
 
+    pub fn body_groom_style(&mut self, name: &str) -> Result<bool, String> {
+        let Some(s) = &self.session else { return Ok(false) };
+        let groom = s.character.body.get("groom").ok_or("the character has no groom: turn it on first")?;
+        let next = gf_core::groom::with_style(groom, name).ok_or_else(|| format!("{name} is not a groom style"))?;
+        Ok(self.body_edit(|b| {
+            b.insert("groom".into(), next);
+        }))
+    }
+
     pub fn body_reset(&mut self) -> bool {
         self.body_edit(|b| {
             b.remove("weights");
@@ -560,10 +569,24 @@ impl crate::studio::Studio<'_> {
             let mut groom_toggle = None;
             let mut groom_commit: Option<(String, Value)> = None;
             let mut groom_cards = false;
+            let mut groom_style: Option<String> = None;
             if ui.checkbox(&mut groom_on, tr("body.groom_on")).on_hover_text(tr("body.groom_on_tip")).changed() {
                 groom_toggle = Some(groom_on);
             }
             if let Some(g) = &groom {
+                let style = gf_core::groom::style_of(g).unwrap_or("custom");
+                let style_label = |s: &str| tr(&format!("body.groom_style.{s}")).to_string();
+                egui::ComboBox::from_label(tr("body.groom_style"))
+                    .selected_text(style_label(style))
+                    .show_ui(ui, |ui| {
+                        for &(name, _) in gf_core::groom::STYLES {
+                            if ui.selectable_label(style == name, style_label(name)).clicked() && style != name {
+                                groom_style = Some(name.to_string());
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("body.groom_style_tip"));
                 let part = g["part"].as_str().unwrap_or("centre").to_string();
                 let part_label = |p: &str| tr(&format!("body.groom_part.{p}")).to_string();
                 egui::ComboBox::from_label(tr("body.groom_part")).selected_text(part_label(&part)).show_ui(ui, |ui| {
@@ -667,6 +690,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((key, value)) = groom_commit
                 && let Err(e) = self.world.body_groom_set(&key, value)
+            {
+                self.world.body_ui.error = Some(e);
+            }
+            if let Some(name) = groom_style
+                && let Err(e) = self.world.body_groom_style(&name)
             {
                 self.world.body_ui.error = Some(e);
             }

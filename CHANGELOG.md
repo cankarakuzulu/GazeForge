@@ -18,6 +18,12 @@ open, with its last measurement, rather than left out.
   with a masked double-sided material, strands traced back from the cards. Worn with spring-bone physics, every
   level's cards follow the chains alike (mean chain weight 0.53 on LOD0-3, 0.56-0.59 on LOD4-5), so the far sets do
   not pop when the level changes; the scalp cap and hair lying on the head stay with the head.
+- **Hair styles.** The Grown hair section in both panels has a Style choice - short, bob, long, wavy, curly - that sets
+  length, droop, clumps, curl and frizz at once (one undo step) and keeps the part, colour, strands and seed; edit any
+  value after and it shows as custom. `body.sliders` serves the styles; `gf_core::groom::{STYLES, with_style,
+  style_of}`. Every style passes `groom_gate` (0 flyaways, 0 strands under the jaw, nothing inside the skin); the
+  flyaway distance now allows for the groom's curl radius (a wavy groom's hair hanging off the back of the head is
+  not a flyaway).
 - **Make game hair cards from the Grown hair section.** A button in both Body shape panels opens the task for the
   current character, with the store, the macro and the character already filled in.
 - **Groom cards have a scalp under them.** A cap over the head's scalp skin region (lifted 1.5 mm, decimated to

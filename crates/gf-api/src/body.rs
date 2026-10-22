@@ -199,7 +199,7 @@ pub fn sliders_output() -> Value {
     shape(json!({"pairs": {"type": "array"}, "compounds": {"type": "array"}, "shared_with_head": {"type": "integer"},
                  "genitals": {"type": "array", "items": {"type": "string"}, "description": "the body.genitals kinds this body can wear (empty when its pack has no helper-genital patch or its targets no helpers)"},
                  "physics": {"type": "array", "items": {"type": "string"}, "description": "the body.wearables[].physics kinds besides none (cloth: pinned cloth an engine simulates; springbone: chains of joints, for hair, ropes and capes)"},
-                 "groom": {"type": "object", "description": "body.groom: starter (the groom a client turns on), fields (each number setting's key, default, lo, hi and whether it is an integer) and parts"}}))
+                 "groom": {"type": "object", "description": "body.groom: starter (the groom a client turns on), fields (each number setting's key, default, lo, hi and whether it is an integer), parts and styles (named sets of settings a client can apply)"}}))
 }
 
 pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -240,7 +240,7 @@ pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let body: gf_io::body_store::BodyManifest = store.get_manifest("bodies", &targets.body).map_err(ApiError::not_found)?;
     let genitals: Vec<&str> = if body.files.contains_key("genital/quads.npy") && targets.helpers > 0 { bs::GENITALS.to_vec() } else { Vec::new() };
     Ok(json!({"pairs": pairs.into_values().collect::<Vec<_>>(), "compounds": compounds, "shared_with_head": shared, "genitals": genitals, "physics": bs::WEARABLE_PHYSICS,
-              "groom": {"starter": gf_core::groom::starter(), "parts": gf_core::groom::PARTS, "fields": gf_core::groom::FIELDS.iter().map(|f| json!({"key": f.key, "default": f.default, "lo": f.lo, "hi": f.hi, "integer": f.integer})).collect::<Vec<_>>()}}))
+              "groom": {"starter": gf_core::groom::starter(), "parts": gf_core::groom::PARTS, "styles": gf_core::groom::STYLES.iter().map(|(n, s)| json!({"name": n, "settings": s.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<serde_json::Map<String, Value>>()})).collect::<Vec<_>>(), "fields": gf_core::groom::FIELDS.iter().map(|f| json!({"key": f.key, "default": f.default, "lo": f.lo, "hi": f.hi, "integer": f.integer})).collect::<Vec<_>>()}}))
 }
 
 pub struct Shaped {

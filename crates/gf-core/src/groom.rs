@@ -55,6 +55,29 @@ pub const FIELDS: &[Field] = &[
 
 pub const PARTS: &[&str] = &["centre", "left", "right", "none"];
 
+pub const STYLES: &[(&str, &[(&str, f64)])] = &[
+    ("short", &[("length_m", 0.06), ("droop", 0.3), ("clumps", 200.0), ("clump", 0.3), ("frizz_m", 0.001), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("bob", &[("length_m", 0.18), ("droop", 0.6), ("clumps", 300.0), ("clump", 0.4), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("long", &[("length_m", 0.4), ("droop", 0.7), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.0), ("curl_turns_per_m", 0.0)]),
+    ("wavy", &[("length_m", 0.3), ("droop", 0.6), ("clumps", 400.0), ("clump", 0.5), ("frizz_m", 0.002), ("curl_radius_m", 0.015), ("curl_turns_per_m", 8.0)]),
+    ("curly", &[("length_m", 0.25), ("droop", 0.5), ("clumps", 600.0), ("clump", 0.6), ("frizz_m", 0.003), ("curl_radius_m", 0.01), ("curl_turns_per_m", 20.0)]),
+];
+
+pub fn with_style(groom: &Value, name: &str) -> Option<Value> {
+    let (_, settings) = STYLES.iter().find(|(n, _)| *n == name)?;
+    let mut out = groom.as_object()?.clone();
+    for &(key, v) in settings.iter() {
+        let integer = FIELDS.iter().any(|f| f.key == key && f.integer);
+        out.insert(key.into(), if integer { serde_json::json!(v as u64) } else { serde_json::json!(v) });
+    }
+    Some(Value::Object(out))
+}
+
+pub fn style_of(groom: &Value) -> Option<&'static str> {
+    let value = |key: &str| groom.get(key).and_then(Value::as_f64).or_else(|| FIELDS.iter().find(|f| f.key == key).map(|f| f.default));
+    STYLES.iter().find(|(_, settings)| settings.iter().all(|&(key, v)| value(key).is_some_and(|x| (x - v).abs() < 1e-9))).map(|(n, _)| *n)
+}
+
 pub fn starter() -> Value {
     serde_json::json!({"format": FORMAT, "name": "groom", "strands": 20000, "length_m": 0.15, "part": "centre", "droop": 0.5, "clumps": 300, "clump": 0.4, "frizz_m": 0.002, "colour": "#3b2416", "seed": 1})
 }
@@ -127,6 +150,17 @@ mod tests {
         assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
         assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
         assert!(parse(&json!({"format": FORMAT, "lenght_m": 0.3})).is_err(), "a misspelt setting is refused, not ignored");
+        for (name, _) in STYLES {
+            let styled = with_style(&starter(), name).unwrap();
+            assert!(parse(&styled).is_ok(), "{name}");
+            assert_eq!(style_of(&styled), Some(*name));
+            assert_eq!(styled["colour"], starter()["colour"], "a style keeps the colour, part and seed");
+        }
+        assert_eq!(style_of(&json!({"format": FORMAT})), None, "the defaults are no style");
+        assert!(with_style(&starter(), "mohawk").is_none());
+        let mut edited = with_style(&starter(), "bob").unwrap();
+        edited["length_m"] = json!(0.2);
+        assert_eq!(style_of(&edited), None, "an edited style is custom");
         let s = parse(&starter()).unwrap();
         assert_eq!((s.strands, s.clumps, s.part), (20000, 300, Part::Centre));
     }
