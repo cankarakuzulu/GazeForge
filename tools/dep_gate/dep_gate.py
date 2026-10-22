@@ -1,10 +1,12 @@
 """Structural gates for the workspace layering.
 
-Usage: dep_gate.py [edges|clippy|wasm|front-doors|ui-text|all] [--root DIR] [--cargo PATH] [--target-dir DIR]
+Usage: dep_gate.py [edges|clippy|clippy-all|wasm|front-doors|ui-text|all] [--root DIR] [--cargo PATH] [--target-dir DIR]
 
 edges        every dependency edge between workspace crates (normal, dev and build) must be on ALLOWED.
 clippy       cargo clippy on the pure crates (PURE) with -D warnings; their clippy.toml bans fs, thread,
              process, net and clock calls.
+clippy-all   cargo clippy on the whole workspace, every target (tests included): no error, and no more distinct
+             warnings (file:line:col + message) than WORKSPACE_WARNINGS_MAX, a ratchet: lower it when one is fixed.
 wasm         the pure maths crate builds for wasm32-unknown-unknown with no features.
 front-doors  copy the workspace without its front doors (FRONT_DOORS) into a temporary directory and
              build the domain, format and api crates there.
@@ -17,6 +19,9 @@ Limits (what these gates cannot see):
 - edges sees only workspace crates; a third-party crate that itself does IO or spawns threads is invisible.
 - clippy sees calls written in the pure crates' own source; IO or threads inside a dependency (for example
   rayon behind the native-only feature) are not flagged, and a path missing from clippy.toml is not banned.
+- clippy-all counts distinct warnings, so a new warning at the same place with the same text as an old one is not
+  counted, and fixing one warning while adding another keeps the count; it reads the short message format, so a
+  lint without a source location is not counted.
 - wasm proves compilation only; a thread or clock panic at run time under wasm is not caught here.
 - front-doors builds; it runs no tests in the reduced workspace.
 """
@@ -40,6 +45,7 @@ ALLOWED = {
 }
 PURE = ["gf-geom", "gf-core"]
 WASM = ["gf-geom", "gf-wasm"]
+WORKSPACE_WARNINGS_MAX = 11
 FRONT_DOORS = ["gf-cli", "gf-http", "gf-mcp", "gf-studio"]
 KEEP_BUILT = ["gf-core", "gf-io", "gf-api"]
 
@@ -85,6 +91,23 @@ def gate_clippy(args):
     env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(args["target_dir"], "clippy"), PATH=path)
     code, _, err = run(cmd, args["root"], env)
     return {"pass": code == 0, "command": " ".join(cmd[1:]), "errors": errors_of(err)}
+
+
+def gate_clippy_all(args):
+    cmd = [args["cargo"], "clippy", "--workspace", "--all-targets", "--message-format", "short"]
+    toolchain = os.path.dirname(os.path.abspath(args["cargo"])) if os.path.dirname(args["cargo"]) else ""
+    path = os.pathsep.join(p for p in (toolchain, os.environ.get("PATH", "")) if p)
+    env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(args["target_dir"], "clippy_all"), PATH=path)
+    code, _, err = run(cmd, args["root"], env)
+    found = {"error": set(), "warning": set()}
+    for line in err.splitlines():
+        head = line.split(": ", 2)
+        if len(head) == 3 and head[1] in found and head[0].endswith(tuple("0123456789")) and ".rs:" in head[0]:
+            found[head[1]].add((head[0].replace("\\", "/"), head[2]))
+    errors, warnings = sorted(found["error"]), sorted(found["warning"])
+    failed_build = code != 0 and not errors
+    return {"pass": not errors and not failed_build and len(warnings) <= WORKSPACE_WARNINGS_MAX, "errors": [" ".join(e) for e in errors][:8] or (errors_of(err) if failed_build else []),
+            "warnings": len(warnings), "ceiling": WORKSPACE_WARNINGS_MAX, "first_warnings": [" ".join(w) for w in warnings][:20], "command": " ".join(cmd[1:])}
 
 
 def gate_wasm(args):
@@ -137,7 +160,7 @@ def gate_ui_text(args):
     return {"pass": code == 0 and r.get("ok") is True, "keys": r.get("keys"), "counts": r.get("counts"), "first": r.get("first", [])[:8]}
 
 
-GATES = {"edges": gate_edges, "clippy": gate_clippy, "wasm": gate_wasm, "front-doors": gate_front_doors, "ui-text": gate_ui_text}
+GATES = {"edges": gate_edges, "clippy": gate_clippy, "clippy-all": gate_clippy_all, "wasm": gate_wasm, "front-doors": gate_front_doors, "ui-text": gate_ui_text}
 
 
 def main(argv):
