@@ -527,8 +527,9 @@ every head - combed away from the part, kept outside the head and body and off t
 `--strands` file. A groom can also have shorter sides with a fade (`sides_m`, `fade_m`), a top combed back, forward
 or up into a quiff (`direction`, `lift`), a ponytail (`tie` low or high), a straight or curtain fringe (`fringe`,
 `fringe_m`), face-framing layers (`frame_m`), a hairline set by the face's proportions (`forehead`), and ombre and
-highlights (`tip_colour`, `highlights`, `highlight_colour`); eleven ready styles (short, bob, long, wavy, curly,
-ponytail, buzz cut, crop, undercut, quiff, slick back) set the cut in one step. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
+highlights (`tip_colour`, `highlights`, `highlight_colour`); fourteen ready styles (short, bob, long, wavy, curly,
+ponytail, buzz cut, crop, undercut, quiff, slick back, bob with bangs, curtain bangs, long layers) set the cut in
+one step. A character can keep its groom (`body.groom` in the spec): both Body shape panels have a **Grown
 hair** section to turn it on and set it, the stitch preview draws it, and an export with `--strands` grows it.
 A groom becomes game hair with `groom cards --store DIR --spec FILE --base BASE_OBJ [--groom GROOM.json]
 [--cards 600] [--atlas 1024]` (or the "Make game hair cards from a groom" task): its strands are grouped by shape,
