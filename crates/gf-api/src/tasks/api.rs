@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
 use super::data::{IMPORT_CATALOG_KEYS, IMPORT_EYERIG_KEYS, IMPORT_GAME_KEYS, IMPORT_PACK_KEYS, LABELS_KEYS, WEIGHTS_KEYS};
-use super::mesh::{BODY_KEYS, BODY_RIG_KEYS, GAME_KEYS, GLB_KEYS, LID_EXPORT_KEYS, LIDS_GATE_KEYS, PATH_KEYS, SHELL_KEYS};
+use super::mesh::{BODY_KEYS, BODY_RIG_KEYS, GAME_KEYS, GLB_KEYS, LID_EXPORT_KEYS, LIDS_GATE_KEYS, PATH_KEYS, SHELL_KEYS, VRM_KEYS};
 use super::topology::{IMPROVE_KEYS, INSPECT_KEYS};
 use super::{BUILD_KEYS, COLLIDE_KEYS, EXPORT_KEYS, F2_KEYS, F3_KEYS, F4_KEYS, F5_KEYS, F6_KEYS, FIT_KEYS, OPTIMAL_KEYS, Options, data, mesh, rig, topology};
 use crate::commands::{obj, shape};
@@ -123,6 +123,7 @@ const ENUMS: &[(&str, &[&str])] = &[
     ("quads", &["on", "off"]),
     ("body-gates", &["refuse", "report"]),
     ("body-influences", &["8", "4"]),
+    ("format", &["glb", "vrm"]),
     ("frame", &["world", "canonical"]),
     ("hide-under", &["on", "off"]),
     ("scale", &["none", "bone"]),
@@ -182,6 +183,10 @@ const TEXT: &[(&str, &str)] = &[
     ("body-rig", "skeleton for the spec's body: a rig preset (game_engine, game_engine_with_breast, default, mixamo, mixamo_unity, cmu_mb, openpose) or the path of a MakeHuman rig .json"),
     ("body-weights", "path of the MakeHuman weights .json that goes with a --body-rig path (a preset carries its own)"),
     ("body-gates", "refuse: a body whose stitch gates fail is not exported; report: it is exported and the failures go in the sidecar"),
+    ("format", "glb (the default) or vrm: a VRM 1.0 avatar - needs --body-rig with a humanoid map and --vrm-author; the finest level only, re-posed to a T-pose (arms level along X, the rest as exported), with VRMC_vrm meta, humanoid bones and expression presets from the face morphs"),
+    ("vrm-author", "the VRM avatar's author (required by VRM's meta)"),
+    ("vrm-license", "the VRM avatar's licence URL (default: the VRM Public License 1.0, https://vrm.dev/licenses/1.0/)"),
+    ("vrm-name", "the VRM avatar's name (default: the spec's name)"),
     ("body-influences", "joints per vertex with --body-rig: 8 (the default; JOINTS_1 / WEIGHTS_1 carry the second four) keeps MakeHuman's weights whole, 4 fits engines that read only one set but cuts weight the shoulders need (the default preset's shoulders tear with arms raised)"),
     ("shape-targets", "catalog targets scored one at a time: all, head (designer categories, expressions and macro keys) or none"),
     ("samples", "random combinations of head targets (and expressions) scored as well"),
@@ -334,7 +339,7 @@ pub fn export_obj(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
 }
 
 pub fn glb_input() -> Value {
-    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS, BODY_RIG_KEYS];
+    let mut sets = vec![GLB_KEYS, LID_EXPORT_KEYS, BODY_KEYS, BODY_RIG_KEYS, VRM_KEYS];
     sets.extend_from_slice(PLACEMENT_KEYS);
     schema(&sets, &["store", "spec", "out"])
 }

@@ -852,15 +852,22 @@ pub fn scene_obj_text(m: &SceneMesh) -> String {
 }
 
 pub fn with_extension(glb: &[u8], name: &str, value: Value) -> Result<Vec<u8>, String> {
+    with_document(glb, |doc| {
+        doc["extensions"][name] = value;
+        let used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
+        if !used.iter().any(|u| u == name) {
+            let mut used = used;
+            used.push(json!(name));
+            doc["extensionsUsed"] = json!(used);
+        }
+        Ok(())
+    })
+}
+
+pub fn with_document(glb: &[u8], edit: impl FnOnce(&mut Value) -> Result<(), String>) -> Result<Vec<u8>, String> {
     let (mut doc, bin) = chunks(glb)?;
     let bin = bin.to_vec();
-    doc["extensions"][name] = value;
-    let used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
-    if !used.iter().any(|u| u == name) {
-        let mut used = used;
-        used.push(json!(name));
-        doc["extensionsUsed"] = json!(used);
-    }
+    edit(&mut doc)?;
     let mut text = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
     while text.len() % 4 != 0 {
         text.push(b' ');

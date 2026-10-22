@@ -8,6 +8,13 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **VRM 1.0 export.** `export-glb --format vrm --vrm-author NAME` (needs `--body-rig` with a humanoid map; optional
+  `--vrm-name`, `--vrm-license`; also in the export task): the finest level only, the arms re-posed to a T-pose by the
+  character's own skinning (the rest of the body as exported), `VRMC_vrm` with the meta, the humanoid bones and
+  expression presets from the ARKit-named face morphs. Verified with three.js + `@pixiv/three-vrm` 3.3.3 in Chrome
+  (`tools/diag/vrm_reader_check.mjs`, not shipped): VRM 1.0, all required bones, arms level to 0.00001 degrees in the
+  world, `aa` drives its morph to 1, no metallic mesh. The physics data and coarser levels are left out; spring bones
+  in VRM (`VRMC_springBone`) are not written yet.
 - **The face rig on the body.** `--rig head|face|face2` now works together with `--body-rig`: one skeleton, the body's
   bones first (indices unchanged), the face joints under the body's head bone; the preset's jaw and eyes are taken over
   by the face rig, its other bones under the head are left out with their weights folded into their nearest kept
@@ -148,6 +155,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- A mesh exported without a material (the head and body of a character without skin, plain eyes) took glTF's default
+  material, which is fully metallic and renders black in viewers that follow the specification (three.js, Babylon;
+  Blender and Godot substitute grey). Such meshes now carry a neutral material: light grey, metallic 0, roughness 0.7.
+  Found by the VRM reader check, whose first renders showed the avatars' bodies as black.
 - The wearable fitting's nearest-point lookup could return a point up to one 2 cm grid cell beyond the distance asked
   for. Exports of the dressed, ponytail, long-hair and cape characters are byte-identical before and after the fix
   (pins and push-out clearances never asked for a reach close to the cell size); the scalp cap, which does, found it.

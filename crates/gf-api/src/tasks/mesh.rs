@@ -53,6 +53,7 @@ pub const LID_EXPORT_KEYS: &[&str] = &["lids-step-mm", "lids-max-mm", "lids-fron
 pub const EYES_KEY: &[&str] = &["eyes"];
 pub const BODY_KEYS: &[&str] = &["body", "body-blend-mm", "body-neck-offset-mm", "head-scale", "body-scale", "body-smooth", "body-tangent"];
 pub const BODY_RIG_KEYS: &[&str] = &["body-rig", "body-weights", "body-gates", "body-influences"];
+pub const VRM_KEYS: &[&str] = &["format", "vrm-author", "vrm-license", "vrm-name"];
 const GENITAL_SINK_M: f64 = 0.002;
 const GENITAL_MIN_BODY_VERTICES: usize = 2500;
 
@@ -232,6 +233,8 @@ type GarmentLevel = (Vec<u32>, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
 type Worn = (gf_io::wearable_store::Wearable, Vec<Point>, usize, Vec<GarmentLevel>, Value);
 
 pub const GENTLE_LEVELS: usize = 3;
+const NEUTRAL_COLOUR: [f32; 4] = [0.8, 0.8, 0.8, 1.0];
+const NEUTRAL_ROUGHNESS: f32 = 0.7;
 const CAP_SIZE: usize = 512;
 const CAP_PAD: usize = 8;
 
@@ -1066,6 +1069,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     allowed.extend_from_slice(placement_keys(version.name));
     allowed.push(BODY_KEYS);
     allowed.push(BODY_RIG_KEYS);
+    allowed.push(VRM_KEYS);
     if opts.get("lids").map(String::as_str) == Some("auto") {
         allowed.push(LID_EXPORT_KEYS);
         if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
@@ -1153,6 +1157,23 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         other => return Err(format!("--rig must be none, head, face or face2, got {other}")),
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
+    let vrm_meta: Option<Value> = match opts.get("format").map(String::as_str).unwrap_or("glb") {
+        "glb" => {
+            if let Some(k) = VRM_KEYS[1..].iter().find(|k| opts.contains_key(**k)) {
+                return Err(format!("--{k} goes with --format vrm"));
+            }
+            None
+        }
+        "vrm" => {
+            let author = opts.get("vrm-author").ok_or("--format vrm needs --vrm-author: VRM's meta requires an author, and the avatar is its owner's, not the tool's")?;
+            if !opts.contains_key("body-rig") {
+                return Err("--format vrm needs --body-rig with a humanoid map (a rig preset other than openpose)".into());
+            }
+            Some(json!({"name": opts.get("vrm-name").cloned().unwrap_or_else(|| spec.name.clone()), "authors": [author],
+                        "licenseUrl": opts.get("vrm-license").map_or(super::vrm::LICENSE, String::as_str)}))
+        }
+        other => return Err(format!("--format must be glb or vrm, got {other}")),
+    };
     let body_cap: usize = match opts.get("body-influences").map(String::as_str) {
         None | Some("8") => 8,
         Some("4") => 4,
@@ -2230,6 +2251,59 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         let q = w.quaternion();
         gltf::Root { name: "Character".into(), translation: [t[0], t[2], -t[1]], rotation: [q[0], q[2], -q[1], q[3]], scale: w.scale }
     });
+    if lods.iter().chain(&body_lods).any(|l| l.material.is_none()) {
+        let neutral = materials.len();
+        materials.push(gltf::Material {
+            name: "neutral".into(),
+            base_color: NEUTRAL_COLOUR,
+            base_texture: None,
+            normal_texture: None,
+            orm_texture: None,
+            metallic: 0.0,
+            roughness: NEUTRAL_ROUGHNESS,
+            transmission: None,
+            ior: None,
+            blend: false,
+            alpha_cutoff: None,
+            double_sided: false,
+            extension: None,
+        });
+        for l in lods.iter_mut().chain(body_lods.iter_mut()).filter(|l| l.material.is_none()) {
+            l.material = Some(neutral);
+        }
+    }
+    let mut vrm_bones: Vec<(String, String)> = Vec::new();
+    let mut vrm_report = Value::Null;
+    if vrm_meta.is_some() {
+        let br = body_rig.as_ref().ok_or("--format vrm needs --body-rig")?;
+        let map = br.meta["source"]["preset"].as_str().and_then(gf_core::humanoid::godot).ok_or("--format vrm needs a humanoid map: a rig preset other than openpose")?;
+        let rig = body_gltf_rig.as_mut().ok_or("--format vrm needs --body-rig")?;
+        let index = |profile: &str| map.iter().find(|r| r.0 == profile).and_then(|r| rig.names.iter().position(|n| *n == r.1));
+        let q = root.as_ref().map_or([0.0, 0.0, 0.0, 1.0], |r| r.rotation);
+        let unturn = |v: [f64; 3]| {
+            let (u, w) = ([-q[0], -q[1], -q[2]], q[3]);
+            let c = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let cc = [u[1] * c[2] - u[2] * c[1], u[2] * c[0] - u[0] * c[2], u[0] * c[1] - u[1] * c[0]];
+            [0, 1, 2].map(|k| v[k] + 2.0 * (w * c[k] + cc[k]))
+        };
+        let mut turns = Vec::new();
+        for (side, sign) in [("Left", 1.0), ("Right", -1.0)] {
+            let chain = [format!("{side}UpperArm"), format!("{side}LowerArm"), format!("{side}Hand"), format!("{side}MiddleProximal")];
+            for pair in chain.windows(2) {
+                if let (Some(joint), Some(toward)) = (index(&pair[0]), index(&pair[1])) {
+                    turns.push(super::vrm::Turn { joint, toward, target: unturn([sign, 0.0, 0.0]) });
+                }
+            }
+        }
+        lods.truncate(1);
+        body_lods.retain(|l| l.name.ends_with("_LOD0") || !l.name.contains("_LOD"));
+        let mut meshes: Vec<&mut Lod> = lods.iter_mut().chain(body_lods.iter_mut()).collect();
+        vrm_report = super::vrm::tpose(rig, &turns, &mut meshes);
+        vrm_bones = map.iter().filter_map(|(p, b)| super::vrm::vrm_bone(p).map(|v| (v, b.clone()))).collect();
+        if physics_ext.take().is_some() {
+            vrm_report["physics"] = json!("GAZEFORGE_physics is left out of the .vrm: its colliders are placed for the A-pose rest (VRMC_springBone is not written yet)");
+        }
+    }
     let (bytes, report) = gltf::glb_with_root(&lods, &body_lods, &glb_names, mode, extras.clone(), &tool, rig_data.as_ref().map(|(r, _)| r).or(body_gltf_rig.as_ref()), &eye_parts, &materials, root.as_ref())?;
     let bytes = match physics_ext.take() {
         Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_physics", ext)?,
@@ -2244,10 +2318,27 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         Some(ext) => gltf::with_extension(&bytes, "GAZEFORGE_humanoid", ext.clone())?,
         None => bytes,
     };
+    let bytes = match &vrm_meta {
+        Some(meta) => {
+            let mut made = Value::Null;
+            let out_bytes = gltf::with_document(&bytes, |doc| {
+                let (ext, report) = super::vrm::extension(doc, &vrm_bones, meta.clone(), "Head_LOD0", &glb_names)?;
+                doc["extensions"]["VRMC_vrm"] = ext;
+                let mut used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
+                used.push(json!("VRMC_vrm"));
+                doc["extensionsUsed"] = json!(used);
+                made = report;
+                Ok(())
+            })?;
+            vrm_report["extension"] = made;
+            out_bytes
+        }
+        None => bytes,
+    };
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let digest = hash::sha256_hex(&bytes);
     let file_name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let stem = file_name.strip_suffix(".glb").unwrap_or(&file_name).to_string();
+    let stem = file_name.strip_suffix(".glb").or_else(|| file_name.strip_suffix(".vrm")).unwrap_or(&file_name).to_string();
     let sidecar_path = out.with_file_name(format!("{stem}.gazeforge.json"));
     let mut sidecar = json!({
         "format": "gazeforge.sidecar/1",
@@ -2287,6 +2378,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         obj::write_triangles(&obj_path, &neutral.game, &levels[0].triangles, &levels[0].uvs)?;
         dense::write_points(&npy_path, &neutral_dense)?;
         sidecar["lod0_out"] = json!({"obj": obj_path.display().to_string(), "dense": npy_path.display().to_string()});
+    }
+    if !vrm_report.is_null() {
+        vrm_report["method"] = json!("VRM 1.0: the finest level of every mesh only; the arms re-posed by linear skinning with the exported weights so the upper arm, forearm and hand each point along +-X in the world (the rest of the body as exported), the joints moved with them and kept translation-only so the rest stays the bind; VRMC_vrm carries the meta, the humanoid bones from the rig's humanoid map and expression presets built from the face morphs it finds");
+        sidecar["vrm"] = vrm_report.clone();
     }
     if !body_meta.is_null() {
         sidecar["body"] = body_meta.clone();
