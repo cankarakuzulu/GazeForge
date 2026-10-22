@@ -40,6 +40,7 @@ const QUIFF_TURN_M: f64 = 0.03;
 const QUIFF_BACK: Point = [0.0, 1.0, -0.35];
 const QUIFF_PROFILE_HALF_M: f64 = 0.015;
 const DRAPE_PULL: f64 = 1.5;
+const DRAPE_SIDE_KEEP: f64 = 0.3;
 const QUIFF_PROFILE_BAND_M: f64 = 0.02;
 const UP_FRONT_M: f64 = 0.03;
 const TIE_UP_BIAS: f64 = 0.3;
@@ -573,7 +574,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             next = add(*line.last().unwrap(), scale(unit(step), seg));
             dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
             if landed {
-                dir = unit(add(dir, scale(drape, DRAPE_PULL)));
+                dir = unit(add([dir[0] * DRAPE_SIDE_KEEP, dir[1], dir[2]], scale(drape, DRAPE_PULL)));
                 draped += 1;
             }
             arc += seg;

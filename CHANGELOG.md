@@ -336,7 +336,10 @@ open, with its last measurement, rather than left out.
   arms (12.7 % of a long groom's strands ended pointing outward, reaching 27 cm from the centre line). Hair that lands
   on the body below the ears now turns down and back over the shoulders (front, for hair rooted ahead of the ears):
   2.6 % point outward, reaching 23 cm; wavy 10.9 % -> 3.4-4.7 %, curly 5.1 % -> 1.2 %. The groom report counts the
-  strands below the throat line and their tips pointing outward.
+  strands below the throat line and their tips pointing outward. Landing also keeps only 30 % of the strand's
+  sideways motion, so hair falls off the shoulder's crest instead of sliding along it to the shoulder's tip: of the
+  strands below the throat, long 2.6 % -> 1.0 % end pointing outward, wavy 3.45 % -> 2.45 %, curly 0.9 % -> 0.37 %,
+  and the hair in front hangs down the chest rather than out over the shoulders.
 - **The quiff was a low dome.** Measured down the middle of the head, its hair stood 0.9 cm above the scalp at the
   front and 1.5 cm at most further back. The top hair combed up now rises from its root (straight up, a little
   forward at the hairline), turns over within 3 cm and runs back: a pompadour, highest at the front (lift x 5 cm at
