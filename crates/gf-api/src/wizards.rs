@@ -384,6 +384,8 @@ fn export() -> Value {
                  {"name": "bake", "label": "Bake spring-bone physics (sway, or an animation in the file; needs a body skeleton and a wearable with spring bones)"},
                  {"name": "bake_format", "label": "Bake as (bones: joint keys; vertex: one morph target per frame, for engines without skinning beyond the body)"},
                  {"name": "bake_fps", "label": "Baked frames per second"},
+                 {"name": "strands", "label": "Also the hair as strands (a USD .usda file of curves, for Blender and other tools)", "widget": "file_save", "ext": ".usda"},
+                 {"name": "strands_count", "label": "Strands in all (20000; about 100000 covers a long hair's crown like its cards)"},
                  {"name": "lids", "label": "Eyelid fitting"},
                  {"name": "rig", "label": "Face rig"},
                  {"name": "sparse", "label": "Sparse morphs"},

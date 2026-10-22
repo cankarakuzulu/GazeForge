@@ -509,6 +509,18 @@ the capsules, up to 69 mm without); a test cape's pinned collar stays on the ski
 degrees either way, its free cloth stays out of the body (0 mm, up to 78 mm without the capsules). Not yet: the chains
 in VRM (`VRMC_springBone`).
 
+**Strand hair.** `export-glb --strands HAIR.usda` also writes the hair the character wears as strands: a USD text file
+of `BasisCurves` in the same frame as the glb, for Blender and other tools that take curves (no game engine reads
+strands from glTF, so the glb keeps the cards). The strands are traced from the hair cards themselves: on each card,
+columns of its colour texture are followed along the card wherever the texture is opaque, so the strands lie where the
+hair is painted, coloured like it, and rooted at the end that reaches the scalp over the card. `--strands-count`
+(20000), `--strands-points` (16 per strand), `--strands-seed`. Checked with Blender 5.2's own USD importer: every
+strand and point it reads is the one written, every point lies on the glb's cards (worst 0.37 mm), and renders beside
+the cards match them in shape and colour. Limits: they are the cards' strands, layered like the cards (a layer's edge
+can show as a ledge where the card would fade out); where cards fan out wide over the crown, 20000 strands cover it
+more thinly than the painted cards (about 100000 come close); widths are fixed (0.08 mm at the root to 0.02 mm).
+Strands for Unreal (Alembic), strands turned back into game cards, and grooms made from scratch come later.
+
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
 --bake CLIP` on a file already exported, or the "Bake hair physics into a glb" task) simulates the spring chains offline
 and writes an animation `CLIP_baked`: `--bake-format bones` (the default) as rotation keys for the chain joints beside

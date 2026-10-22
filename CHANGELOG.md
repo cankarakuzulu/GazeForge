@@ -8,6 +8,14 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Strand hair (first step).** `export-glb --strands HAIR.usda [--strands-count 20000] [--strands-points 16]
+  [--strands-seed 1]` (also in the export task): the worn hair as USD `BasisCurves`, traced from its cards (texture
+  columns followed along each card where opaque, every opaque run of 1 cm or more a strand, the direction per card
+  piece chosen by which way its runs are longer, rooted at the end nearer the scalp over the card, coloured from the
+  texture in linear colour, shared out by opaque card area in 3D). Verified with Blender 5.2's USD importer
+  (`tools/diag/strands_blender_check.py`, not shipped): counts identical, every point on the glb's cards within 0.37 mm
+  (ponytail) and 0.03 mm (long hair), renders beside the cards. Limits: layered like the cards; thinner than the cards
+  over a long hair's crown at 20000 strands; fixed widths.
 - **Baked spring-bone physics.** `export-glb --bake sway|ANIMATION [--bake-format bones|vertex] [--bake-fps 30]`, the
   same as `wearable bake --glb IN --out OUT` on an exported file, and the "Bake hair physics into a glb" task: the
   chains of wearables worn with spring bones are simulated offline (VRM's spring bone against the body's capsules, 60 Hz,

@@ -13,6 +13,7 @@ pub mod bake;
 pub mod data;
 pub mod mesh;
 pub mod rig;
+pub mod strands;
 pub mod topology;
 pub mod vrm;
 pub mod wearable;

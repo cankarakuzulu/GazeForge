@@ -1071,6 +1071,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     allowed.push(BODY_RIG_KEYS);
     allowed.push(VRM_KEYS);
     allowed.push(super::bake::KEYS);
+    allowed.push(super::strands::KEYS);
     if opts.get("lids").map(String::as_str) == Some("auto") {
         allowed.push(LID_EXPORT_KEYS);
         if !placement_keys(version.name).iter().any(|keys| keys.contains(&"eyes")) {
@@ -1159,6 +1160,12 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     };
     let face_version = if opts.get("rig").map(String::as_str) == Some("face2") { 2 } else { 1 };
     let bake_settings = super::bake::settings(opts)?;
+    let strand_settings = super::strands::settings(opts)?;
+    if strand_settings.is_some() && !opts.contains_key("body") && spec.body.is_none() {
+        return Err("--strands traces the hair a character wears, and this one wears none (no body)".into());
+    }
+    let mut strand_groups: Vec<(String, Vec<super::strands::Strand>)> = Vec::new();
+    let mut strand_rows: Vec<Value> = Vec::new();
     if bake_settings.is_some() && opts.get("format").map(String::as_str) == Some("vrm") {
         return Err("--bake goes with --format glb: the .vrm leaves GAZEFORGE_physics out (its colliders are placed for the A-pose rest)".into());
     }
@@ -1884,6 +1891,34 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     }
                 }
                 if i == 0
+                    && let Some(st) = &strand_settings
+                {
+                    let mut hairs = Vec::new();
+                    for ((item, _, _, ladder, _), positions) in worn.iter().zip(&placed) {
+                        if !item.manifest.transparent || item.manifest.attach.is_some() {
+                            continue;
+                        }
+                        let Some((w, h, rgba)) = item.manifest.material.get("diffuse").and_then(|r| store.get_ref(r).ok()).and_then(|png| gf_io::png::decode_rgba(&png).ok()) else {
+                            strand_rows.push(json!({"wearable": item.manifest.name, "strands": 0, "reason": "no colour texture to trace"}));
+                            continue;
+                        };
+                        let area = super::strands::opaque_area(positions, &ladder[0].1, &ladder[0].2, &super::strands::Texture { width: w, height: h, rgba: &rgba });
+                        hairs.push((item.manifest.name.clone(), positions, &ladder[0], (w, h, rgba), area));
+                    }
+                    let total: f64 = hairs.iter().map(|x| x.4).sum();
+                    for (k, (name, positions, lod, (w, h, rgba), area)) in hairs.iter().enumerate() {
+                        let count = if total > 0.0 { ((area / total) * st.count as f64).round().max(1.0) as usize } else { 0 };
+                        let tex = super::strands::Texture { width: *w, height: *h, rgba };
+                        let seed: Vec<bool> = positions.iter().map(|&p| surface.nearest(p, 0.1).is_some_and(|j| super::wearable::pin_weight(surface.signed(p, j)) >= super::wearable::PINNED)).collect();
+                        let rank = super::wearable::mesh_distances(positions, &lod.1, &seed).0;
+                        let (strands, mut row) = super::strands::from_cards(positions, &lod.1, &lod.2, &tex, count, st.points, st.seed.wrapping_add(k as u64), &rank);
+                        row["wearable"] = json!(name);
+                        row["root_vertices"] = json!(seed.iter().filter(|&&s| s).count());
+                        strand_rows.push(row);
+                        strand_groups.push((name.clone(), strands));
+                    }
+                }
+                if i == 0
                     && let (Some(br), Some(rig)) = (&body_rig, body_gltf_rig.as_mut())
                 {
                     let mut skin_points: Vec<(u32, Point)> = frame.skin_points().filter(|(o, _)| br.by_obj.contains_key(o)).collect();
@@ -2318,6 +2353,18 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     if !spring_fit.is_null() {
         body_meta["physics"]["spring_colliders"] = spring_fit;
     }
+    let strand_report = match &strand_settings {
+        Some(st) => {
+            if strand_groups.iter().all(|g| g.1.is_empty()) {
+                return Err(format!("--strands found no hair to trace: {}", json!(strand_rows)));
+            }
+            let text = super::strands::usda(&strand_groups, root.as_ref(), &tool);
+            std::fs::write(&st.out, &text).map_err(|e| format!("{}: {e}", st.out))?;
+            json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
+                   "method": "per hair card piece, columns of the colour texture (fixed U) traced along V through the card's UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
+        }
+        None => Value::Null,
+    };
     let (bytes, bake_report) = match &bake_settings {
         Some(b) => super::bake::bake(&bytes, b)?,
         None => (bytes, Value::Null),
@@ -2413,6 +2460,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     if !bake_report.is_null() {
         sidecar["bake"] = bake_report.clone();
     }
+    if !strand_report.is_null() {
+        sidecar["strands"] = strand_report.clone();
+    }
     let text = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
     std::fs::write(&sidecar_path, text).map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
     let mut result = json!({"ok": true, "command": "export-glb", "out": out.display().to_string(), "sidecar": sidecar_path.display().to_string(),
@@ -2429,6 +2479,9 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
     }
     if !bake_report.is_null() {
         result["bake"] = bake_report;
+    }
+    if !strand_report.is_null() {
+        result["strands"] = strand_report;
     }
     if !body_meta.is_null() {
         result["body"] = body_meta;

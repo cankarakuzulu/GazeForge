@@ -105,7 +105,7 @@ const CHAIN_MAX: usize = 12;
 const CHAIN_MIN_REACH_M: f64 = 0.03;
 const CHAIN_MIN_SEGMENT_M: f64 = 0.002;
 const CHAIN_MERGE_M: f64 = 0.03;
-const PINNED: f32 = 0.99;
+pub const PINNED: f32 = 0.99;
 const SEED_PIN: f32 = 0.5;
 
 pub struct Chain {
@@ -129,7 +129,7 @@ pub fn spring_seeds(garment: &[Point], pin: &[f32], dominant: &[usize]) -> (Vec<
     ((0..garment.len()).map(|v| pin[v] >= SEED_PIN && Some(dominant[v]) == anchor).collect(), anchor)
 }
 
-pub fn build_chains(garment: &[Point], triangles: &[[u32; 3]], seed: &[bool]) -> Chains {
+pub fn mesh_distances(garment: &[Point], triangles: &[[u32; 3]], seed: &[bool]) -> (Vec<f64>, Vec<u32>) {
     let n = garment.len();
     let mut adj: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n];
     for t in triangles {
@@ -181,6 +181,12 @@ pub fn build_chains(garment: &[Point], triangles: &[[u32; 3]], seed: &[bool]) ->
             }
         }
     }
+    (dist, root)
+}
+
+pub fn build_chains(garment: &[Point], triangles: &[[u32; 3]], seed: &[bool]) -> Chains {
+    let n = garment.len();
+    let (dist, root) = mesh_distances(garment, triangles, seed);
     let free: Vec<usize> = (0..n).filter(|&v| !seed[v] && dist[v].is_finite()).collect();
     let mut along = vec![None; n];
     if free.is_empty() {
