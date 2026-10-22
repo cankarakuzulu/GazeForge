@@ -242,6 +242,8 @@ pub(crate) fn highlight_lift(t: f32) -> f32 {
     HIGHLIGHT_AT_ROOT + (1.0 - HIGHLIGHT_AT_ROOT) * (t / HIGHLIGHT_FULL_AT).min(1.0)
 }
 
+const TAIL_STREAM: u64 = 0x7A11_5EED_0000_0001;
+
 fn lock_unit(seed: u64, lock: usize) -> f64 {
     Rng(seed ^ (lock as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93)).next()
 }
@@ -462,8 +464,9 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                         let to = sub(tp, last);
                         let d = dot(to, to).sqrt();
                         if d < TIE_REACH_M {
-                            let a = rng.next() * std::f64::consts::TAU;
-                            let r = TAIL_RADIUS_M * rng.next().sqrt();
+                            let mut own = Rng(g.seed ^ TAIL_STREAM ^ ((roots.len() as u64).wrapping_mul(0xA24B_AED4_963E_E407)));
+                            let a = own.next() * std::f64::consts::TAU;
+                            let r = TAIL_RADIUS_M * own.next().sqrt();
                             tail = Some(unit([0.0, lean, -1.0]));
                             tied_at = k;
                             spread = scale([a.cos(), a.sin(), 0.0], r * TAIL_SPREAD);

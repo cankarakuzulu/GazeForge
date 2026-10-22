@@ -301,6 +301,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **With a ponytail, changing the length or adding a fringe reshuffled all the hair.** Where each strand joins the
+  tail was drawn from the same random sequence that places the roots, and whether a strand reaches the tie depends
+  on its length: 0.45 -> 0.08 m moved 2,999 of 3,000 roots (median 94 mm). The tail now has its own random draw per
+  strand; the same change keeps all 3,000 roots in place. Tied grooms keep their seed's look but their tails sit
+  differently than before.
 - **A groom file with an odd colour crashed the command.** A colour of six bytes holding a non-ASCII letter (such as
   `#aééb`) stopped any command that read the groom, with no JSON answer. Colours are now exactly `#rrggbb` (the `#`
   optional, once), whole-number settings (strands, points, clumps, seed) refuse fractions instead of cutting them,
