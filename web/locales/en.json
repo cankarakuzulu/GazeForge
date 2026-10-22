@@ -130,6 +130,8 @@
  "body.groom_fringe.curtain": "Curtain",
  "body.groom.fringe_m": "Fringe length (cm)",
  "body.groom.fringe_m_tip": "Length of the fringe hair; a straight fringe is cut just above the brows whatever its length",
+ "body.groom.frame_m": "Face framing (cm)",
+ "body.groom.frame_m_tip": "Length of the shorter layers around the face: the hair rooted along the front hairline, ahead of the ears, is cut to this length and swept out to the sides so it falls beside the face; 0 leaves no layers. With a fringe, the fringe keeps the middle and the layers take its sides",
  "body.groom_direction": "Top direction",
  "body.groom_direction_tip": "Which way the hair on top is combed: from the part, back, forward, or up into a quiff. The sides keep falling from the part",
  "body.groom_direction.part": "From the part",

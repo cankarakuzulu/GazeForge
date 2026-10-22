@@ -8,6 +8,11 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Face-framing layers.** A groom's `frame_m` (Face framing in both panels; 0 is off): the hair rooted along the
+  front hairline, ahead of the ears, is cut to that length, blending back to the full length over 5 cm behind the
+  hairline, and is swept out to the sides so it falls beside the face rather than back into the rest. With a
+  fringe, the fringe keeps the middle 60 % of its width and the layers take its sides. The groom report counts the
+  framed strands, and now also strands with a point in front of the eyes and strands lying on the bare forehead.
 - **Fringes.** A groom's `fringe` (none, straight, curtain; a Fringe choice in both panels) and `fringe_m` (its
   length): the hair rooted in a 4 cm band above the front hairline, between the outer eye corners, is combed down
   over the forehead instead of with the rest. A straight fringe is cut 8 mm above the brows; a curtain fringe parts

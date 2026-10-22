@@ -50,6 +50,12 @@ const FRINGE_ABOVE_BROWS_M: f64 = 0.008;
 const CURTAIN_SWEEP: f64 = 0.9;
 const TIE_CLEAR_OF_M: f64 = 0.04;
 const GATHER_SNUG_M: f64 = 0.006;
+const FRAME_EARS_M: f64 = 0.03;
+const EYES_BAND_M: f64 = 0.015;
+const FRAME_DOWN: f64 = 0.35;
+const FOREHEAD_CLEAR_M: f64 = 0.01;
+const FRINGE_WIDTH_WITH_FRAME: f64 = 0.6;
+const FRAME_DEPTH_M: f64 = 0.05;
 const CURL_FADE_M: f64 = 0.03;
 const FRONT_BACK: f64 = 1.5;
 const FACE_MARGIN_M: f64 = 0.01;
@@ -165,11 +171,20 @@ impl Hairline {
         Ok(Hairline { z: brows + forehead * middle, brows, ears_z: z(&[234, 454])?, centre_x: face.centre_x, half_width: face.half_width, eyes_y: face.eyes_y, ears_y: face.ears_y })
     }
 
-    fn keep(&self, p: Point) -> f64 {
+    fn low(&self, p: Point) -> f64 {
         let a = (p[0] - self.centre_x).abs() / self.half_width;
         let temple = self.z - TEMPLE_DROP_M * (a * a).min(1.0);
         let toward_ears = smoothstep01((p[1] - self.eyes_y) / (self.ears_y - self.eyes_y)) * smoothstep01((a - 1.0) / HAIRLINE_TEMPLE_SPAN);
-        let low = temple + (self.ears_z - temple) * toward_ears;
+        temple + (self.ears_z - temple) * toward_ears
+    }
+
+    fn behind_face_band(&self, p: Point) -> f64 {
+        let ahead = 1.0 - smoothstep01((p[1] - (self.ears_y - FRAME_EARS_M)) / HAIRLINE_EARS_M);
+        smoothstep01((p[2] - self.low(p)) / FRAME_DEPTH_M).max(1.0 - ahead)
+    }
+
+    fn keep(&self, p: Point) -> f64 {
+        let low = self.low(p);
         let behind_ears = smoothstep01((p[1] - self.ears_y) / HAIRLINE_EARS_M);
         let ramp = smoothstep01((p[2] - (low - HAIRLINE_SOFT_M)) / (2.0 * HAIRLINE_SOFT_M));
         1.0 - (1.0 - behind_ears) * (1.0 - ramp)
@@ -286,6 +301,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mut tails: Vec<usize> = Vec::new();
     let mut fringe_of: Vec<bool> = Vec::with_capacity(g.strands);
     let mut gather_off = 0.0f64;
+    let mut framed = 0usize;
+    let fringe_half_width = face.half_width * if g.frame_m > 0.0 { FRINGE_WIDTH_WITH_FRAME } else { 1.0 };
     let fade_line = brim + FADE_LINE_ABOVE_EARS_M;
     let topness = |z: f64| -> f64 {
         if g.sides_m <= 0.0 {
@@ -347,7 +364,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         };
         roots.push((p, n));
         let mut line = vec![add(p, scale(n, ROOT_LIFT_M))];
-        let in_fringe = g.fringe != Fringe::None && (p[0] - face.centre_x).abs() < face.half_width && p[1] < crown[1] && p[2] < hairline.z + FRINGE_BAND_M;
+        let in_fringe = g.fringe != Fringe::None && (p[0] - face.centre_x).abs() < fringe_half_width && p[1] < crown[1] && p[2] < hairline.z + FRINGE_BAND_M;
         fringe_of.push(in_fringe);
         if in_fringe {
             let side = face.side_of(p);
@@ -471,12 +488,28 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         let behind = ((p[1] - crown[1]) / TAPER_SPAN_M).clamp(0.0, 1.0);
         let top_length = if styled { g.length_m * (1.0 - TAPER * behind * behind * (3.0 - 2.0 * behind)) } else { g.length_m };
         let length = if g.sides_m > 0.0 { g.sides_m + (top_length - g.sides_m).max(0.0) * w } else { top_length };
+        let back_of_front = if g.frame_m > 0.0 { hairline.behind_face_band(p) } else { 1.0 };
+        let length = if g.frame_m > 0.0 && back_of_front < 1.0 { length.min(g.frame_m + (length - g.frame_m).max(0.0) * back_of_front) } else { length };
+        framed += usize::from(g.frame_m > 0.0 && back_of_front < 0.5 && length < g.length_m);
         asked += length;
         let seg = length / (points - 1) as f64;
         let lift = LIFT + (g.lift - LIFT) * w;
         let free = on_top && g.direction == Direction::Up && p[1] < crown[1] - UP_FRONT_M;
         let combed = if g.direction == Direction::Up && !free { Direction::Back } else { g.direction };
-        let comb = |q: Point, m: Point| if on_top { top_flow(combed, m).unwrap_or_else(|| flow(q, m)) } else { flow(q, m) };
+        let side_of_face = face.side_of(p);
+        let combed_flow = |q: Point, m: Point| if on_top { top_flow(combed, m).unwrap_or_else(|| flow(q, m)) } else { flow(q, m) };
+        let comb = |q: Point, m: Point| {
+            let f = combed_flow(q, m);
+            if back_of_front >= 1.0 {
+                return f;
+            }
+            let frame = tangent([side_of_face, -0.05, -FRAME_DOWN], m);
+            if dot(frame, frame) < 1e-10 {
+                return f;
+            }
+            let mixed = add(scale(unit(frame), 1.0 - back_of_front), scale(f, back_of_front));
+            if dot(mixed, mixed) < 1e-10 { f } else { unit(mixed) }
+        };
         tails.push(if free { 0 } else { points });
         let mut dir = if free { unit(add(scale(n, 1.0 - UP_WORLD), scale(unit(UP_LEAN), UP_WORLD))) } else { unit(add(scale(n, lift), scale(comb(p, n), 1.0 - lift))) };
         for _ in 1..points {
@@ -633,7 +666,23 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         .filter(|p| (p[0] - face.centre_x).abs() < HAIRLINE_CENTRE_M)
         .map(|p| p[2])
         .fold(f64::INFINITY, f64::min);
-    let fringe_below = strands.iter().zip(&fringe_of).filter(|(_, f)| **f).flat_map(|(s, _)| s.points.iter()).filter(|p| p[2] < hairline.brows).count();
+    let eyes_z = height(&[33, 263]);
+    let over_eyes: Vec<usize> = strands
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| {
+            s.points.iter().any(|p| (p[0] - face.centre_x).abs() < face.half_width - FACE_MARGIN_M && p[2] > eyes_z - EYES_BAND_M && p[2] < brows && p[1] < face.eyes_y)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let on_forehead = strands
+        .iter()
+        .zip(&fringe_of)
+        .filter(|(s, f)| {
+            !**f && s.points.iter().any(|p| (p[0] - face.centre_x).abs() < face.half_width - FACE_MARGIN_M && p[2] > brows && p[2] < hairline.low(*p) - HAIRLINE_SOFT_M - FOREHEAD_CLEAR_M && p[1] < face.eyes_y)
+        })
+        .count();
+    let fringe_below =strands.iter().zip(&fringe_of).filter(|(_, f)| **f).flat_map(|(s, _)| s.points.iter()).filter(|p| p[2] < hairline.brows).count();
     let cm = |x: f64| (x * 1e4).round() / 1e4;
     let face_report = json!({"hairline_above_brows_m": lowest_front.is_finite().then(|| cm(lowest_front - brows)), "hairline_asked_above_brows_m": cm(hairline.z - brows),
                              "hairline_soft_m": HAIRLINE_SOFT_M, "fringe_strands": fringe_of.iter().filter(|f| **f).count(),
@@ -642,7 +691,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                              "brows_to_subnasale_m": cm(brows - subnasale), "subnasale_to_chin_m": cm(subnasale - chin)});
     let report = json!({"face": face_report,"name": g.name, "strands": strands.len(), "points_per_strand": points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
-                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0,"mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
+                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "tie_gather_off_head_mm": (gather_off * 1e4).round() / 10.0, "framed_strands": framed,
+                        "strands_over_eyes": over_eyes.len(), "strands_on_forehead": on_forehead, "over_eyes_roots": over_eyes.iter().take(6).map(|&i| roots[i].0.map(|x| (x * 1e4).round() / 1e4)).collect::<Vec<_>>(),"mean_asked_m": (asked / lines.len().max(1) as f64 * 1e5).round() / 1e5, "top_strands": top_strands, "kept_off_face": kept_off_face, "hugged_steps": hugged,
                         "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_distance_mm": ((FLYAWAY_M + g.curl_radius_m) * 1e4).round() / 10.0, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
                         "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); with sides_m set, a root below the fade line (3.5 cm above the ears, blended over fade_m) gets the sides length instead of length_m; each strand leaves the scalp lifted by lift (0.35; the top's own lift above the fade line) along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed (on the top, back, forward or up when direction says so, a styled top shortening toward the back to 35 % at 8 cm behind the crown; up stands the hair from 3 cm ahead of the crown forward free of the head, mostly toward world up leaning back and rolling back over, and combs the rest back) along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands (on the same side of the part), curled (fading in over 3 cm), frizzed toward the tip (a strand gets a point at least every 1.5 cm and, curled, at least 8 points per turn, up to 256), and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on its strand's side (the root's), so a curl that crosses the middle does not jump to the other side (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
     Ok((strands, report))
