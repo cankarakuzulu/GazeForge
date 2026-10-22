@@ -1418,8 +1418,10 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         morph_games.push(placed.game);
     }
+    let mut placed_dense = neutral_dense.clone();
     if let Some((pivot, s)) = head_scale {
         gf_core::body::scale_about(&mut neutral.game, pivot, s);
+        gf_core::body::scale_about(&mut placed_dense, pivot, s);
         for mg in morph_games.iter_mut() {
             gf_core::body::scale_about(mg, pivot, s);
         }
@@ -1802,7 +1804,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                              "depth": super::wearable::layer_depth(&item.binding, w.layer), "vertices": garment.len(), "hides_base_vertices": item.binding.hidden.len(), "material": item.manifest.material.keys().collect::<Vec<_>>()});
             pending.push((item, garment, slot, row));
         }
-        let head_z = gf_core::base_landmarks::on(&neutral_dense).ok().and_then(|l| Some((l.get(&234)?[2] + l.get(&454)?[2]) / 2.0));
+        let head_z = gf_core::base_landmarks::on(&placed_dense).ok().and_then(|l| Some((l.get(&234)?[2] + l.get(&454)?[2]) / 2.0));
         let mut rows = Vec::new();
         let mut failures = Vec::new();
         for (i, level) in levels.iter().enumerate() {
@@ -1823,7 +1825,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 let h = game.len() as u32;
                 let tris: Vec<[u32; 3]> = level.triangles.iter().copied().chain(st.triangles.iter().map(|t| t.map(|v| v + h))).collect();
                 let skin_surface = super::wearable::Surface::new(points, &tris);
-                let (strands, row) = super::groom::grow(g, &game, &level.triangles, &neutral_dense, &skin_surface)?;
+                let (strands, row) = super::groom::grow(g, &game, &level.triangles, &placed_dense, &skin_surface)?;
                 strand_rows.push(row);
                 strand_groups.push((g.name.clone(), strands));
             }
@@ -1891,7 +1893,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         .map(|((_, garment, _, _, row), t)| super::wearable::HairCover { positions: garment, triangles: t, hide: row["hair"] == "hide" })
                         .collect();
                     if !covers.is_empty() {
-                        let top = neutral_dense.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap_or([0.0, 0.0, head]);
+                        let top = placed_dense.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap_or([0.0, 0.0, head]);
                         let under = super::wearable::HairUnder::new(&covers, head, top);
                         let (mut tucked, mut trimmed, before) = (0usize, 0usize, strands.len());
                         for s in strands.iter_mut() {
@@ -2027,7 +2029,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
                 if i == 0 && levels.len() > GENTLE_LEVELS + 1 && worn.iter().any(|w| w.4["scalp_cap"] == true) {
                     let cap_map = gf_core::skin_map::build(&base.triangle_uvs, cap_size, CAP_PAD);
-                    let regions = gf_core::skin_regions::build(&game, &gf_core::game_mesh::game_normals(&game, &base.triangles), &base.triangles, &gf_core::base_landmarks::on(&neutral_dense)?)?;
+                    let regions = gf_core::skin_regions::build(&game, &gf_core::game_mesh::game_normals(&game, &base.triangles), &base.triangles, &gf_core::base_landmarks::on(&placed_dense)?)?;
                     let face: Vec<usize> = gf_core::skin_regions::NAMES.iter().enumerate().filter(|(_, n)| CAP_FACE.contains(n)).map(|(k, _)| k).collect();
                     if face.len() != CAP_FACE.len() {
                         return Err(format!("the scalp cap keeps off {CAP_FACE:?}, and the skin regions are {:?}", gf_core::skin_regions::NAMES));

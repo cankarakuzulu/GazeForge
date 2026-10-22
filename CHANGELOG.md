@@ -301,6 +301,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A scaled head grew its hair by the unscaled face.** With `--body PACK --head-scale`, a groom (its landmarks,
+  hairline, face keep-out and scalp), the hat test and the scalp cap read the head before scaling while the hair grew
+  on the scaled one: at 1.08 the hairline stayed at 4.81 cm above the brows and the scalp counted 7,222 triangles
+  instead of 5,713-ish. They now read the scaled head: 5.26 cm (asked 5.66 = 5.24 x 1.08), 5,779 triangles. Scale 1
+  and spec bodies are unchanged.
 - **Cloth was pinned to clothes worn over it.** Cloth pins to the opaque items worn under it, but every opaque item
   counted, whatever its layer, and an inside-out item counted by its wrong side: a suit worn over a cape pinned 341
   of the cape's 403 vertices. Only items under the cloth (lower layer, or earlier in the list at the same layer),
