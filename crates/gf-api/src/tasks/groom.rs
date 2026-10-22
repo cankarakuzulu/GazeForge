@@ -14,6 +14,11 @@ const ROOT_LIFT_M: f64 = 0.001;
 const CLEAR_M: f64 = 0.003;
 const NEAR_M: f64 = 0.05;
 const HUG_M: f64 = 0.02;
+const STEER: f64 = 0.5;
+const FLYAWAY_M: f64 = 0.04;
+const FALL: f64 = 1.0;
+const JAW_MARGIN_M: f64 = -0.015;
+const THROAT_M: f64 = 0.05;
 const OUTSIDE_PASSES: usize = 4;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
@@ -31,6 +36,7 @@ pub(crate) struct Face {
     centre_x: f64,
     half_width: f64,
     bottom: f64,
+    chin: f64,
     top: f64,
     eyes_y: f64,
     ears_y: f64,
@@ -43,11 +49,16 @@ impl Face {
         Ok(Face {
             centre_x: (eye_r[0] + eye_l[0]) / 2.0,
             half_width: (eye_l[0] - eye_r[0]).abs() / 2.0 + FACE_MARGIN_M,
-            bottom: chin[2],
+            bottom: chin[2] - THROAT_M,
+            chin: chin[2],
             top: brow[2] - FRINGE_M,
             eyes_y: (eye_r[1] + eye_l[1]) / 2.0,
             ears_y: (ear_r[1] + ear_l[1]) / 2.0,
         })
+    }
+
+    fn under_jaw(&self, p: Point) -> bool {
+        p[2] < self.chin && p[1] < self.ears_y && (p[0] - self.centre_x).abs() < self.half_width + JAW_MARGIN_M
     }
 
     pub(crate) fn keep_out(&self, p: Point) -> Option<Point> {
@@ -202,11 +213,14 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                 && let Some(j) = surface.nearest(next, HUG_M)
             {
                 let n = surface.normals[j];
+                dir = unit(add(scale(dir, 1.0 - STEER), scale(flow(next, n), STEER)));
                 let out = dot(dir, n);
                 if out > 0.0 {
                     dir = unit(sub(dir, scale(n, out)));
                     hugged += 1;
                 }
+            } else if next[2] > brim {
+                dir = unit(add(dir, scale(down, FALL)));
             }
             line.push(next);
         }
@@ -236,6 +250,10 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mut strands = Vec::with_capacity(lines.len());
     let mut deepest = 0.0f64;
     let mut deepest_at = [0.0f64; 3];
+    let mut under_jaw = 0usize;
+    let mut flyaways = 0usize;
+    let mut fly_roots: Vec<Value> = Vec::new();
+    let mut jaw_roots: Vec<Value> = Vec::new();
     let mut lengths = Vec::with_capacity(lines.len());
     for line in &mut lines {
         let phase = rng.next() * std::f64::consts::TAU;
@@ -280,6 +298,18 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let t = k as f32 / (line.len() - 1) as f32;
             g.colour.map(|c| c * (0.55 + 0.45 * t))
         });
+        if let Some(q) = line.iter().find(|q| q[2] > brim && surface.nearest(**q, FLYAWAY_M).is_none()) {
+            flyaways += 1;
+            if fly_roots.len() < 6 {
+                fly_roots.push(json!({"root": line[0].map(|x| (x * 1e4).round() / 1e4), "far_point": q.map(|x| (x * 1e4).round() / 1e4)}));
+            }
+        }
+        if line.iter().any(|q| face.under_jaw(*q)) {
+            under_jaw += 1;
+            if jaw_roots.len() < 8 {
+                jaw_roots.push(json!({"root": line[0].map(|x| (x * 1e4).round() / 1e4), "lowest_ahead": line.iter().filter(|q| face.under_jaw(**q)).map(|q| q.map(|x| (x * 1e4).round() / 1e4)).next()}));
+            }
+        }
         strands.push(Strand { points: line.clone(), colours: colours.collect() });
     }
     let root_scalp: f64 = roots
@@ -295,8 +325,8 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": g.points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
                         "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "kept_off_face": kept_off_face, "hugged_steps": hugged,
-                        "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
-                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal, follows the head's curve while above the ears and within 2 cm of it (its step never turns away from the surface there), and is combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from the chin to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
+                        "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "strands_under_jaw": under_jaw, "under_jaw_examples": jaw_roots, "flyaways": flyaways, "flyaway_examples": fly_roots, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
+                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal, follows the head's curve while above the ears and within 2 cm of it (each step there turns halfway back to the comb direction and never away from the surface; past 2 cm off the head above the ears it falls), and is combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from 5 cm under the chin (in front of the throat) to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
     Ok((strands, report))
 }
 
@@ -306,7 +336,7 @@ mod tests {
 
     #[test]
     fn hair_in_front_of_the_face_moves_to_the_nearest_edge_beside_it() {
-        let face = Face { centre_x: 0.0, half_width: 0.05, bottom: 1.5, top: 1.7, eyes_y: -0.08, ears_y: 0.0 };
+        let face = Face { centre_x: 0.0, half_width: 0.05, bottom: 1.5, chin: 1.55, top: 1.7, eyes_y: -0.08, ears_y: 0.0 };
         let inside = |p: Point| (p[0].abs() < face.half_width + (face.eyes_y - p[1]).max(0.0) - 1e-9) && p[1] < face.ears_y;
         assert_eq!(face.keep_out([0.02, -0.05, 1.6]), Some([0.05, -0.05, 1.6]));
         assert_eq!(face.keep_out([-0.02, -0.05, 1.6]), Some([-0.05, -0.05, 1.6]));
