@@ -206,6 +206,14 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Clothes showed through a coarse outer item, and cloth over clothes was barely pinned.** Layering pushed the
+  outer item's vertices out, but a fine suit still rose between a coarse cape's vertices (visible patches at its top
+  edge). Now the vertices of the items underneath that lie in front of one of the outer item's triangles (or behind
+  it by less than the clearance, within 2 cm) are moved behind it; the layering report gives `tucked_under`. Cape
+  over suit: 32 suit vertices tucked (at most 7 mm), the patches gone but for a dot or two at the edge; a five-item
+  outfit changes by 12 pixels. A cloth item's `_PIN` is now measured against the body and the opaque items worn
+  under it, not the body alone: a cape over a suit had no vertex pinned at 0.99 (its collar rests on the suit, off
+  the skin), now 28.
 - **Baked cloth went through the body and the clothes.** It collided only with the body's capsules, which sit inside
   the skin; a cape sank up to 17.5 mm into the hips. It now also keeps 4 mm off the skinned surface of the body, the
   head and every other opaque item worn - or, where its rest already lies closer or inside, no deeper than at rest.

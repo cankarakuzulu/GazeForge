@@ -624,6 +624,7 @@ impl BaseFrame {
 pub const CLEARANCE_M: f64 = 0.002;
 const PUSH_REACH_M: f64 = 0.1;
 const FACING_REACH_M: f64 = 0.3;
+const TUCK_REACH_M: f64 = 0.02;
 const PUSH_SPREAD_PASSES: usize = 2;
 const LIFT_ROUNDS: usize = 4;
 const LIFT_MAX_M: f64 = 0.01;
@@ -964,9 +965,52 @@ pub fn layer(garments: &mut [Layered]) -> Vec<Value> {
         let triangles = garments[g].triangles.clone();
         let mut report = push_out(garments[g].positions, &triangles, &surface, CLEARANCE_M);
         report["over"] = json!(inner.len());
+        let outer = Surface::new(garments[g].positions.clone(), &triangles);
+        let mut around: Vec<Vec<usize>> = vec![Vec::new(); outer.points.len()];
+        for (t, tri) in triangles.iter().enumerate() {
+            for &v in tri {
+                around[v as usize].push(t);
+            }
+        }
+        let (mut tucked, mut deepest) = (0usize, 0.0f64);
+        for &k in &inner {
+            for v in garments[k].positions.iter_mut() {
+                let Some(j) = outer.nearest(*v, PUSH_REACH_M) else { continue };
+                let ring: Vec<usize> = around[j].iter().flat_map(|&t| triangles[t].iter().flat_map(|&u| around[u as usize].iter().copied())).collect();
+                let Some((s, n)) = ring.iter().find_map(|&t| under_triangle(*v, triangles[t].map(|i| outer.points[i as usize]), outer.normals[j])) else { continue };
+                if s > -CLEARANCE_M && s < TUCK_REACH_M {
+                    let by = s + CLEARANCE_M;
+                    *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
+                    tucked += 1;
+                    deepest = deepest.max(by);
+                }
+            }
+        }
+        report["tucked_under"] = json!({"vertices": tucked, "max_mm": deepest * 1000.0,
+                                        "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance"});
         reports[g] = report;
     }
     reports
+}
+
+fn under_triangle(p: Point, t: [Point; 3], facing: Point) -> Option<(f64, Point)> {
+    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+    let mut n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    let len = dot(n, n).sqrt();
+    if len < 1e-12 {
+        return None;
+    }
+    n = n.map(|x| x / len);
+    if dot(n, facing) < 0.0 {
+        n = n.map(|x| -x);
+    }
+    let d = sub(p, t[0]);
+    let (d11, d12, d22) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+    let (d1, d2) = (dot(d, e1), dot(d, e2));
+    let det = d11 * d22 - d12 * d12;
+    let u = (d22 * d1 - d12 * d2) / det;
+    let w = (d11 * d2 - d12 * d1) / det;
+    (u >= 0.0 && w >= 0.0 && u + w <= 1.0).then(|| (dot(d, n), n))
 }
 
 pub fn triangles_of(faces: &[Vec<(u32, Option<u32>)>]) -> Vec<[u32; 3]> {
@@ -1248,6 +1292,54 @@ pub fn check(opts: &Options) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grid(k: usize, size: f64, z: f64, x0: f64) -> (Vec<Point>, Vec<[u32; 3]>) {
+        let mut p = Vec::new();
+        for i in 0..=k {
+            for j in 0..=k {
+                p.push([x0 + j as f64 * size / k as f64, i as f64 * size / k as f64, z]);
+            }
+        }
+        let at = |i: usize, j: usize| (i * (k + 1) + j) as u32;
+        let mut t = Vec::new();
+        for i in 0..k {
+            for j in 0..k {
+                t.push([at(i, j), at(i, j + 1), at(i + 1, j)]);
+                t.push([at(i, j + 1), at(i + 1, j + 1), at(i + 1, j)]);
+            }
+        }
+        (p, t)
+    }
+
+    #[test]
+    fn an_inner_item_showing_through_an_outer_one_is_tucked_under_its_footprint_only() {
+        let (mut inner, inner_t) = grid(40, 0.4, -0.01, 0.0);
+        let (mut outer, outer_t) = grid(4, 0.2, 0.0, 0.1);
+        let far_from_outer = |p: &Point| outer.iter().all(|o| ((o[0] - p[0]).powi(2) + (o[1] - p[1]).powi(2)).sqrt() > 0.015);
+        let footprint = |p: &Point| p[0] >= 0.1 && p[0] <= 0.3 && p[1] >= 0.0 && p[1] <= 0.2;
+        let bumps: Vec<bool> = inner.iter().map(|p| far_from_outer(p) && ((p[0] > 0.1 && p[0] < 0.3) || p[0] < 0.08)).collect();
+        for (p, &b) in inner.iter_mut().zip(&bumps) {
+            if b {
+                p[2] = 0.003;
+            }
+        }
+        let (before, outer_before) = (inner.clone(), outer.clone());
+        let mut items = vec![
+            Layered { positions: &mut inner, triangles: inner_t, depth: 10.0, opaque: true },
+            Layered { positions: &mut outer, triangles: outer_t, depth: 20.0, opaque: true },
+        ];
+        let reports = layer(&mut items);
+        assert_eq!(outer, outer_before, "the coarse outer sheet is not moved: its own vertices are clear of the inner one");
+        assert!(reports[1]["tucked_under"]["vertices"].as_u64().unwrap() > 0, "{}", reports[1]);
+        for ((p, q), &b) in inner.iter().zip(&before).zip(&bumps) {
+            if b && footprint(q) {
+                assert!(p[2] <= -CLEARANCE_M + 1e-9, "a bump under the outer sheet ends behind it: {q:?} -> {p:?}");
+            }
+            if !footprint(q) {
+                assert_eq!(p, q, "outside the outer sheet's footprint nothing moves");
+            }
+        }
+    }
 
     #[test]
     fn rewinding_reverses_faces_and_normals_and_keeps_the_rest() {

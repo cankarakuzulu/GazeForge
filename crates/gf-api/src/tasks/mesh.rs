@@ -1996,11 +1996,24 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         spring_skin.push(Some(blended));
                     }
                 }
+                let clothes_under = worn.iter().any(|w| w.4["physics"] == "cloth").then(|| {
+                    let (mut points, mut tris) = (Vec::new(), Vec::new());
+                    for ((item, _, _, ladder, row), positions) in worn.iter().zip(&placed) {
+                        if row["physics"] == "cloth" || item.manifest.transparent || item.manifest.attach.is_some() {
+                            continue;
+                        }
+                        let offset = points.len() as u32;
+                        points.extend_from_slice(positions);
+                        tris.extend(ladder[i.min(ladder.len() - 1)].1.iter().map(|t| t.map(|v| v + offset)));
+                    }
+                    (!points.is_empty()).then(|| super::wearable::Surface::new(points, &tris))
+                }).flatten();
                 for (((item, _, slot, ladder, row), positions), override_skin) in worn.iter().zip(&placed).zip(spring_skin.iter().chain(std::iter::repeat(&None))) {
                     let (kept, tris, uvs) = &ladder[i.min(ladder.len() - 1)];
                     let joint = item.manifest.attach.as_ref().and_then(|a| body_rig.as_ref().and_then(|br| br.rig.bones.iter().position(|b| b.name == a.bone)));
                     let pin: Option<Vec<f32>> = (row["physics"] == "cloth").then(|| {
-                        positions.iter().map(|&p| surface.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(surface.signed(p, j)))).collect()
+                        let on = |s: &super::wearable::Surface, p: Point| s.nearest(p, 0.1).map_or(0.0, |j| super::wearable::pin_weight(s.signed(p, j)));
+                        positions.iter().map(|&p| on(&surface, p).max(clothes_under.as_ref().map_or(0.0, |s| on(s, p)))).collect()
                     });
                     let lod = garment_lod(item, positions, kept, tris, uvs, body_rig.as_ref().map(|br| &br.by_obj), joint, *slot, pin.as_deref(), override_skin.as_deref(), body_cap);
                     wear_slots.push((body_lods.len(), *slot));
