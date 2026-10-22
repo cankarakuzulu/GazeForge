@@ -15,6 +15,11 @@ open, with its last measurement, rather than left out.
   crown. Both act only on the item's triangles that do not face down, and hide leaves the brim alone (the flat band
   within 2 cm of its lowest point), so hair that shows under a brim stays. On the dressed test character: hair through
   the crown 362 triangle centres -> 0 in both modes; hide leaves out 417 hair triangles at the finest level.
+  Grown hair (a groom's strands) follows the same setting: every strand point above the ears and above the hat's
+  lowest point is kept 2 mm under the lowest of the hat's surfaces straight over or under it (segment middles too),
+  and hide leaves out each strand's points under the crown from the root. A quiff under a fedora: 148,305 points
+  lowered, 0 points and 0 segment middles left showing; hide leaves out 5,466 strands entirely. The strands report
+  gives these counts.
 - **Bob with bangs, curtain bangs, long layers.** Three more styles (fourteen in all); a style now also sets the
   fringe (and every style sets face framing, so picking a style without them takes them away). The colours,
   highlights and forehead stay as they are, like the part.

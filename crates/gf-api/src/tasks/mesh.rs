@@ -1870,6 +1870,39 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                     row["lod_pushed"] = json!([]);
                     worn.push((item, garment, slot, ladder, row));
                 }
+                if let Some(head) = head_z
+                    && groom.is_some()
+                    && let Some((_, strands)) = strand_groups.last_mut()
+                {
+                    let triangles: Vec<Vec<[u32; 3]>> = worn.iter().map(|(item, ..)| super::wearable::triangles_of(&item.faces)).collect();
+                    let covers: Vec<super::wearable::HairCover> = worn
+                        .iter()
+                        .zip(&triangles)
+                        .filter(|((item, ..), _)| !item.manifest.transparent)
+                        .map(|((_, garment, _, _, row), t)| super::wearable::HairCover { positions: garment, triangles: t, hide: row["hair"] == "hide" })
+                        .collect();
+                    if !covers.is_empty() {
+                        let under = super::wearable::HairUnder::new(&covers, head);
+                        let (mut tucked, mut trimmed, before) = (0usize, 0usize, strands.len());
+                        for s in strands.iter_mut() {
+                            let (cut, t) = under.apply(&mut s.points);
+                            tucked += t;
+                            let from = cut.iter().position(|c| !c).unwrap_or(cut.len());
+                            if from > 0 {
+                                trimmed += from;
+                                s.points.drain(..from);
+                                s.colours.drain(..from.min(s.colours.len()));
+                            }
+                        }
+                        strands.retain(|s| s.points.len() >= 2);
+                        let lines: Vec<&[Point]> = strands.iter().map(|s| s.points.as_slice()).collect();
+                        let (showing, middles) = under.showing(&lines);
+                        if let Some(row) = strand_rows.last_mut() {
+                            row["under_worn_items"] = json!({"points_lowered": tucked, "points_hidden_from_the_root": trimmed, "strands_hidden": before - strands.len(), "strands_kept": strands.len(), "points_still_showing": showing, "segment_middles_still_showing": middles,
+                                                             "meaning": "strand points above the ears and above a worn solid item's lowest point (a hat) are kept 2 mm under the lowest of its surfaces straight above or below them, segment middles too (both ends lowered); with that item's hair setting hide, each strand's points under its crown (not its brim), from the root, are left out"});
+                        }
+                    }
+                }
             }
             let (body_triangles, body_uvs): (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) = if covered.is_empty() {
                 (st.triangles.clone(), st.uvs.clone())
