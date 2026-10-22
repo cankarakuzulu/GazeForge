@@ -170,7 +170,7 @@ pub(crate) struct Hairline {
 }
 
 impl Hairline {
-    fn on(landmarks: &std::collections::BTreeMap<usize, Point>, face: &Face, forehead: f64) -> Result<Hairline, String> {
+    pub(crate) fn on(landmarks: &std::collections::BTreeMap<usize, Point>, face: &Face, forehead: f64) -> Result<Hairline, String> {
         let z = |ids: &[usize]| -> Result<f64, String> {
             ids.iter().map(|i| landmarks.get(i).map(|p| p[2]).ok_or_else(|| format!("landmark {i} is missing"))).sum::<Result<f64, String>>().map(|s| s / ids.len() as f64)
         };
@@ -179,7 +179,7 @@ impl Hairline {
         Ok(Hairline { z: brows + forehead * middle, brows, ears_z: z(&[234, 454])?, centre_x: face.centre_x, half_width: face.half_width, eyes_y: face.eyes_y, ears_y: face.ears_y })
     }
 
-    fn low(&self, p: Point) -> f64 {
+    pub(crate) fn low(&self, p: Point) -> f64 {
         let a = (p[0] - self.centre_x).abs() / self.half_width;
         let temple = self.z - TEMPLE_DROP_M * (a * a).min(1.0);
         let toward_ears = smoothstep01((p[1] - self.eyes_y) / (self.ears_y - self.eyes_y)) * smoothstep01((a - 1.0) / HAIRLINE_TEMPLE_SPAN);
@@ -191,7 +191,15 @@ impl Hairline {
         smoothstep01((p[2] - self.low(p)) / FRAME_DEPTH_M).max(1.0 - ahead)
     }
 
-    fn keep(&self, p: Point) -> f64 {
+    pub(crate) fn below(&self, p: Point) -> bool {
+        self.keep(p) <= 0.0
+    }
+
+    pub(crate) fn depth_below(&self, p: Point) -> f64 {
+        (self.low(p) - HAIRLINE_SOFT_M - p[2]).max(0.0)
+    }
+
+    pub(crate) fn keep(&self, p: Point) -> f64 {
         let low = self.low(p);
         let behind_ears = smoothstep01((p[1] - self.ears_y) / HAIRLINE_EARS_M);
         let ramp = smoothstep01((p[2] - (low - HAIRLINE_SOFT_M)) / (2.0 * HAIRLINE_SOFT_M));

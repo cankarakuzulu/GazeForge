@@ -285,6 +285,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Game hair cards kept the old low hairline.** The scalp cap under the cards still followed the head's scalp
+  skin region, which starts low on the forehead, so every hair-card wearable showed an opaque band down to near the
+  brows - a fringe on a quiff, an undercut, a curtain. The cap now follows the groom's hairline like the strands'
+  roots do: the old cap reached 31.6 mm below it (97 of 700 cap vertices), the new one 0.3 mm (the cap's lift).
+  The cards report gives both numbers.
 - **Long hair splayed out over the shoulders.** Hair landing on the shoulders slid outward along them toward the
   arms (12.7 % of a long groom's strands ended pointing outward, reaching 27 cm from the centre line). Hair that lands
   on the body below the ears now turns down and back over the shoulders (front, for hair rooted ahead of the ears):

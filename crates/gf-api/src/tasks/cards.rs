@@ -334,15 +334,19 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     let scalp = crate::body::scalp(&store, &spec, source.as_ref())?;
     let (strands, grown) = super::groom::grow(&g, &scalp.head, &scalp.triangles, &scalp.dense, &scalp.surface)?;
     let centre = scale(scalp.head.iter().fold([0.0; 3], |a, &p| add(a, p)), 1.0 / scalp.head.len().max(1) as f64);
-    let face = super::groom::Face::on(&gf_core::base_landmarks::on(&scalp.dense)?)?;
+    let landmarks = gf_core::base_landmarks::on(&scalp.dense)?;
+    let face = super::groom::Face::on(&landmarks)?;
+    let hairline = super::groom::Hairline::on(&landmarks, &face, g.forehead)?;
     let blocked = |p: Point| face.keep_out(p).is_some();
     let mut cards = build(&strands, count, centre, WIDTH_MAX_M, &blocked, palette.lit_columns, &|s| palette.is_lit(s));
     let (near_cards, near_vertices) = (cards.members.len(), cards.positions.len());
-    let regions = gf_core::skin_regions::build(&scalp.head, &gf_core::game_mesh::game_normals(&scalp.head, &scalp.triangles), &scalp.triangles, &gf_core::base_landmarks::on(&scalp.dense)?)?;
+    let regions = gf_core::skin_regions::build(&scalp.head, &gf_core::game_mesh::game_normals(&scalp.head, &scalp.triangles), &scalp.triangles, &landmarks)?;
     let scalp_index = gf_core::skin_regions::NAMES.iter().position(|n| *n == "scalp").ok_or("no scalp skin region")?;
-    let weight: Vec<f64> = regions.weights.iter().map(|w| w[scalp_index] as f64).collect();
+    let weight: Vec<f64> = regions.weights.iter().zip(&scalp.head).map(|(w, &p)| w[scalp_index] as f64 * hairline.keep(p)).collect();
     let cap = scalp_cap(&scalp.head, &scalp.triangles, &scalp.triangle_uvs, &weight, centre);
     let (cap_vertices, cap_triangles) = (cap.positions.len(), cap.cap.len());
+    let cap_below_hairline = cap.positions.iter().filter(|&&p| hairline.below(p)).count();
+    let cap_below_mm = cap.positions.iter().filter(|&&p| hairline.below(p)).map(|&p| hairline.depth_below(p) * 1000.0).fold(0.0, f64::max);
     append(&mut cards, cap);
     let mut levels = Vec::new();
     let mut far_rows = Vec::new();
@@ -379,7 +383,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     bind.insert("double-sided".into(), "on".into());
     let bound = super::wearable::bind_with(&bind, levels)?;
     let members: Vec<usize> = cards.members[..near_cards].to_vec();
-    Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": cards.cut,
+    Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "below_hairline": cap_below_hairline, "below_hairline_mm": (cap_below_mm * 10.0).round() / 10.0, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": cards.cut,
               "strands_per_card": {"min": members.iter().min(), "max": members.iter().max(), "mean": members.iter().sum::<usize>() as f64 / members.len().max(1) as f64},
               "card_width_mm": {"min": cards.widths_m[..near_cards].iter().copied().fold(f64::INFINITY, f64::min) * 1000.0, "max": cards.widths_m[..near_cards].iter().copied().fold(0.0, f64::max) * 1000.0},
               "atlas": {"size": size, "columns": COLUMNS, "highlight_columns": palette.lit_columns, "file": png_path.to_string_lossy()}, "highlight_cards": cards.lit, "obj": obj_path.to_string_lossy(), "groom": grown, "bind": bound,
