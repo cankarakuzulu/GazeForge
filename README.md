@@ -522,7 +522,7 @@ more thinly than the painted cards (about 100000 come close); widths are fixed (
 In both Body shape panels a hair item has a **Strands** switch (undoable like every edit): the stitch preview then draws it as 4000 strands (ribbons 1.2 mm wide, in its average hair colour) in place of its cards, and `--strands` traces the items it is on (every hair when it is on for none). Strands for Unreal (Alembic), strands turned back into game cards, and grooms made from scratch come later.
 
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
---bake CLIP` on a file already exported, or the "Bake hair physics into a glb" task) simulates the spring chains offline
+--bake CLIP` on a file already exported, or the "Bake hair and cloth physics into a glb" task) simulates the spring chains offline
 and writes an animation `CLIP_baked`: `--bake-format bones` (the default) as rotation keys for the chain joints beside
 the clip's own channels, `--bake-format vertex` as one morph target per frame over a skin without the chain joints.
 `sway` is built in (four seconds of head turns, a torso lean and a sideways sway with a bob, on the bones the chains hang
@@ -1476,7 +1476,7 @@ Each milestone ends on a measured gate, not a declaration.
 | M4 | Image to character: facial landmarks and a multi-view reconstruction, fitted to the linear targets, then a residual and a photo projection | a character rebuilt from photos in under an hour of compute | open: under half of the gap to the truth closed |
 | M5 | Game-ready output: LODs, a rig, expression blend shapes (ARKit-52) | a GazeForge head running in a game | partly: imports and plays in Godot 4.7; the closed eyelid of the blink shapes is a known defect |
 | 0.2.0 | Facial animation: a video or a face-capture take to an expression clip on the character (per-frame gate, calibration, smoothing, retarget to the blend shapes and the face rig) | jitter on a still segment, reprojection onto the source landmarks, eyelid and facing gates per frame | experimental in 0.2.0: works end to end; reprojection, eyelid and head-pitch gates open |
-| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items, the physics data and the Godot reader (spring bones and cloth) done; VRM done (T-pose, humanoid, expressions, spring bones); spring bakes done (bones or vertex), cloth bakes not yet |
+| Next | Wearables: MakeHuman clothes, any garment bound to a character, rigid items on bones, then physics (cloth and spring-bone data for any engine, Godot and VRM readers, baked animation) | every item fitted, layered and skinned on every LOD; a physics item moving in Godot | in progress: clothes, any garment, rigid items, the physics data and the Godot reader (spring bones and cloth) done; VRM done (T-pose, humanoid, expressions, spring bones); spring and cloth bakes done |
 | Next | Native studio: a native client over the in-process core, with a scripted offscreen mode for every check | the viewport matches the browser viewer's pixels; settles equal the registry's byte for byte | in progress: viewport, render modes, layouts, in-process loading, the shape input layer, live preview, worker-thread settles, undo, save and a Godot render mode done |
 
 ## Development

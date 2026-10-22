@@ -210,7 +210,7 @@ fn attach_solid() -> Value {
 
 fn bake_physics() -> Value {
     json!({
-        "id": "bake_physics", "title": "Bake hair physics into a glb", "group": "Export", "developer": false,
+        "id": "bake_physics", "title": "Bake hair and cloth physics into a glb", "group": "Export", "developer": false,
         "summary": "Spring-bone hair, ropes and capes simulated offline and written into a copy of an exported character as an animation, for engines that cannot run the physics themselves.",
         "steps": [
             {"id": "bake", "title": "Bake", "command": "wearable.bake",

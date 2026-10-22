@@ -496,7 +496,7 @@ fn v3(v: &Value) -> Option<V3> {
     Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
 }
 
-fn sway_clip(scene: &Scene, chains: &[Chain], frame: &M4, top: usize, unit_scale: f64, fps: f64) -> Clip {
+fn sway_clip(scene: &Scene, anchors: &[usize], frame: &M4, top: usize, unit_scale: f64, fps: f64) -> Clip {
     let frames = (SWAY_SECONDS * fps).round().max(1.0) as usize;
     let times: Vec<f64> = (0..=frames).map(|k| k as f64 * SWAY_SECONDS / frames as f64).collect();
     type Wave = (V3, f64, f64);
@@ -509,8 +509,7 @@ fn sway_clip(scene: &Scene, chains: &[Chain], frame: &M4, top: usize, unit_scale
         }
         None => motions.push((node, vec![m])),
     };
-    for chain in chains {
-        let p = chain.parent;
+    for &p in anchors {
         add_motion(p, ([0.0, 1.0, 0.0], 35f64.to_radians(), 2.0));
         if let Some(pp) = scene.parent[p].filter(|&pp| pp != top && Some(pp) != scene.parent[top]) {
             add_motion(pp, ([0.0, 0.0, 1.0], 8f64.to_radians(), 1.0));
@@ -819,7 +818,7 @@ fn weights_of(doc: &Value, bin: &[u8], attributes: &Value, n: usize, chain_of: &
                 *by_chain.entry(c).or_default() += w;
             }
         }
-        let c = by_chain.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0).ok_or("a skinned vertex has no weight at all")?;
+        let c = by_chain.into_iter().max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0))).map(|x| x.0).ok_or("a skinned vertex has no weight at all")?;
         let parent = skin.joints.iter().position(|&n| n == chains[c].parent).ok_or_else(|| format!("the chain's parent bone {} is not in the mesh's skin", chains[c].parent))?;
         body.push(vec![(parent, 1.0)]);
     }
@@ -959,6 +958,270 @@ fn write_vertex(doc: &mut Value, bin: &mut Vec<u8>, scene: &Scene, clip: &Clip, 
     Ok(json!(rows))
 }
 
+const CLOTH_HZ: f64 = 240.0;
+const CLOTH_ITERATIONS: usize = 12;
+const CLOTH_GRAVITY: f64 = 9.81;
+const CLOTH_DAMPING: f64 = 0.02;
+const CLOTH_BEND: f64 = 0.2;
+const CLOTH_THICKNESS_M: f64 = 0.004;
+const PINNED_REPORT: f64 = 0.99;
+
+struct ClothMesh {
+    node: usize,
+    mesh: usize,
+    skin: Skin,
+    bind: Vec<V3>,
+    normals: Option<Vec<V3>>,
+    weights: Vec<Vec<(usize, f64)>>,
+    pin: Vec<f64>,
+    triangles: Vec<[usize; 3]>,
+}
+
+fn read_cloth_mesh(doc: &Value, bin: &[u8], node: usize, pin_name: &str) -> Result<ClothMesh, String> {
+    let n_ = &doc["nodes"][node];
+    let (Some(mesh), Some(skin_index)) = (n_["mesh"].as_u64(), n_["skin"].as_u64()) else {
+        return Err(format!("cloth node {} has no skinned mesh", n_["name"]));
+    };
+    let skin = read_skin(doc, bin, skin_index as usize)?;
+    let primitives = doc["meshes"][mesh as usize]["primitives"].as_array().cloned().unwrap_or_default();
+    let attributes = primitives.first().ok_or("a cloth mesh has no primitive")?["attributes"].clone();
+    if primitives.iter().any(|p| p["attributes"] != attributes) {
+        return Err(format!("cloth node {}: primitives with different vertex attributes are not baked", n_["name"]));
+    }
+    let v3s = |a: Vec<f64>| -> Vec<V3> { a.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect() };
+    let bind = v3s(floats_of(doc, bin, attributes["POSITION"].as_u64().ok_or("a cloth primitive has no POSITION")?)?);
+    let normals = match attributes["NORMAL"].as_u64() {
+        Some(a) => Some(v3s(floats_of(doc, bin, a)?)),
+        None => None,
+    };
+    let n = bind.len();
+    let pin = match attributes[pin_name].as_u64() {
+        Some(a) => floats_of(doc, bin, a)?,
+        None => return Err(format!("cloth node {} has no {pin_name} attribute", n_["name"])),
+    };
+    if pin.len() != n {
+        return Err(format!("cloth node {}: {pin_name} does not match its vertices", n_["name"]));
+    }
+    let mut weights: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    for set in 0..2 {
+        let (Some(j), Some(w)) = (attributes[format!("JOINTS_{set}")].as_u64(), attributes[format!("WEIGHTS_{set}")].as_u64()) else { continue };
+        let (j, w) = (floats_of(doc, bin, j)?, floats_of(doc, bin, w)?);
+        for v in 0..n {
+            for k in 0..4 {
+                if w[4 * v + k] > 0.0 {
+                    weights[v].push((j[4 * v + k] as usize, w[4 * v + k]));
+                }
+            }
+        }
+    }
+    let mut triangles = Vec::new();
+    for p in &primitives {
+        let idx = gltf::read_indices(doc, bin, p["indices"].as_u64().ok_or("a cloth primitive has no indices")?)?;
+        triangles.extend(idx.chunks_exact(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]));
+    }
+    Ok(ClothMesh { node, mesh: mesh as usize, skin, bind, normals, weights, pin, triangles })
+}
+
+fn joint_matrices(world: &[M4], skin: &Skin) -> Vec<M4> {
+    skin.joints.iter().zip(&skin.ibm).map(|(&j, ibm)| mmul(&world[j], ibm)).collect()
+}
+
+fn blend(list: &[(usize, f64)], joint_m: &[M4]) -> M4 {
+    let mut m = [[0.0; 4]; 4];
+    for &(j, w) in list {
+        for (row, src) in m.iter_mut().zip(&joint_m[j]) {
+            for (x, y) in row.iter_mut().zip(src) {
+                *x += w * y;
+            }
+        }
+    }
+    m
+}
+
+fn face_normals(points: &[V3], triangles: &[[usize; 3]]) -> Vec<V3> {
+    let mut n = vec![[0.0; 3]; points.len()];
+    for t in triangles {
+        let f = cross(sub(points[t[1]], points[t[0]]), sub(points[t[2]], points[t[0]]));
+        for &v in t {
+            n[v] = add(n[v], f);
+        }
+    }
+    n.into_iter().map(unit).collect()
+}
+
+struct ClothRun {
+    positions: Vec<Vec<V3>>,
+    report: Value,
+}
+
+fn simulate_cloth(scene: &Scene, clip: &Clip, cloth: &ClothMesh, caps: &[Capsule], times: &[f64], unit_scale: f64) -> ClothRun {
+    let n = cloth.bind.len();
+    let skinned = |t: f64| -> Vec<V3> {
+        let world = scene.world(&clip.pose(scene, t));
+        let jm = joint_matrices(&world, &cloth.skin);
+        (0..n).map(|v| apply(&blend(&cloth.weights[v], &jm), cloth.bind[v])).collect()
+    };
+    let placed = |t: f64| -> Vec<(V3, V3, f64)> {
+        let world = scene.world(&clip.pose(scene, t));
+        caps.iter().map(|c| {
+            let m = mmul(&world[c.node], &c.ibm);
+            (apply(&m, c.head), apply(&m, c.tail), c.radius * unit_scale + CLOTH_THICKNESS_M)
+        }).collect()
+    };
+    let start = skinned(times[0]);
+    let mut edges: HashMap<(usize, usize), f64> = HashMap::new();
+    let mut opposite: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for t in &cloth.triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k].min(t[(k + 1) % 3]), t[k].max(t[(k + 1) % 3]));
+            edges.insert((a, b), norm(sub(start[a], start[b])));
+            opposite.entry((a, b)).or_default().push(t[(k + 2) % 3]);
+        }
+    }
+    let mut edges: Vec<(usize, usize, f64)> = edges.into_iter().map(|((a, b), l)| (a, b, l)).collect();
+    edges.sort_by_key(|e| (e.0, e.1));
+    let mut bends: Vec<(usize, usize, f64)> = opposite.values().filter(|o| o.len() == 2 && o[0] != o[1]).map(|o| (o[0].min(o[1]), o[0].max(o[1]), norm(sub(start[o[0]], start[o[1]])))).collect();
+    bends.sort_by_key(|e| (e.0, e.1));
+    let inv: Vec<f64> = cloth.pin.iter().map(|&p| (1.0 - p).clamp(0.0, 1.0)).collect();
+    let mut x = start.clone();
+    let mut vel = vec![[0.0; 3]; n];
+    let dt = 1.0 / CLOTH_HZ;
+    let mut stats = (0.0f64, 0.0f64, 0.0f64);
+    let mut step = |t: f64, record: bool, x: &mut Vec<V3>, vel: &mut Vec<V3>| {
+        let target = skinned(t);
+        let caps_now = placed(t);
+        let old = x.clone();
+        for v in 0..n {
+            if inv[v] > 0.0 {
+                vel[v][1] -= CLOTH_GRAVITY * dt;
+                x[v] = add(x[v], scale(vel[v], dt * (1.0 - CLOTH_DAMPING)));
+            } else {
+                x[v] = target[v];
+            }
+        }
+        for _ in 0..CLOTH_ITERATIONS {
+            for &(list, stiffness) in &[(&edges, 1.0), (&bends, CLOTH_BEND)] {
+                for &(a, b, rest) in list.iter() {
+                    let (wa, wb) = (inv[a], inv[b]);
+                    if wa + wb <= 0.0 {
+                        continue;
+                    }
+                    let d = sub(x[b], x[a]);
+                    let l = norm(d);
+                    if l < 1e-12 {
+                        continue;
+                    }
+                    let c = (l - rest) / l * stiffness / (wa + wb);
+                    x[a] = add(x[a], scale(d, wa * c));
+                    x[b] = sub(x[b], scale(d, wb * c));
+                }
+            }
+            for v in 0..n {
+                if inv[v] <= 0.0 {
+                    continue;
+                }
+                for (a, b, r) in &caps_now {
+                    let q = closest_on_segment(x[v], *a, *b);
+                    let d = sub(x[v], q);
+                    if norm(d) < *r {
+                        x[v] = add(q, scale(if norm(d) > 1e-9 { unit(d) } else { [0.0, 0.0, 1.0] }, *r));
+                    }
+                }
+            }
+        }
+        for v in 0..n {
+            x[v] = add(x[v], scale(sub(target[v], x[v]), cloth.pin[v].clamp(0.0, 1.0)));
+            vel[v] = scale(sub(x[v], old[v]), 1.0 / dt);
+        }
+        if record {
+            for v in 0..n {
+                if cloth.pin[v] >= PINNED_REPORT {
+                    stats.0 = stats.0.max(norm(sub(x[v], target[v])));
+                }
+                for (a, b, r) in &caps_now {
+                    if inv[v] > 0.0 {
+                        stats.1 = stats.1.max(r - CLOTH_THICKNESS_M - norm(sub(x[v], closest_on_segment(x[v], *a, *b))));
+                    }
+                }
+            }
+            for &(a, b, rest) in &edges {
+                if rest > 1e-9 {
+                    stats.2 = stats.2.max(norm(sub(x[a], x[b])) / rest);
+                }
+            }
+        }
+    };
+    for _ in 0..(SETTLE_SECONDS * CLOTH_HZ).round() as usize {
+        step(times[0], false, &mut x, &mut vel);
+    }
+    let mut positions = vec![x.clone()];
+    for f in 1..times.len() {
+        let steps = ((times[f] - times[f - 1]) * CLOTH_HZ).round().max(1.0) as usize;
+        for s in 1..=steps {
+            step(times[f - 1] + (times[f] - times[f - 1]) * s as f64 / steps as f64, true, &mut x, &mut vel);
+        }
+        positions.push(x.clone());
+    }
+    let free = cloth.pin.iter().filter(|&&p| p < 0.5).count();
+    let moved = positions.iter().zip(times).map(|(p, &t)| {
+        let s = skinned(t);
+        p.iter().zip(&s).map(|(a, b)| norm(sub(*a, *b))).fold(0.0, f64::max)
+    }).fold(0.0, f64::max);
+    let mm = |x: f64| (x * 1e6).round() / 1000.0;
+    let report = json!({"node": scene.names[cloth.node], "vertices": n, "free_vertices": free, "edges": edges.len(), "bends": bends.len(),
+                        "pinned_vertices": cloth.pin.iter().filter(|&&p| p >= PINNED_REPORT).count(), "pinned_error_mm": mm(stats.0), "max_penetration_mm": mm(stats.1.max(0.0)), "max_stretch": (stats.2 * 1000.0).round() / 1000.0,
+                        "max_from_skinned_mm": mm(moved)});
+    ClothRun { positions, report }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_cloth(doc: &mut Value, bin: &mut Vec<u8>, scene: &Scene, clip: &Clip, cloth: &ClothMesh, run: &ClothRun, times: &[f64], name: &str, input: usize, samplers: &mut Vec<Value>, channels: &mut Vec<Value>) -> Result<(), String> {
+    let frames = times.len();
+    let existing = doc["meshes"][cloth.mesh]["primitives"][0]["targets"].as_array().map_or(0, Vec::len);
+    let mut targets = Vec::with_capacity(frames);
+    for (f, x) in run.positions.iter().enumerate() {
+        let world = scene.world(&clip.pose(scene, times[f]));
+        let jm = joint_matrices(&world, &cloth.skin);
+        let sim_normals = face_normals(x, &cloth.triangles);
+        let (mut dp, mut dn) = (Vec::with_capacity(3 * x.len()), Vec::new());
+        for v in 0..x.len() {
+            let back = inverse(&blend(&cloth.weights[v], &jm)).ok_or("a cloth vertex's skin matrix cannot be inverted")?;
+            dp.extend(sub(apply(&back, x[v]), cloth.bind[v]).map(|c| c as f32));
+            if let Some(nn) = &cloth.normals {
+                dn.extend(sub(unit(linear(&back, sim_normals[v])), nn[v]).map(|c| c as f32));
+            }
+        }
+        let mut target = json!({"POSITION": push_floats(doc, bin, &dp, 3, Some(ARRAY_BUFFER), true)});
+        if cloth.normals.is_some() {
+            target["NORMAL"] = json!(push_floats(doc, bin, &dn, 3, Some(ARRAY_BUFFER), false));
+        }
+        targets.push(target);
+    }
+    let m = &mut doc["meshes"][cloth.mesh];
+    for p in m["primitives"].as_array_mut().into_iter().flatten() {
+        let mut list = p["targets"].as_array().cloned().unwrap_or_default();
+        list.extend(targets.iter().cloned());
+        p["targets"] = json!(list);
+    }
+    let mut defaults = m["weights"].as_array().cloned().unwrap_or_else(|| vec![json!(0.0); existing]);
+    defaults.extend(std::iter::repeat_n(json!(0.0), frames));
+    m["weights"] = json!(defaults);
+    let mut names = m["extras"]["targetNames"].as_array().cloned().unwrap_or_default();
+    if names.len() == existing {
+        names.extend((0..frames).map(|f| json!(format!("{name}_{f:04}"))));
+        m["extras"]["targetNames"] = json!(names);
+    }
+    let total = existing + frames;
+    let mut keys = vec![0.0f32; frames * total];
+    for f in 0..frames {
+        keys[f * total + existing + f] = 1.0;
+    }
+    let output = push_floats(doc, bin, &keys, 1, None, false);
+    channels.push(json!({"sampler": samplers.len(), "target": {"node": cloth.node, "path": "weights"}}));
+    samplers.push(json!({"input": input, "output": output, "interpolation": "LINEAR"}));
+    Ok(())
+}
+
 struct Physics {
     scene: Scene,
     chains: Vec<Chain>,
@@ -1073,8 +1336,8 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
     if ext.is_null() {
         return Err("--bake needs a character with GAZEFORGE_physics: wear an item with \"physics\": \"springbone\" (and export with --body-rig)".into());
     }
-    if ext["springs"].as_array().is_none_or(|s| s.is_empty()) {
-        return Err("--bake bakes spring-bone chains and this character has none; cloth is not baked yet".into());
+    if ext["springs"].as_array().is_none_or(|s| s.is_empty()) && ext["cloth"].as_array().is_none_or(|c| c.is_empty()) {
+        return Err("--bake bakes spring-bone chains and cloth, and this character has neither".into());
     }
     let name = format!("{}_baked", s.clip);
     if doc["animations"].as_array().is_some_and(|a| a.iter().any(|x| x["name"].as_str() == Some(name.as_str()))) {
@@ -1089,7 +1352,30 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
         return Err("the glb has no buffer".into());
     }
     let Physics { scene, chains, caps, spring, top, frame, unit_scale } = Physics::read(&doc, &bin, &ext)?;
-    let clip = if CLIPS.contains(&s.clip.as_str()) { sway_clip(&scene, &chains, &frame, top, unit_scale, s.fps) } else { gltf_clip(&doc, &bin, &s.clip)? };
+    let node_named = |name: &str| doc["nodes"].as_array().and_then(|nodes| nodes.iter().position(|n| n["name"] == name));
+    let mut cloths = Vec::new();
+    for c in ext["cloth"].as_array().into_iter().flatten() {
+        let pin = c["pin"].as_str().unwrap_or("_PIN");
+        for node in c["nodes"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let index = node_named(node).ok_or_else(|| format!("GAZEFORGE_physics names cloth node {node}, the file has no such node"))?;
+            cloths.push(read_cloth_mesh(&doc, &bin, index, pin)?);
+        }
+    }
+    let mut anchors: Vec<usize> = chains.iter().map(|c| c.parent).collect();
+    for cloth in &cloths {
+        let mut share: HashMap<usize, f64> = HashMap::new();
+        for list in &cloth.weights {
+            for &(j, w) in list {
+                *share.entry(j).or_default() += w;
+            }
+        }
+        if let Some((j, _)) = share.into_iter().max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0))) {
+            anchors.push(cloth.skin.joints[j]);
+        }
+    }
+    anchors.sort();
+    anchors.dedup();
+    let clip = if CLIPS.contains(&s.clip.as_str()) { sway_clip(&scene, &anchors, &frame, top, unit_scale, s.fps) } else { gltf_clip(&doc, &bin, &s.clip)? };
     let baked = simulate(&scene, &clip, &chains, &caps, &spring, s.fps, unit_scale);
     let before = bin.len();
     let times: Vec<f32> = baked.times.iter().map(|&t| t as f32).collect();
@@ -1109,9 +1395,20 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
                 }
             }
         }
-        Format::Vertex => {
+        Format::Vertex if !chains.is_empty() => {
             report["meshes"] = write_vertex(&mut doc, &mut bin, &scene, &clip, &baked, &chains, &name, input, &mut samplers, &mut channels)?;
         }
+        Format::Vertex => {}
+    }
+    if !cloths.is_empty() {
+        let mut rows = Vec::new();
+        for cloth in &cloths {
+            let run = simulate_cloth(&scene, &clip, cloth, &caps, &baked.times, unit_scale);
+            write_cloth(&mut doc, &mut bin, &scene, &clip, cloth, &run, &baked.times, &name, input, &mut samplers, &mut channels)?;
+            rows.push(run.report);
+        }
+        report["cloth"] = json!(rows);
+        report["cloth_method"] = json!("position-based cloth on each cloth node's own mesh (every level of detail simulated on its own): the mesh's edges at their length in the clip's first pose (hard) and the pairs across each edge (bending, 0.2), gravity 9.81 m/s2, 240 Hz steps of 12 iterations, pushed out of each body capsule by its radius plus 4 mm, each vertex pulled to its skinned place by its _PIN (1 follows the skin exactly); written as one morph target per frame in either --bake-format, since cloth has no joints");
     }
     let format = if s.format == Format::Bones { "bones" } else { "vertex" };
     doc["animations"].as_array_mut().expect("animations set").push(json!({"name": name, "samplers": samplers, "channels": channels,
@@ -1146,6 +1443,55 @@ mod tests {
 
     fn still(_: &Scene) -> Clip {
         Clip { name: "still".into(), duration: 1.0, tracks: vec![Track { node: 0, path: PathKind::Translation, times: vec![0.0, 1.0], values: vec![0.0; 6], step: false }], source: None }
+    }
+
+    fn sheet(k: usize, size: f64) -> ClothMesh {
+        let mut bind = Vec::new();
+        for i in 0..=k {
+            for j in 0..=k {
+                bind.push([j as f64 * size / k as f64, 0.0, i as f64 * size / k as f64]);
+            }
+        }
+        let at = |i: usize, j: usize| i * (k + 1) + j;
+        let mut triangles = Vec::new();
+        for i in 0..k {
+            for j in 0..k {
+                triangles.push([at(i, j), at(i + 1, j), at(i, j + 1)]);
+                triangles.push([at(i, j + 1), at(i + 1, j), at(i + 1, j + 1)]);
+            }
+        }
+        let pin = (0..bind.len()).map(|v| if v <= k { 1.0 } else { 0.0 }).collect();
+        let n = bind.len();
+        ClothMesh { node: 0, mesh: 0, skin: Skin { joints: vec![0], ibm: vec![matrix(&Trs { t: [0.0; 3], r: IDENTITY, s: [1.0; 3] })] }, bind, normals: None, weights: vec![vec![(0, 1.0)]; n], pin, triangles }
+    }
+
+    #[test]
+    fn a_sheet_pinned_on_one_edge_hangs_without_stretching() {
+        let scene = line_scene(0, [0.0; 3]);
+        let cloth = sheet(6, 0.3);
+        let times: Vec<f64> = (0..=10).map(|k| k as f64 / 10.0).collect();
+        let run = simulate_cloth(&scene, &still(&scene), &cloth, &[], &times, 1.0);
+        let last = run.positions.last().unwrap();
+        assert!(run.report["pinned_error_mm"].as_f64().unwrap() < 1e-6, "{}", run.report);
+        for v in 0..=6 {
+            assert!(norm(sub(last[v], cloth.bind[v])) < 1e-9, "pinned vertices stay put");
+        }
+        let far = last[cloth.bind.len() - 1];
+        assert!(far[1] < -0.2, "the free edge hangs down: {far:?}");
+        assert!(run.report["max_stretch"].as_f64().unwrap() < 1.1, "{}", run.report);
+    }
+
+    #[test]
+    fn a_capsule_keeps_the_hanging_sheet_out() {
+        let scene = line_scene(0, [0.0; 3]);
+        let cloth = sheet(6, 0.3);
+        let caps = vec![Capsule { node: 0, ibm: matrix(&Trs { t: [0.0; 3], r: IDENTITY, s: [1.0; 3] }), head: [-0.1, -0.12, 0.01], tail: [0.4, -0.12, 0.01], radius: 0.04, name: "c".into() }];
+        let times: Vec<f64> = (0..=10).map(|k| k as f64 / 10.0).collect();
+        let free = simulate_cloth(&scene, &still(&scene), &cloth, &[], &times, 1.0);
+        let held = simulate_cloth(&scene, &still(&scene), &cloth, &caps, &times, 1.0);
+        let inside = |p: &Vec<V3>| p.iter().map(|x| 0.04 - norm(sub(*x, closest_on_segment(*x, caps[0].head, caps[0].tail)))).fold(f64::NEG_INFINITY, f64::max);
+        assert!(inside(free.positions.last().unwrap()) > 0.01, "without the capsule the sheet hangs through it");
+        assert!(inside(held.positions.last().unwrap()) < 0.002, "with it the sheet stays outside: {}", inside(held.positions.last().unwrap()));
     }
 
     #[test]

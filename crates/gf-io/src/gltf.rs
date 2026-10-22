@@ -710,7 +710,7 @@ fn read_vec3(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<[f32; 3]>, Strin
     Ok(out)
 }
 
-fn read_indices(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<u32>, String> {
+pub fn read_indices(doc: &Value, bin: &[u8], index: u64) -> Result<Vec<u32>, String> {
     let a = &doc["accessors"][index as usize];
     let count = a["count"].as_u64().ok_or("an accessor has no count")? as usize;
     let view = &doc["bufferViews"][a["bufferView"].as_u64().ok_or("indices have no view")? as usize];

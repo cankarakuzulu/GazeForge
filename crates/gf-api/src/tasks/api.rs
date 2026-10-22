@@ -190,7 +190,7 @@ const TEXT: &[(&str, &str)] = &[
     ("body-gates", "refuse: a body whose stitch gates fail is not exported; report: it is exported and the failures go in the sidecar"),
     ("format", "glb (the default) or vrm: a VRM 1.0 avatar - needs --body-rig with a humanoid map and --vrm-author; the finest level only, re-posed to a T-pose (arms level along X, the rest as exported), with VRMC_vrm meta, humanoid bones and expression presets from the face morphs"),
     ("vrm-author", "the VRM avatar's author (required by VRM's meta)"),
-    ("bake", "bake the spring-bone chains offline against a clip and write the result as an animation named CLIP_baked: sway (built in: 4 s of head turns, a torso lean and a sideways sway with a bob, driving the bones the chains hang from) or the name of an animation already in the glb"),
+    ("bake", "bake the spring-bone chains and the cloth offline against a clip and write the result as an animation named CLIP_baked: sway (built in: 4 s of head turns, a torso lean and a sideways sway with a bob, driving the bones the chains hang from) or the name of an animation already in the glb"),
     ("bake-format", "bones (the default): the chain joints get rotation keys beside the clip's channels; vertex: the chain joints are taken out of the skin and the swing becomes one morph target per frame played by a weights track, for engines with no skinning beyond the body"),
     ("strands", "also write the hair the character wears as strands, a USD text file (.usda) of BasisCurves in the glb's frame: each hair card's texture columns traced along the card where the texture is opaque, rooted at the end nearer the body"),
     ("strands-count", "how many strands in all (default 20000), shared out by each hair's opaque card area"),

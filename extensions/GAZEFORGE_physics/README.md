@@ -97,6 +97,8 @@ already in the file), the `format`, the frame rate and the length:
 
 - `bones` - the clip's channels plus a rotation track for every chain joint but each chain's last (its tip, which keeps
   its rest rotation). An engine that also runs the springs live should not play this animation with them on.
+- cloth, in either format: one morph target per frame on every cloth node (each level of detail simulated on its
+  own), built through the inverse of the vertex's skin at that frame, so a vertex with `_PIN` 1 has no delta.
 - `vertex` - the chain joints are taken out of the swinging meshes' skin (each vertex keeps its body weights,
   renormalised, or its chain's `parent_bone`), and every frame becomes one morph target of those meshes (`POSITION` and
   `NORMAL` deltas, named `<animation>_<frame>`), played by a `weights` track that blends from one frame's target to the
@@ -125,7 +127,7 @@ A reader attaches each capsule to its joint and moves it with the skeleton.
 
 ## Limits (version 1)
 
-- Cloth is not baked; only spring chains.
+- Baked cloth's levels of detail are simulated separately and can differ slightly from one another.
 - Chains always have four segments; no per-chain stiffness yet.
 - A baked animation does not loop exactly: the hair ends where the motion left it (a few degrees from where it began).
 - No per-cloth stiffness, mass or damping: the solver's defaults apply.

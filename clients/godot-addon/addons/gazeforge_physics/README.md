@@ -42,8 +42,8 @@ is restored afterwards, so a read at any other time sees the pose without the sp
   silently ignores an entry listed out of that order (seen on Godot 4.7.2: a chain's own full capsule, listed after
   another chain's copy, was not excluded, and the chain was thrown 55 mm off its rest). The addon lists them in child
   order.
-- A baked animation (`GAZEFORGE_physics.baked`, format `bones`) moves the chain joints itself: turn the simulator off
-  (`active`) while it plays, or the springs move the joints again on top of it.
+- A baked animation (`GAZEFORGE_physics.baked`) already contains the motion: while it plays, turn the spring simulator
+  off (`active`) and leave the cloth unsimulated (the cloth's morph targets carry it), or the motion is applied twice.
 - `SpringBoneCollision3D` takes its offset, radius and length in world units, rotated by the bone but not scaled by the
   skeleton, and the simulator's joint radius likewise. GazeForge characters carry their size as a scale on the
   `Character` root, so the addon multiplies every length by the skeleton's scale in the imported scene. If you scale the

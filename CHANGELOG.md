@@ -30,7 +30,14 @@ open, with its last measurement, rather than left out.
   0.4-1.6 mm on the long hair); three.js plays the bones and the vertex bake to the same
   vertices within 0.0001 mm at every key and within 0.22 mm between keys (slerped rotations against blended morphs),
   `tools/diag/bake_reader_check.mjs`, not shipped, proven to fail on a bake with a different stiffness (8.3 mm). Cloth
-  is not baked yet; a bake does not loop exactly (about 4 degrees).
+  is baked too (below); a bake does not loop exactly (about 4 degrees).
+- **Baked cloth.** The same `--bake` simulates cloth items (worn with `"physics": "cloth"`): position-based cloth on
+  each level's own mesh (edges hard, bending across edges, gravity, 240 Hz, 12 iterations), pushed out of the body's
+  capsules, each vertex pulled to its skinned place by its `_PIN`; written as one morph target per frame in either
+  format. The sway clip also drives the bone a cloth item hangs from. Measured on a test cape: no vertex inside a
+  capsule at any level, the most-pinned vertices within 0.01 mm of the skin, stretch at most 11%, the hem swinging 21-23 cm;
+  Blender plays it back with those vertices 0.002 mm from the skin (`tools/diag/cloth_bake_blender.py`, not
+  shipped). Bakes are deterministic: constraint order no longer follows a hash map (three exports, one hash).
 
 - **VRM 1.0 export.** `export-glb --format vrm --vrm-author NAME` (needs `--body-rig` with a humanoid map; optional
   `--vrm-name`, `--vrm-license`; also in the export task): the finest level only, the arms re-posed to a T-pose by the
