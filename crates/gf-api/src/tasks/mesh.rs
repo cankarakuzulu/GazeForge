@@ -1882,7 +1882,8 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         .map(|((_, garment, _, _, row), t)| super::wearable::HairCover { positions: garment, triangles: t, hide: row["hair"] == "hide" })
                         .collect();
                     if !covers.is_empty() {
-                        let under = super::wearable::HairUnder::new(&covers, head);
+                        let top = neutral_dense.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap_or([0.0, 0.0, head]);
+                        let under = super::wearable::HairUnder::new(&covers, head, top);
                         let (mut tucked, mut trimmed, before) = (0usize, 0usize, strands.len());
                         for s in strands.iter_mut() {
                             let (cut, t) = under.apply(&mut s.points);
@@ -1899,7 +1900,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                         let (showing, middles) = under.showing(&lines);
                         if let Some(row) = strand_rows.last_mut() {
                             row["under_worn_items"] = json!({"points_lowered": tucked, "points_hidden_from_the_root": trimmed, "strands_hidden": before - strands.len(), "strands_kept": strands.len(), "points_still_showing": showing, "segment_middles_still_showing": middles,
-                                                             "meaning": "strand points above the ears and above a worn solid item's lowest point (a hat) are kept 2 mm under the lowest of its surfaces straight above or below them, segment middles too (both ends lowered); with that item's hair setting hide, each strand's points under its crown (not its brim), from the root, are left out"});
+                                                             "meaning": "strand points above the ears and above the lowest point of a worn solid item that covers the top of the head (a hat; a beard or glasses never count) are kept 2 mm under the lowest of its surfaces straight above or below them, segment middles too (the higher end comes down first), never below 2 mm under the item's lowest point; where the item sits inside the head, hair held under it can end inside the skin, hidden by the item; with that item's hair setting hide, each strand's points under its crown (not its brim), from the root, are left out"});
                         }
                     }
                 }

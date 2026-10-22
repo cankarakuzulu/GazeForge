@@ -637,7 +637,6 @@ const TUCK_REACH_M: f64 = 0.02;
 const FACET_TUCK_PASSES: usize = 3;
 const HAIR_FACING_DOWN: f64 = 0.2;
 const HIDE_DEPTH_M: f64 = 0.1;
-const HAIR_REACH_M: f64 = PUSH_REACH_M;
 const HAIR_STRAND_ROUNDS: usize = 6;
 const CEILING_CELL_M: f64 = 0.01;
 const BRIM_BAND_M: f64 = 0.02;
@@ -998,17 +997,6 @@ impl Outer {
         self.under_at(p).map(|(s, n, _)| (s, n))
     }
 
-    fn under_wide(&self, p: Point) -> Option<(f64, Point, usize)> {
-        self.under_at(p).or_else(|| {
-            self.surface.nearest(p, PUSH_REACH_M)?;
-            self.triangles
-                .iter()
-                .enumerate()
-                .filter_map(|(t, tri)| under_triangle(p, tri.map(|i| self.surface.points[i as usize]), self.surface.normals[tri[0] as usize]).map(|(s, n)| (s, n, t)))
-                .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))
-        })
-    }
-
     fn under_at(&self, p: Point) -> Option<(f64, Point, usize)> {
         let j = self.surface.nearest(p, PUSH_REACH_M)?;
         let ring: Vec<usize> = self.around[j].iter().flat_map(|&t| self.triangles[t].iter().flat_map(|&u| self.around[u as usize].iter().copied())).collect();
@@ -1049,23 +1037,30 @@ impl Ceiling {
         let key = ((p[0] / self.cell).floor() as i64, (p[1] / self.cell).floor() as i64);
         let mut best: Option<(f64, bool)> = None;
         for &k in self.grid.get(&key)? {
-            let [a, b, c] = self.tris[k];
-            let det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
-            if det.abs() < 1e-14 {
-                continue;
-            }
-            let l1 = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / det;
-            let l2 = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / det;
-            let l3 = 1.0 - l1 - l2;
-            if l1 < 0.0 || l2 < 0.0 || l3 < 0.0 {
-                continue;
-            }
-            let z = l1 * a[2] + l2 * b[2] + l3 * c[2];
-            if best.is_none_or(|(old, _)| z < old) {
+            if let Some(z) = self.above_on(k, p)
+                && best.is_none_or(|(old, _)| z < old)
+            {
                 best = Some((z, self.crown[k]));
             }
         }
         best
+    }
+
+    fn over(&self, p: Point) -> bool {
+        let Some(cell) = self.grid.get(&((p[0] / self.cell).floor() as i64, (p[1] / self.cell).floor() as i64)) else { return false };
+        cell.iter().any(|&k| self.above_on(k, p).is_some_and(|z| z > p[2]))
+    }
+
+    fn above_on(&self, k: usize, p: Point) -> Option<f64> {
+        let [a, b, c] = self.tris[k];
+        let det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+        if det.abs() < 1e-14 {
+            return None;
+        }
+        let l1 = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / det;
+        let l2 = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / det;
+        let l3 = 1.0 - l1 - l2;
+        (l1 >= 0.0 && l2 >= 0.0 && l3 >= 0.0).then(|| l1 * a[2] + l2 * b[2] + l3 * c[2])
     }
 }
 
@@ -1075,14 +1070,15 @@ pub struct HairUnder {
 }
 
 impl HairUnder {
-    pub fn new(covers: &[HairCover], head_z: f64) -> HairUnder {
+    pub fn new(covers: &[HairCover], head_z: f64, head_top: Point) -> HairUnder {
         let items = covers
             .iter()
             .filter(|c| c.positions.iter().any(|p| p[2] > head_z))
-            .map(|c| {
+            .filter_map(|c| {
                 let lowest = c.positions.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
                 let brim = Outer::new(c.positions, c.triangles).brim(lowest);
-                (Ceiling::new(c.positions, c.triangles, &brim), lowest, c.hide)
+                let ceiling = Ceiling::new(c.positions, c.triangles, &brim);
+                ceiling.over(head_top).then_some((ceiling, lowest, c.hide))
             })
             .collect();
         HairUnder { head_z, items }
@@ -1111,7 +1107,7 @@ impl HairUnder {
                 let mut moved = false;
                 for p in points.iter_mut() {
                     if let Some((z, _)) = self.limit(item, *p).filter(|&(z, _)| p[2] > z) {
-                        p[2] = z;
+                        p[2] = z.max(self.items[item].1 - CLEARANCE_M);
                         lowered += 1;
                         moved = true;
                     }
@@ -1121,8 +1117,13 @@ impl HairUnder {
                     let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
                     if let Some((z, _)) = self.limit(item, mid).filter(|&(z, _)| mid[2] > z) {
                         let by = mid[2] - z;
-                        points[k - 1][2] -= by;
-                        points[k][2] -= by;
+                        let (hi, lo) = if a[2] >= b[2] { (k - 1, k) } else { (k, k - 1) };
+                        let room = points[hi][2] - points[lo][2];
+                        let floor = self.items[item].1 - CLEARANCE_M;
+                        let (to_hi, to_lo) = if 2.0 * by <= room { (points[hi][2] - 2.0 * by, points[lo][2]) } else { (points[lo][2] - (by - room / 2.0), points[lo][2] - (by - room / 2.0)) };
+                        for (v, to) in [(hi, to_hi), (lo, to_lo)] {
+                            points[v][2] = to.max(floor.min(points[v][2]));
+                        }
                         lowered += 1;
                         moved = true;
                     }
@@ -1230,7 +1231,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
             let outer = Outer::new(garments[g].positions, &triangles);
             let lowest = garments[g].positions.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
             let brim = outer.brim(lowest);
-            let over = |p: Point| outer.under_wide(p).map(|(s, n, _)| (s, n)).filter(|&(_, n)| p[2] > head && n[2] > -HAIR_FACING_DOWN);
+            let over = |p: Point| outer.under(p).filter(|&(_, n)| p[2] > head && n[2] > -HAIR_FACING_DOWN);
             let (mut moved, mut facets, mut deepest, mut hidden) = (0usize, 0usize, 0.0f64, 0usize);
             for k in 0..garments.len() {
                 if k == g || !garments[k].transparent || garments[k].rigid {
@@ -1240,7 +1241,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
                     let marks: Vec<bool> = garments[k]
                         .positions
                         .iter()
-                        .map(|&p| p[2] > head && outer.under_wide(p).is_some_and(|(s, n, t)| !brim[t] && n[2] > -HAIR_FACING_DOWN && s > -HIDE_DEPTH_M && s < -HIDE_FROM_M))
+                        .map(|&p| p[2] > head && outer.under_at(p).is_some_and(|(s, n, t)| !brim[t] && n[2] > -HAIR_FACING_DOWN && s > -HIDE_DEPTH_M && s < -HIDE_FROM_M))
                         .collect();
                     hidden += marks.iter().filter(|m| **m).count();
                     if let Some(cut) = garments[k].cut.as_deref_mut() {
@@ -1250,7 +1251,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
                     }
                 }
                 {
-                    let showing = |p: Point| over(p).filter(|&(s, _)| s > -CLEARANCE_M && s < HAIR_REACH_M).map(|(s, n)| (s + CLEARANCE_M, n));
+                    let showing = |p: Point| over(p).filter(|&(s, _)| s > -CLEARANCE_M && s < TUCK_REACH_M).map(|(s, n)| (s + CLEARANCE_M, n));
                     let k_triangles = garments[k].triangles.clone();
                     let (t, f, d) = tuck(garments[k].positions, &k_triangles, &showing);
                     moved += t;
@@ -1638,7 +1639,7 @@ mod tests {
         let through: Vec<Point> = (0..8).map(|k| [0.2, 0.1, 1.62 + 0.01 * k as f64]).collect();
         let brim: Vec<Point> = (0..4).map(|k| [0.11, 0.01, 1.601 + 0.002 * k as f64]).collect();
         for hide in [false, true] {
-            let under = HairUnder::new(&[HairCover { positions: &hat, triangles: &hat_t, hide }], 1.5);
+            let under = HairUnder::new(&[HairCover { positions: &hat, triangles: &hat_t, hide }], 1.5, [0.2, 0.1, 1.6]);
             let (mut a, mut b) = (through.clone(), brim.clone());
             let (cut_a, _) = under.apply(&mut a);
             let (cut_b, _) = under.apply(&mut b);
@@ -1648,10 +1649,28 @@ mod tests {
             assert_eq!(cut_a.iter().any(|c| *c), hide, "hide leaves out what is under the crown (hide {hide})");
             assert!(cut_b.iter().all(|c| !c), "never the brim");
         }
-        let low = HairUnder::new(&[HairCover { positions: &hat, triangles: &hat_t, hide: true }], 1.7);
+        let low = HairUnder::new(&[HairCover { positions: &hat, triangles: &hat_t, hide: true }], 1.7, [0.2, 0.1, 1.6]);
         let mut a = through.clone();
         let (cut, _) = low.apply(&mut a);
         assert!(a == through && cut.iter().all(|c| !c), "nothing below the ears is touched");
+    }
+
+    #[test]
+    fn only_an_item_over_the_top_of_the_head_holds_grown_hair_down_and_a_strand_leaving_it_moves_its_outer_end() {
+        let (beard, beard_t) = grid(6, 0.2, 1.55, 0.0);
+        let under = HairUnder::new(&[HairCover { positions: &beard, triangles: &beard_t, hide: false }], 1.5, [0.1, 0.1, 1.65]);
+        let forehead: Vec<Point> = (0..4).map(|k| [0.1, 0.1, 1.62 + 0.01 * k as f64]).collect();
+        let mut a = forehead.clone();
+        under.apply(&mut a);
+        assert_eq!(a, forehead, "an item that does not cover the top of the head (a beard) holds nothing down");
+        let (mut hat, hat_t) = grid(6, 0.2, 1.7, 0.0);
+        hat[0][2] = 1.6;
+        let under = HairUnder::new(&[HairCover { positions: &hat, triangles: &hat_t, hide: false }], 1.5, [0.1, 0.1, 1.65]);
+        let mut s = vec![[0.15, 0.1, 1.75], [0.23, 0.1, 1.75]];
+        under.apply(&mut s);
+        assert!((s[0][2] - (1.7 - CLEARANCE_M)).abs() < 1e-9, "the end under the item stays just under it, not below: {s:?}");
+        assert!((s[1][2] - (1.7 - CLEARANCE_M)).abs() < 1e-9, "the end past its edge comes down so the segment clears it: {s:?}");
+        assert_eq!(under.showing(&[&s]), (0, 0));
     }
 
     #[test]

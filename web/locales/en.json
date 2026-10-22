@@ -178,7 +178,7 @@
  "body.wear_strands": "Strands",
  "body.wear_strands_line": "{name}: strands {state}",
  "body.wear_hair": "Hair under it",
- "body.wear_hair_tip": "What hair cards (alpha hair) do where this item covers the head above the ears, as a hat or hood does: tuck squashes the hair that would show through it under it; hide also leaves out the hair inside its crown. Hair that shows under a brim stays in both",
+ "body.wear_hair_tip": "What hair does where this item covers the top of the head, as a hat or hood does (hair cards and grown hair): tuck keeps the hair that would show through it under it; hide also leaves out the hair inside its crown. Hair that shows under a brim stays in both. Items that do not cover the top of the head leave grown hair alone",
  "body.wear_hair.tuck": "Tuck",
  "body.wear_hair.hide": "Hide",
  "body.wear_hair_line": "{name}: hair under it {mode}",

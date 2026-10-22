@@ -895,7 +895,8 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                 && !hat_covers.is_empty()
             {
                 let covers: Vec<crate::tasks::wearable::HairCover> = hat_covers.iter().map(|(p, t, hide)| crate::tasks::wearable::HairCover { positions: p, triangles: t, hide: *hide }).collect();
-                let under = crate::tasks::wearable::HairUnder::new(&covers, head_z);
+                let top = dense.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap_or([0.0, 0.0, head_z]);
+                let under = crate::tasks::wearable::HairUnder::new(&covers, head_z, top);
                 for s in strands.iter_mut() {
                     let (cut, _) = under.apply(&mut s.points);
                     let from = cut.iter().position(|c| !c).unwrap_or(cut.len());

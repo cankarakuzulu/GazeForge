@@ -15,12 +15,15 @@ open, with its last measurement, rather than left out.
   crown. Both act only on the item's triangles that do not face down, and hide leaves the brim alone (the flat band
   within 2 cm of its lowest point), so hair that shows under a brim stays. On the dressed test character: hair through
   the crown 362 triangle centres -> 0 in both modes; hide leaves out 417 hair triangles at the finest level.
-  Grown hair (a groom's strands) follows the same setting: every strand point above the ears and above the hat's
-  lowest point is kept 2 mm under the lowest of the hat's surfaces straight over or under it (segment middles too),
-  and hide leaves out each strand's points under the crown from the root. A quiff under a fedora: 148,305 points
-  lowered, 0 points and 0 segment middles left showing; hide leaves out 5,466 strands entirely. The strands report
-  gives these counts. The body preview in both clients does the same, so the hat looks there as it exports (groom
-  vertices above the fedora's top in the preview: 1,252 -> 0).
+  Grown hair (a groom's strands) follows the same setting under an item that covers the top of the head (a hat or a
+  hood; a beard or glasses never hold hair down): every strand point above the ears and above the item's lowest point
+  is kept 2 mm under the lowest of its surfaces straight over or under it (segment middles too, the higher end coming
+  down first), never below 2 mm under its lowest point, and hide leaves out each strand's points under the crown from
+  the root. A quiff under a fedora: 151,027 points lowered, 0 points and 0 segment middles left showing; hide leaves
+  out 5,466 strands entirely. The strands report gives these counts. The body preview in both clients does the same,
+  so the hat looks there as it exports (groom vertices above the fedora's top in the preview: 1,252 -> 0). Known:
+  where a hat sits inside the head (the test fedora at the temples), hair held under it ends inside the skin there,
+  hidden by the hat (30 cm hair: 1,507 points, at most 10.5 mm deep).
 - **Bob with bangs, curtain bangs, long layers.** Three more styles (fourteen in all); a style now also sets the
   fringe (and every style sets face framing, so picking a style without them takes them away). The colours,
   highlights and forehead stay as they are, like the part.
