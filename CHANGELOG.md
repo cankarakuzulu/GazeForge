@@ -301,6 +301,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Cloth was pinned to clothes worn over it.** Cloth pins to the opaque items worn under it, but every opaque item
+  counted, whatever its layer, and an inside-out item counted by its wrong side: a suit worn over a cape pinned 341
+  of the cape's 403 vertices. Only items under the cloth (lower layer, or earlier in the list at the same layer),
+  faced outward, pin it now: 4 (from the body). A cape over a suit exports unchanged. Cloth bakes now also refuse to
+  add more than 256 MB of morph targets, like vertex bakes (read, not reached by the test assets: their largest
+  cloth bake is about 11 MB).
 - **Opening the studio's Body shape panel changed a large groom seed.** Its seed box stopped at 1,000,000 while a
   groom may use any seed up to 4,294,967,295 (the browser writes those), and the box pulled a larger seed down to
   its limit and saved it as an edit: a character with seed 2,000,000 came out with 1,000,000 and new hair just by

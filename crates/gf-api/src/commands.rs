@@ -253,7 +253,7 @@ pub static REGISTRY: &[CommandDef] = &[
         name: "wearable.bake",
         kind: Kind::Job,
         summary: "Bake a character's spring-bone chains (hair, ropes, capes worn with physics springbone) and cloth (worn with physics cloth) offline: a VRM-style spring solver runs over the chains and the body's capsule colliders in GAZEFORGE_physics, driven by a built-in clip (sway) or an animation already in the glb, and the result is written into a copy of the glb as an animation, as bone rotation keys or as per-frame morph targets (argv `wearable bake`; export-glb takes the same bake options).",
-        limits: "Fields are the argv options with _ for -. Cloth is written as morph targets in either format (it has no joints) and each of its levels of detail is simulated on its own. LINEAR and STEP source clips only. The solver's settings are the file's spring_defaults; the result does not loop exactly (the report gives the gap). Vertex output is refused past 256 MB of morph targets.",
+        limits: "Fields are the argv options with _ for -. Cloth is written as morph targets in either format (it has no joints) and each of its levels of detail is simulated on its own. LINEAR and STEP source clips only. The solver's settings are the file's spring_defaults; the result does not loop exactly (the report gives the gap). Vertex output, and cloth in either format, is refused past 256 MB of morph targets.",
         input: api::bake_input,
         output: api::argv_output,
         run: api::bake,

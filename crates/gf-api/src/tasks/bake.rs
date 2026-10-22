@@ -1650,6 +1650,10 @@ pub fn bake(glb: &[u8], s: &Settings) -> Result<(Vec<u8>, Value), String> {
         Format::Vertex => {}
     }
     if !cloths.is_empty() {
+        let planned: usize = cloths.iter().map(|c| c.bind.len() * baked.times.len() * if c.normals.is_some() { 24 } else { 12 }).sum();
+        if planned > MAX_VERTEX_BYTES {
+            return Err(format!("the cloth would add {} MB of morph targets (limit {} MB); lower --bake-fps or bake a shorter clip", planned >> 20, MAX_VERTEX_BYTES >> 20));
+        }
         let body = read_body_surface(&doc, &bin, &cloths)?;
         let mut rows = Vec::new();
         for cloth in &cloths {
