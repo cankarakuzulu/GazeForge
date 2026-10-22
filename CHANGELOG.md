@@ -269,6 +269,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Ponytail hair lifted off the side of the head.** Hair combed to a ponytail's tie drifted outward on its way
+  over the head (up to 15 mm, and on one seed 20 mm, more than 4 cm from the tie), and a few strands from low at the
+  temples showed as thin arcs beside the head. It is now pulled back to 6 mm from the head until it is within 4 cm
+  of the tie. The groom report gives the largest such gap. A few sparse strands at the temples still show as lines
+  at the head's outline, closer than before.
 - **The groom's hairline sat low on the forehead.** It sat 1.8 cm above the brows, so from the front the edge of the
   roots read as a short fringe on every style. It now sits a forehead above the brows: by default as high as the
   brows-to-nose height (the classic thirds of the face; 4.8 cm on the test character, asked 5.2 cm), highest at the
