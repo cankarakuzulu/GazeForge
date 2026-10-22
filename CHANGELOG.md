@@ -242,6 +242,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Grown hair rose off the head with a side part.** A strand kept the direction it left the scalp with, so hair
+  combed across the top from a side part flew off in a straight line into a tall overhang. Strands now follow the
+  head's curve while above the ears and near it, then fall; every groom lies flatter and reads as combed hair. The
+  keep-outside push now repeats from the new nearest point (up to 4 times), so no point is left inside a crease such
+  as behind the ears (a left-part groom had one 6 mm inside); the groom report says where its deepest point is.
 - **The far-level scalp cap painted hair colour onto the face.** Hair passing within its reach of the cheeks, eyes or
   forehead (cards hanging beside the face) painted them on LOD4 and LOD5. The cap now never paints the face's skin
   regions (lips, mouth, nose, cheeks, forehead, chin, upper lip, under the eyes, eyelids, T-zone; weighted, so the

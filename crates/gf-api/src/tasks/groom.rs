@@ -13,6 +13,8 @@ const SCALP: usize = 11;
 const ROOT_LIFT_M: f64 = 0.001;
 const CLEAR_M: f64 = 0.003;
 const NEAR_M: f64 = 0.05;
+const HUG_M: f64 = 0.02;
+const OUTSIDE_PASSES: usize = 4;
 const LIFT: f64 = 0.35;
 const PART_OFFSET_M: f64 = 0.035;
 const CURL_FADE_M: f64 = 0.03;
@@ -64,6 +66,19 @@ impl Face {
     }
 }
 
+fn outside(surface: &Surface, p: Point) -> Option<Point> {
+    let mut q = p;
+    for _ in 0..OUTSIDE_PASSES {
+        let Some(j) = surface.nearest(q, NEAR_M) else { break };
+        let s = surface.signed(q, j);
+        if s >= CLEAR_M - 1e-9 {
+            break;
+        }
+        q = add(q, scale(surface.normals[j], CLEAR_M - s));
+    }
+    (q != p).then_some(q)
+}
+
 pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
@@ -108,6 +123,8 @@ fn tangent(v: Point, n: Point) -> Point {
 pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]], surface: &Surface) -> Result<(Vec<Strand>, Value), String> {
     let landmarks = gf_core::base_landmarks::on(dense)?;
     let face = Face::on(&landmarks)?;
+    let brim = [234usize, 454].iter().map(|i| landmarks.get(i).map_or(0.0, |p| p[2])).sum::<f64>() / 2.0;
+    let mut hugged = 0usize;
     let mut kept_off_face = 0usize;
     let normals = game_normals(head, triangles);
     let regions = skin_regions::build(head, &normals, triangles, &landmarks)?;
@@ -170,12 +187,9 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
         let mut dir = unit(add(scale(n, LIFT), scale(flow(p, n), 1.0 - LIFT)));
         for _ in 1..g.points {
             let mut next = add(*line.last().unwrap(), scale(dir, seg));
-            if let Some(j) = surface.nearest(next, NEAR_M) {
-                let s = surface.signed(next, j);
-                if s < CLEAR_M {
-                    next = add(next, scale(surface.normals[j], CLEAR_M - s));
-                    pushes += 1;
-                }
+            if let Some(q) = outside(surface, next) {
+                next = q;
+                pushes += 1;
             }
             if let Some(q) = face.keep_out(next) {
                 next = q;
@@ -184,6 +198,16 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
             let step = sub(next, *line.last().unwrap());
             next = add(*line.last().unwrap(), scale(unit(step), seg));
             dir = unit(add(unit(step), scale(down, g.droop * 0.35)));
+            if next[2] > brim
+                && let Some(j) = surface.nearest(next, HUG_M)
+            {
+                let n = surface.normals[j];
+                let out = dot(dir, n);
+                if out > 0.0 {
+                    dir = unit(sub(dir, scale(n, out)));
+                    hugged += 1;
+                }
+            }
             line.push(next);
         }
         lines.push(line);
@@ -211,6 +235,7 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     }
     let mut strands = Vec::with_capacity(lines.len());
     let mut deepest = 0.0f64;
+    let mut deepest_at = [0.0f64; 3];
     let mut lengths = Vec::with_capacity(lines.len());
     for line in &mut lines {
         let phase = rng.next() * std::f64::consts::TAU;
@@ -236,18 +261,19 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
                 kept_off_face += 1;
             }
             if k > 0
-                && let Some(j) = surface.nearest(line[k], NEAR_M)
+                && let Some(q) = outside(surface, line[k])
             {
-                let s = surface.signed(line[k], j);
-                if s < CLEAR_M {
-                    line[k] = add(line[k], scale(surface.normals[j], CLEAR_M - s));
-                }
+                line[k] = q;
             }
         }
         lengths.push(base.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum::<f64>());
         for &p in line.iter().skip(1) {
             if let Some(j) = surface.nearest(p, NEAR_M) {
-                deepest = deepest.max(-surface.signed(p, j));
+                let d = -surface.signed(p, j);
+                if d > deepest {
+                    deepest = d;
+                    deepest_at = p;
+                }
             }
         }
         let colours = (0..line.len()).map(|k| {
@@ -268,9 +294,9 @@ pub fn grow(g: &Groom, head: &[Point], triangles: &[[u32; 3]], dense: &[[f64; 3]
     let mean = lengths.iter().sum::<f64>() / lengths.len().max(1) as f64;
     let report = json!({"name": g.name, "strands": strands.len(), "points_per_strand": g.points, "length_m": g.length_m,
                         "mean_centreline_m": (mean * 1e5).round() / 1e5, "scalp_triangles": weights.iter().filter(|w| **w > 0.0).count(),
-                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "kept_off_face": kept_off_face,
-                        "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
-                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal and combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body; then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from the chin to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
+                        "mean_scalp_weight_at_roots_first_500": (root_scalp * 1000.0).round() / 1000.0, "surface_pushes": pushes, "kept_off_face": kept_off_face, "hugged_steps": hugged,
+                        "deepest_inside_surface_mm": (deepest.max(0.0) * 1e6).round() / 1000.0, "deepest_at_m": deepest_at.map(|x| (x * 1e4).round() / 1e4), "ears_m": ([234usize, 454].map(|i| landmarks.get(&i).map(|p| p.map(|x| (x * 1e4).round() / 1e4)))), "deepest_after_growth_mm": (grown_depth.max(0.0) * 1e6).round() / 1000.0, "part": format!("{:?}", g.part).to_lowercase(),
+                        "method": "roots sampled by area over the head's scalp region (skin region scalp >= 0.5, from the built-in landmarks on this character's dense surface); each strand leaves the scalp lifted 0.35 along the normal, follows the head's curve while above the ears and within 2 cm of it (its step never turns away from the surface there), and is combed along a flow away from the part ahead of the crown, backwards behind it and back-and-sideways at the front (downward weighted 0.6), bends down by droop, kept 3 mm outside the head and body (pushed out along the nearest surface normal, again from the new nearest point up to 4 times, for creases such as behind the ears); then clumped toward a few strands, curled (fading in over 3 cm), frizzed toward the tip, and every point kept 3 mm outside again; no point in front of the face: between the outer eye corners plus 1 cm, widening by 1 cm per cm ahead of them, from the chin to 2 cm under the top of the forehead, ahead of the ears; such a point moves to the nearest edge on the side it came from (sideways and back ahead of the eyes, so hair falls beside the cheek, not in front of it)"});
     Ok((strands, report))
 }
 
