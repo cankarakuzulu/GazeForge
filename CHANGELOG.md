@@ -301,6 +301,13 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Reports that described the wrong thing.** A grown groom's strands report and `.usda` header said the hair was
+  traced from cards; they now say it was grown, and `--strands-count`, `--strands-seed` and `--strands-points`
+  (which only shape traced hair) are refused next to a groom instead of ignored. `groom cards` counted far-level
+  cards in its `highlight_cards` and `cut_at_face` beside a near-only `cards`; those are near-only now, and each far
+  set gives its own. Layering's `tucked_under` counted only the first pass's vertices, facets once per pass and
+  the largest single push (a cape over a suit: 31 vertices, 7.6 mm); it now counts every vertex moved, each facet
+  once and the largest total move (62, 9.1 mm). The meshes are unchanged.
 - **A second bake into the same file wrote invalid glTF.** Each bake adds morph targets to the cloth (and vertex-baked)
   meshes, so an earlier bake's weight tracks on them came up short, and a bake made from a baked clip copied that
   clip's weight tracks next to its own on the same nodes. Earlier tracks now gain zero weights for the new targets

@@ -1162,22 +1162,21 @@ impl HairUnder {
 }
 
 fn tuck(positions: &mut [Point], triangles: &[[u32; 3]], showing: &dyn Fn(Point) -> Option<(f64, Point)>) -> (usize, usize, f64) {
-    let (mut tucked, mut facets, mut deepest) = (0usize, 0usize, 0.0f64);
+    let start = positions.to_vec();
+    let mut pushed = vec![false; triangles.len()];
     for v in positions.iter_mut() {
         if let Some((by, n)) = showing(*v) {
             *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
-            tucked += 1;
-            deepest = deepest.max(by);
         }
     }
     for _ in 0..FACET_TUCK_PASSES {
         let mut push: Vec<Option<(f64, Point)>> = vec![None; positions.len()];
-        for tri in triangles {
+        for (t, tri) in triangles.iter().enumerate() {
             let [a, b, c] = tri.map(|i| positions[i as usize]);
             let mid = |p: Point, q: Point| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0, (p[2] + q[2]) / 2.0];
             let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
             let Some((by, n)) = [centre, mid(a, b), mid(b, c), mid(c, a)].into_iter().filter_map(showing).max_by(|x, y| x.0.total_cmp(&y.0)) else { continue };
-            facets += 1;
+            pushed[t] = true;
             for &i in tri {
                 if push[i as usize].is_none_or(|(old, _)| by > old) {
                     push[i as usize] = Some((by, n));
@@ -1190,11 +1189,11 @@ fn tuck(positions: &mut [Point], triangles: &[[u32; 3]], showing: &dyn Fn(Point)
         for (v, p) in positions.iter_mut().zip(&push) {
             if let Some((by, n)) = p {
                 *v = [v[0] - by * n[0], v[1] - by * n[1], v[2] - by * n[2]];
-                deepest = deepest.max(*by);
             }
         }
     }
-    (tucked, facets, deepest)
+    let moved: Vec<f64> = positions.iter().zip(&start).map(|(p, q)| dot(sub(*p, *q), sub(*p, *q)).sqrt()).collect();
+    (moved.iter().filter(|&&d| d > 0.0).count(), pushed.iter().filter(|p| **p).count(), moved.iter().copied().fold(0.0, f64::max))
 }
 
 pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
@@ -1230,7 +1229,7 @@ pub fn layer(garments: &mut [Layered], head_z: Option<f64>) -> Vec<Value> {
             deepest = deepest.max(d);
         }
         report["tucked_under"] = json!({"vertices": tucked, "facets": facets, "max_mm": deepest * 1000.0,
-                                        "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance; then their triangles whose centre or edge midpoints still showed through (facets crossing between vertices) moved behind it the same way, up to 3 passes"});
+                                        "meaning": "vertices of the items under it that showed through it (in front of one of its triangles, or behind it by less than the clearance, within 2 cm) moved behind it by the clearance; then their triangles whose centre or edge midpoints still showed through (facets crossing between vertices) moved behind it the same way, up to 3 passes; vertices counts every vertex moved by any of these steps, facets each triangle pushed once, max_mm the largest total move of one vertex"});
         reports[g] = report;
     }
     if let Some(head) = head_z {

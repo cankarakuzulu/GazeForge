@@ -400,10 +400,10 @@ fn num(x: f64) -> String {
     if s == "-0" { "0".into() } else { s.to_string() }
 }
 
-pub fn usda(groups: &[(String, Vec<Strand>)], root: Option<&gf_io::gltf::Root>, generator: &str) -> String {
+pub fn usda(groups: &[(String, Vec<Strand>)], root: Option<&gf_io::gltf::Root>, generator: &str, what: &str) -> String {
     let mut s = String::new();
     s.push_str("#usda 1.0\n(\n    defaultPrim = \"Character\"\n    metersPerUnit = 1\n    upAxis = \"Y\"\n");
-    s.push_str(&format!("    doc = \"{generator}: strand hair traced from hair cards\"\n)\n\n"));
+    s.push_str(&format!("    doc = \"{generator}: {what}\"\n)\n\n"));
     s.push_str("def Xform \"Character\"\n{\n");
     if let Some(r) = root {
         let t = r.translation;
@@ -562,7 +562,7 @@ mod tests {
     fn usda_counts_match_and_the_root_transform_is_written() {
         let s = Strand { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, -0.1], [0.0, 0.0, -0.2]], colours: vec![[1.0, 0.5, 0.0]; 3] };
         let root = gf_io::gltf::Root { name: "Character".into(), translation: [0.0, 0.1, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: 1.1 };
-        let text = usda(&[("pony tail".into(), vec![s])], Some(&root), "test");
+        let text = usda(&[("pony tail".into(), vec![s])], Some(&root), "test", "strand hair traced from hair cards");
         assert!(text.contains("def BasisCurves \"pony_tail\""));
         assert!(text.contains("int[] curveVertexCounts = [3]"));
         assert!(text.contains("point3f[] points = [(0, 0, 0), (0, -0.1, 0), (0, -0.2, 0)]"), "{text}");

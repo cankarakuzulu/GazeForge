@@ -339,7 +339,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     let hairline = super::groom::Hairline::on(&landmarks, &face, g.forehead)?;
     let blocked = |p: Point| face.keep_out(p).is_some();
     let mut cards = build(&strands, count, centre, WIDTH_MAX_M, &blocked, palette.lit_columns, &|s| palette.is_lit(s));
-    let (near_cards, near_vertices) = (cards.members.len(), cards.positions.len());
+    let (near_cards, near_vertices, near_lit, near_cut) = (cards.members.len(), cards.positions.len(), cards.lit, cards.cut);
     let regions = gf_core::skin_regions::build(&scalp.head, &gf_core::game_mesh::game_normals(&scalp.head, &scalp.triangles), &scalp.triangles, &landmarks)?;
     let scalp_index = gf_core::skin_regions::NAMES.iter().position(|n| *n == "scalp").ok_or("no scalp skin region")?;
     let weight: Vec<f64> = regions.weights.iter().zip(&scalp.head).map(|(w, &p)| w[scalp_index] as f64 * hairline.keep(p)).collect();
@@ -357,7 +357,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
         }
         let far = build(&thinned, (count / share).max(1), centre, widest, &blocked, palette.lit_columns, &|s| palette.is_lit(s));
         levels.push(gf_io::wearable_store::Level { from, first_face: cards.cap.len() + cards.quads.len() });
-        far_rows.push(json!({"from_level": from, "cards": far.members.len(), "vertices": far.positions.len(), "rows": thinned.first().map_or(0, |s| s.points.len()),
+        far_rows.push(json!({"from_level": from, "cards": far.members.len(), "vertices": far.positions.len(), "highlight_cards": far.lit, "cut_at_face": far.cut, "rows": thinned.first().map_or(0, |s| s.points.len()),
                              "widest_mm": far.widths_m.iter().copied().fold(0.0, f64::max) * 1000.0}));
         append(&mut cards, far);
     }
@@ -383,10 +383,10 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     bind.insert("double-sided".into(), "on".into());
     let bound = super::wearable::bind_with(&bind, levels)?;
     let members: Vec<usize> = cards.members[..near_cards].to_vec();
-    Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "below_hairline": cap_below_hairline, "below_hairline_mm": (cap_below_mm * 10.0).round() / 10.0, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": cards.cut,
+    Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "below_hairline": cap_below_hairline, "below_hairline_mm": (cap_below_mm * 10.0).round() / 10.0, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": near_cut,
               "strands_per_card": {"min": members.iter().min(), "max": members.iter().max(), "mean": members.iter().sum::<usize>() as f64 / members.len().max(1) as f64},
               "card_width_mm": {"min": cards.widths_m[..near_cards].iter().copied().fold(f64::INFINITY, f64::min) * 1000.0, "max": cards.widths_m[..near_cards].iter().copied().fold(0.0, f64::max) * 1000.0},
-              "atlas": {"size": size, "columns": COLUMNS, "highlight_columns": palette.lit_columns, "file": png_path.to_string_lossy()}, "highlight_cards": cards.lit, "obj": obj_path.to_string_lossy(), "groom": grown, "bind": bound,
+              "atlas": {"size": size, "columns": COLUMNS, "highlight_columns": palette.lit_columns, "file": png_path.to_string_lossy()}, "highlight_cards": near_lit, "obj": obj_path.to_string_lossy(), "groom": grown, "bind": bound,
               "method": "the groom grown on this character's scalp; its strands grouped by shape (root, middle and tip together, around seeds spread by farthest-point sampling, so strands combed apart never share a card), one card per group: a strip along the group's mean strand, as wide as twice its spread (6 to 40 mm), lying across the hair (its side perpendicular to the strand and to the line from the head's centre); its UVs one of the atlas's first seven columns, root at the top; under the cards a cap over the scalp (the head's scalp skin region from 25 %, lifted 1.5 mm, decimated to 700 vertices) mapped into the eighth column, painted opaque and fading in streaks where the scalp weight falls, so no bare skin shows between cards and the hairline is soft; a card that would reach in front of the face (the zone the groom keeps its strands out of) ends at the row before, its texture fitted to what is left; the atlas paints strands in the groom's colour with tapered tips; from level 4 on, a quarter as many cards made the same way from every other strand point, up to 80 mm wide, and from level 5 an eighth as many from every fourth point, up to 120 mm, so the far levels keep their cover (all sets in one mesh, each after the one before: the wearable's levels); the cards bound to the character like any garment (wearable bind, canonical frame, hiding nothing, double-sided)"}))
 }
 

@@ -1230,6 +1230,11 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             _ => None,
         },
     };
+    if groom.is_some()
+        && let Some(k) = ["strands-count", "strands-seed", "strands-points"].iter().find(|k| opts.contains_key(**k))
+    {
+        return Err(format!("--{k} shapes hair traced from cards; a groom grows its own strands (set strands, seed and points in the groom)"));
+    }
     let groom_not_grown = groom.is_none() && spec.body.as_ref().is_some_and(|b| b.groom.is_some());
     let mut strand_groups: Vec<(String, Vec<super::strands::Strand>)> = Vec::new();
     let mut strand_rows: Vec<Value> = Vec::new();
@@ -2554,10 +2559,15 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             if strand_groups.iter().all(|g| g.1.is_empty()) {
                 return Err(format!("--strands found no hair to trace: {}", json!(strand_rows)));
             }
-            let text = super::strands::usda(&strand_groups, root.as_ref(), &tool);
+            let text = super::strands::usda(&strand_groups, root.as_ref(), &tool, if groom.is_some() { "strand hair grown from a groom" } else { "strand hair traced from hair cards" });
             std::fs::write(&st.out, &text).map_err(|e| format!("{}: {e}", st.out))?;
-            json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
-                   "traced": "the worn items with strands on, or every alpha-card item when none is", "method": "per hair card piece, lines of the colour texture traced along the piece (along V, or along U where that axis gives longer opaque runs) through the card UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
+            if groom.is_some() {
+                json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
+                       "grown": "a groom (gazeforge.groom/1) grown on the character's scalp; each item row gives its method"})
+            } else {
+                json!({"out": st.out, "bytes": text.len(), "frame": "the glb's: the same Character root transform over glTF axes (y up)", "items": strand_rows,
+                       "traced": "the worn items with strands on, or every alpha-card item when none is", "method": "per hair card piece, lines of the colour texture traced along the piece (along V, or along U where that axis gives longer opaque runs) through the card UVs, kept where the texture is opaque; every opaque run of 1 cm or more a strand, resampled by arc length; the root is the end nearer, over the card mesh, the vertices resting on the body or head (the measure the spring chains use); strands shared out by opaque card area in 3D, seeded"})
+            }
         }
         None if groom_not_grown => json!({"groom": "the character has a groom (body.groom) and none was grown: strands go to a .usda, give --strands OUT.usda"}),
         None => Value::Null,
