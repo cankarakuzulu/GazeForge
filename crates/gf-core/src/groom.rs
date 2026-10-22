@@ -176,28 +176,38 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         if !(f.lo..=f.hi).contains(&x) {
             return Err(format!("groom {key} must be from {} to {}, got {x}", f.lo, f.hi));
         }
+        if f.integer && x.fract() != 0.0 {
+            return Err(format!("groom {key} must be a whole number, got {x}"));
+        }
         Ok(x)
     };
-    let part = match v["part"].as_str().unwrap_or("centre") {
+    let word = |key: &str, plain: &'static str| -> Result<String, String> {
+        match v.get(key) {
+            None | Some(Value::Null) => Ok(plain.to_string()),
+            Some(Value::String(s)) => Ok(s.clone()),
+            Some(other) => Err(format!("groom {key} must be text, got {other}")),
+        }
+    };
+    let part = match word("part", "centre")?.as_str() {
         "left" => Part::Left,
         "right" => Part::Right,
-        "centre" | "center" => Part::Centre,
+        "centre" => Part::Centre,
         "none" => Part::None,
         other => return Err(format!("groom part is left, right, centre or none, got {other}")),
     };
-    let tie = match v["tie"].as_str().unwrap_or("none") {
+    let tie = match word("tie", "none")?.as_str() {
         "none" => Tie::None,
         "low" => Tie::Low,
         "high" => Tie::High,
         other => return Err(format!("groom tie is none, low or high, got {other}")),
     };
-    let fringe = match v["fringe"].as_str().unwrap_or("none") {
+    let fringe = match word("fringe", "none")?.as_str() {
         "none" => Fringe::None,
         "straight" => Fringe::Straight,
         "curtain" => Fringe::Curtain,
         other => return Err(format!("groom fringe is none, straight or curtain, got {other}")),
     };
-    let direction = match v["direction"].as_str().unwrap_or("part") {
+    let direction = match word("direction", "part")?.as_str() {
         "part" => Direction::Part,
         "back" => Direction::Back,
         "forward" => Direction::Forward,
@@ -205,22 +215,24 @@ pub fn parse(v: &Value) -> Result<Groom, String> {
         other => return Err(format!("groom direction is part, back, forward or up, got {other}")),
     };
     let hex_colour = |key: &str, hex: &str| -> Result<[f32; 3], String> {
-        let h = hex.trim_start_matches('#');
-        let c = (h.len() == 6).then(|| (0..3).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>()).flatten();
-        let c = c.ok_or_else(|| format!("groom {key} is #rrggbb, got {hex}"))?;
+        let h = hex.strip_prefix('#').unwrap_or(hex);
+        if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("groom {key} is #rrggbb, got {hex}"));
+        }
+        let c: Vec<u8> = (0..3).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap_or(0)).collect();
         Ok([0, 1, 2].map(|i| linear(c[i] as f64 / 255.0)))
     };
-    let colour = match v["colour"].as_str() {
+    let colour = match v.get("colour").map(|_| word("colour", "")).transpose()? {
         None => [0.18, 0.11, 0.07].map(linear),
-        Some(hex) => hex_colour("colour", hex)?,
+        Some(hex) => hex_colour("colour", &hex)?,
     };
-    let tip_colour = match v["tip_colour"].as_str() {
+    let tip_colour = match v.get("tip_colour").map(|_| word("tip_colour", "")).transpose()? {
         None => colour,
-        Some(hex) => hex_colour("tip_colour", hex)?,
+        Some(hex) => hex_colour("tip_colour", &hex)?,
     };
-    let highlight_colour = hex_colour("highlight_colour", v["highlight_colour"].as_str().unwrap_or(HIGHLIGHT_DEFAULT))?;
+    let highlight_colour = hex_colour("highlight_colour", &word("highlight_colour", HIGHLIGHT_DEFAULT)?)?;
     Ok(Groom {
-        name: v["name"].as_str().unwrap_or("groom").to_string(),
+        name: word("name", "groom")?,
         strands: num("strands")? as usize,
         points: num("points")? as usize,
         length_m: num("length_m")?,
@@ -262,6 +274,17 @@ mod tests {
         assert!(parse(&json!({"format": FORMAT, "part": "middle"})).is_err());
         assert!(parse(&json!({"format": FORMAT, "droop": 2.0})).is_err());
         assert!(parse(&json!({"format": FORMAT, "colour": "brown"})).is_err());
+        for colour in ["#aééb", "###806040", "#+f+f+f", "806040x", "#80604"] {
+            assert!(parse(&json!({"format": FORMAT, "colour": colour})).is_err(), "{colour} is refused, not a panic");
+        }
+        assert!(parse(&json!({"format": FORMAT, "colour": "806040"})).is_ok(), "the # is optional");
+        for (key, x) in [("strands", 1.9), ("points", 3.99), ("clumps", 0.7), ("seed", 2.5)] {
+            assert!(parse(&json!({"format": FORMAT, key: x})).is_err(), "{key} {x} is not a whole number");
+        }
+        for (key, x) in [("colour", json!(5)), ("part", json!(7)), ("tie", json!(true)), ("fringe", json!([])), ("direction", json!(1)), ("name", json!(2))] {
+            assert!(parse(&json!({"format": FORMAT, key: x})).is_err(), "{key} {x} is not text");
+        }
+        assert!(parse(&json!({"format": FORMAT, "part": "center"})).is_err(), "only the words the clients show");
         assert!(parse(&json!({"format": FORMAT, "lenght_m": 0.3})).is_err(), "a misspelt setting is refused, not ignored");
         for name in STYLES.iter().map(|s| s.name) {
             let styled = with_style(&starter(), name).unwrap();
