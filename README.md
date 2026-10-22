@@ -432,8 +432,17 @@ bone (jaw, eyes, the `default` preset's face bones) move with the head's own sli
 each by the displacement of the head surface around it, from the head the body targets would give to the head as
 exported. Measured with `--body-rig default` on a character whose eyes were moved by head sliders and whose head was
 scaled 1.1: the eye joints sat 27 mm from the eyeball centres before and 5.3-5.6 mm after (3 mm is MakeHuman's own
-offset on an unchanged head); the neck seam stays shut under a pose; `body.joints` reports the same joints. When the rig has eye bones (`default`, `mixamo_unity`) and the character has eyeballs, each eye joint sits at its eyeball's centre and carries it, so turning the eye bone turns the eye (0.5 mm from the eye mesh's box centre; on rigs without eye bones the eyes ride the head). Not yet: the
-face rig together with a body rig.
+offset on an unchanged head); the neck seam stays shut under a pose; `body.joints` reports the same joints. When the rig has eye bones (`default`, `mixamo_unity`) and the character has eyeballs, each eye joint sits at its eyeball's centre and carries it, so turning the eye bone turns the eye (0.5 mm from the eye mesh's box centre; on rigs without eye bones the eyes ride the head).
+**Face rig on the body:** `--rig head|face|face2` together with `--body-rig` writes one skeleton: the body's bones
+first, then the face joints under the body's head bone; the preset's own jaw and eyes become the face rig's (where it
+has them), and its other face bones (the `default` preset's tongue, lips and so on) are left out, their weights folded
+into their nearest kept ancestor. Each head vertex's share on the head, jaw and eye bones is re-split by the face rig's
+weights; its neck and spine shares stay the body's, so the neck seam stays shut under any body pose and any face
+animation (measured gap 0 on `default` and `game_engine` with four face shapes and a spine, neck and head pose). Against
+a head-only face rig of the same character the face moves within 0.03 mm (brow), 0.2 mm (smile, blink) and 4.4 mm
+(jaw open: under the chin, where MakeHuman gives the neck a quarter of the weight, the skin follows the jaw that much
+less). In Godot 4.7 every face animation track lands on a bone of the one skeleton, the jaw opens 23.7 degrees and a
+neck turn carries it; the humanoid maps still apply.
 
 **Genitals.** Bodies are exported naked. `body.genitals: "male"` adds MakeHuman's genital patch as its own mesh per LOD
 (`Genitals_LODn`), shaped by the macros and the genital sliders (penis length and girth, testicle size), its rim set

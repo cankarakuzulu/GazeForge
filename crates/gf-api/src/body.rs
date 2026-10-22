@@ -469,6 +469,66 @@ pub fn under_bone(rig: &gf_core::body_rig::RigDef, mut j: usize, ancestor: usize
     false
 }
 
+pub fn drop_face_bones(br: &mut BodyRig, keep: &[usize]) -> Value {
+    let n = br.rig.bones.len();
+    let parent_of = |j: usize| br.rig.bones[j].parent.as_deref().and_then(|p| br.rig.bones.iter().position(|b| b.name == p));
+    let dropped: Vec<bool> = (0..n).map(|j| j != br.head_joint && under_bone(&br.rig, j, br.head_joint) && !keep.contains(&j)).collect();
+    let fold: Vec<usize> = (0..n)
+        .map(|j| {
+            let mut k = j;
+            while dropped[k] {
+                k = parent_of(k).unwrap_or(br.head_joint);
+            }
+            k
+        })
+        .collect();
+    let mut new_index = vec![usize::MAX; n];
+    let mut next = 0;
+    for j in 0..n {
+        if !dropped[j] {
+            new_index[j] = next;
+            next += 1;
+        }
+    }
+    let names: Vec<String> = (0..n).filter(|&j| dropped[j]).map(|j| br.rig.bones[j].name.clone()).collect();
+    if names.is_empty() {
+        return json!({"dropped": 0});
+    }
+    let mut folded_entries = 0usize;
+    for infl in br.by_obj.values_mut() {
+        let mut merged: Vec<(usize, f64)> = Vec::with_capacity(infl.len());
+        for &(j, w) in infl.iter() {
+            if dropped[j] {
+                folded_entries += 1;
+            }
+            let t = new_index[fold[j]];
+            match merged.iter_mut().find(|e| e.0 == t) {
+                Some(e) => e.1 += w,
+                None => merged.push((t, w)),
+            }
+        }
+        merged.sort_by(|a, b| b.1.total_cmp(&a.1));
+        *infl = merged;
+    }
+    let keep_mask: Vec<bool> = dropped.iter().map(|d| !d).collect();
+    let reparent: Vec<Option<String>> = (0..n).map(|j| parent_of(j).filter(|&p| dropped[p]).map(|p| br.rig.bones[fold[p]].name.clone())).collect();
+    let mut bones = Vec::with_capacity(next);
+    for (j, mut b) in std::mem::take(&mut br.rig.bones).into_iter().enumerate() {
+        if !keep_mask[j] {
+            continue;
+        }
+        if let Some(p) = reparent[j].clone() {
+            b.parent = Some(p);
+        }
+        bones.push(b);
+    }
+    br.rig.bones = bones;
+    br.heads = br.heads.iter().zip(&keep_mask).filter(|h| *h.1).map(|h| *h.0).collect();
+    br.head_joint = new_index[br.head_joint];
+    json!({"dropped": names.len(), "bones": names, "weight_entries_folded": folded_entries,
+           "method": "a face rig was asked: the preset's bones under the head bone are left out, except the jaw and the eyes, which the face rig takes over; each left-out bone's weights go to its nearest kept ancestor (the jaw for the tongue, the head for the rest)"})
+}
+
 pub fn body_rig(pack: &b::BodyPack, controls: &Controls, rig_json: &Value, weights_json: &Value, source: Value, head_fit: Option<&HeadFit>) -> Result<BodyRig, String> {
     let rig = gf_core::body_rig::RigDef::parse(rig_json)?;
     if rig.bones.len() > 256 {
@@ -782,6 +842,35 @@ mod tests {
 
     fn grid() -> Vec<Point> {
         (0..10).flat_map(|i| (0..10).map(move |j| [i as f64 * 0.01, j as f64 * 0.01, 0.0])).collect()
+    }
+
+    #[test]
+    fn face_bones_drop_into_their_nearest_kept_ancestor() {
+        let bone = |name: &str, parent: Option<&str>| gf_core::body_rig::BoneDef {
+            name: name.into(),
+            parent: parent.map(str::to_string),
+            head: gf_core::body_rig::JointRef::Vertex(0),
+            tail: gf_core::body_rig::JointRef::Vertex(0),
+            roll: 0.0,
+            default_head: [0.0; 3],
+            default_tail: [0.0; 3],
+        };
+        let bones = vec![bone("spine", None), bone("head", Some("spine")), bone("jaw", Some("head")), bone("tongue", Some("jaw")), bone("eye.L", Some("head")), bone("lip", Some("head")), bone("lid", Some("lip"))];
+        let mut by_obj = std::collections::HashMap::new();
+        by_obj.insert(1u32, vec![(5usize, 0.6), (1, 0.4)]);
+        by_obj.insert(2u32, vec![(3usize, 0.7), (2, 0.3)]);
+        by_obj.insert(3u32, vec![(0usize, 1.0)]);
+        let mut br = BodyRig { rig: gf_core::body_rig::RigDef { bones }, heads: (0..7).map(|k| [k as f64, 0.0, 0.0]).collect(), by_obj, head_joint: 1, meta: Value::Null };
+        let report = drop_face_bones(&mut br, &[2, 4, 6]);
+        let names: Vec<&str> = br.rig.bones.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["spine", "head", "jaw", "eye.L", "lid"], "{report}");
+        assert_eq!(br.rig.bones[4].parent.as_deref(), Some("head"), "a kept bone whose parent is dropped hangs from the parent's kept ancestor");
+        assert_eq!(br.heads, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0], [6.0, 0.0, 0.0]]);
+        assert_eq!(br.head_joint, 1);
+        assert_eq!(br.by_obj[&1], vec![(1, 1.0)], "the lip's weight folds into the head");
+        assert_eq!(br.by_obj[&2], vec![(2, 1.0)], "the tongue's folds into the jaw");
+        assert_eq!(br.by_obj[&3], vec![(0, 1.0)], "a body vertex is untouched");
+        assert_eq!(report["dropped"], 2);
     }
 
     #[test]

@@ -8,6 +8,16 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **The face rig on the body.** `--rig head|face|face2` now works together with `--body-rig`: one skeleton, the body's
+  bones first (indices unchanged), the face joints under the body's head bone; the preset's jaw and eyes are taken over
+  by the face rig, its other bones under the head are left out with their weights folded into their nearest kept
+  ancestor (56 on `default`); per head vertex the body's head, jaw and eye shares are re-split by the face rig, neck and
+  spine shares kept, up to 8 influences; face animations re-keyed to their new parents, their neck and head channels
+  dropped; correctives computed on the merged weights. Measured on `default` and `game_engine`: rest identity 2e-8, seam
+  gap 0 under a body pose (the seam moving 68-83 mm) and under each of four face shapes; face displacement against a
+  head-only rig within 0.03 / 0.2 / 0.2 / 4.4 mm (brow, smile, blink, jaw open - the jaw's under-chin vertices keep the
+  body's neck share); Godot 4.7 resolves all 259 face tracks, opens the jaw 23.7 degrees and carries it with a neck turn
+  (`clients/godot-addon/tests/face_on_body_test.gd`).
 - **Bodies shaped by the macros.** A spec's `body` (a MakeHuman body pack and its targets in the store) is shaped live
   by the macro sliders in the designer, the studio and `export-glb`; the head follows it (built in its canonical frame,
   the character mapped to the world by one `Character` root). Measured: a live body equals a fresh MakeHuman import to
@@ -162,7 +172,7 @@ open, with its last measurement, rather than left out.
   centres than before.
 - With the thighs posed, a small ridge can show at the top of the genital patch's rim. There is no female option yet
   (MakeHuman ships no geometry for one).
-- The face rig cannot yet be combined with a body rig. `openpose` has no humanoid map.
+- `openpose` has no humanoid map.
 
 - **Topology improvement.** `topology improve` / `topology.improve` (a job) re-cuts a game base's triangles by edge
   flips over the same vertices, scored over the shape range the base serves (the rest shape, every catalog target, seeded

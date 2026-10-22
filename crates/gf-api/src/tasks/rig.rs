@@ -37,6 +37,98 @@ pub fn face_animations(names: &[String], fits: &[(Vec<JointPose>, ShapeError)], 
         .collect()
 }
 
+pub struct OnBody {
+    pub neck: usize,
+    pub head: usize,
+    pub jaw: Option<usize>,
+    pub eyes: [Option<usize>; 2],
+}
+
+pub fn merge_head_rig(body: &mut gltf::Rig, head: gltf::Rig, on: &OnBody) -> (Vec<usize>, Value) {
+    let rest_local = |global: &[[f32; 3]], parents: &[Option<usize>], j: usize| match parents[j] {
+        Some(p) => [0, 1, 2].map(|k| global[j][k] - global[p][k]),
+        None => global[j],
+    };
+    let head_local: Vec<[f32; 3]> = (0..head.names.len()).map(|j| rest_local(&head.global, &head.parents, j)).collect();
+    let given = [Some(on.neck), Some(on.head), on.jaw, on.eyes[0], on.eyes[1]];
+    let mut map = vec![usize::MAX; head.names.len()];
+    let mut taken = Vec::new();
+    let mut added = Vec::new();
+    for j in 0..head.names.len() {
+        if let Some(Some(b)) = given.get(j) {
+            map[j] = *b;
+            if j > gf_core::rig::HEAD {
+                body.global[*b] = head.global[j];
+                taken.push(json!({"joint": head.names[j], "bone": body.names[*b]}));
+            }
+            continue;
+        }
+        let mut name = head.names[j].clone();
+        while body.names.contains(&name) {
+            name.push_str("_face");
+        }
+        map[j] = body.names.len();
+        body.names.push(name.clone());
+        body.parents.push(head.parents[j].map(|p| map[p]));
+        body.global.push(head.global[j]);
+        added.push(name);
+    }
+    for mut a in head.attachments {
+        a.joint = map[a.joint];
+        body.attachments.push(a);
+    }
+    let mut dropped_channels = 0;
+    for mut anim in head.animations {
+        let before = anim.channels.len();
+        anim.channels.retain(|c| c.joint != gf_core::rig::NECK && c.joint != gf_core::rig::HEAD);
+        dropped_channels += before - anim.channels.len();
+        for c in anim.channels.iter_mut() {
+            let now = rest_local(&body.global, &body.parents, map[c.joint]);
+            let was = head_local[c.joint];
+            for t in c.translation.iter_mut() {
+                for k in 0..3 {
+                    t[k] += now[k] - was[k];
+                }
+            }
+            c.joint = map[c.joint];
+        }
+        body.animations.push(anim);
+    }
+    let report = json!({"neck": body.names[on.neck], "head": body.names[on.head], "taken_over": taken, "added": added.len(), "added_joints": added,
+                        "neck_head_channels_dropped": dropped_channels});
+    (map, report)
+}
+
+type Weights = Vec<(usize, f64)>;
+
+pub fn merge_influences(body: &[Weights], face: &[Weights], map: &[usize], head_bones: &[usize]) -> (Vec<Weights>, Vec<Weights>) {
+    let mut merged = Vec::with_capacity(body.len());
+    let mut corrective = Vec::with_capacity(body.len());
+    for (b, f) in body.iter().zip(face) {
+        let share: f64 = b.iter().filter(|e| head_bones.contains(&e.0)).map(|e| e.1).sum();
+        let own: Vec<(usize, f64)> = f.iter().copied().filter(|e| e.0 != gf_core::rig::NECK && e.1 > 0.0).collect();
+        let total: f64 = own.iter().map(|e| e.1).sum();
+        if share <= 0.0 || total <= 0.0 {
+            merged.push(b.clone());
+            corrective.push(vec![(gf_core::rig::NECK, 1.0)]);
+            continue;
+        }
+        let mut out: Vec<(usize, f64)> = b.iter().copied().filter(|e| !head_bones.contains(&e.0)).collect();
+        let mut corr: Vec<(usize, f64)> = vec![(gf_core::rig::NECK, 1.0 - share)];
+        for &(j, w) in &own {
+            let part = share * w / total;
+            match out.iter_mut().find(|e| e.0 == map[j]) {
+                Some(e) => e.1 += part,
+                None => out.push((map[j], part)),
+            }
+            corr.push((j, part));
+        }
+        merged.push(gf_core::body_rig::strongest(&out, gf_core::face_rig2::MAX_INFLUENCES));
+        corrective.push(corr.into_iter().filter(|e| e.1 > 0.0).collect());
+    }
+    (merged, corrective)
+}
+
 pub fn face2_animations(names: &[String], fits: &[(Vec<JointPose>, ShapeError)], pivots: &[Point]) -> Vec<gltf::Animation> {
     use gf_core::face_rig2 as fr2;
     let parents = fr2::parents();
@@ -370,4 +462,58 @@ pub fn gates_rig(opts: &Options) -> Result<Value, String> {
         failed,
         json!({"glb": path, "joints": joint_nodes.len(), "eyes": opts.get("eyes"), "front_deg": front, "tolerance_mm": tolerance * 1000.0, "rule": rule}),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rig(names: &[&str], parents: Vec<Option<usize>>) -> gltf::Rig {
+        gltf::Rig { names: names.iter().map(|s| s.to_string()).collect(), parents, global: (0..names.len()).map(|k| [k as f32, 0.0, 0.0]).collect(), attachments: Vec::new(), animations: Vec::new() }
+    }
+
+    #[test]
+    fn a_head_rig_joins_the_body_skeleton_at_its_neck_and_head() {
+        let mut body = rig(&["hips", "neck_01", "head", "jaw"], vec![None, Some(0), Some(1), Some(2)]);
+        let mut head = rig(&["neck", "head", "jaw", "eye_L", "eye_R", "brow"], vec![None, Some(0), Some(1), Some(1), Some(1), Some(1)]);
+        head.global[2] = [9.0, 9.0, 9.0];
+        head.animations.push(gltf::Animation {
+            name: "smile".into(),
+            channels: vec![
+                gltf::Channel { joint: 1, rotation: [[0.0, 0.0, 0.0, 1.0]; 2], translation: [[0.0; 3]; 2] },
+                gltf::Channel { joint: 5, rotation: [[0.0, 0.0, 0.0, 1.0]; 2], translation: [[4.0, 0.0, 0.0]; 2] },
+            ],
+            morph: None,
+        });
+        let (map, report) = merge_head_rig(&mut body, head, &OnBody { neck: 1, head: 2, jaw: Some(3), eyes: [None, None] });
+        assert_eq!(map, vec![1, 2, 3, 4, 5, 6], "{report}");
+        assert_eq!(body.names, ["hips", "neck_01", "head", "jaw", "eye_L", "eye_R", "brow"]);
+        assert_eq!(body.parents[4..], [Some(2), Some(2), Some(2)], "added joints hang from the body's head bone");
+        assert_eq!(body.global[3], [9.0, 9.0, 9.0], "the preset's jaw moves to the head rig's hinge");
+        assert_eq!(body.animations[0].channels.len(), 1, "the head bone belongs to the body: its channel is dropped");
+        assert_eq!(body.animations[0].channels[0].joint, 6);
+        assert_eq!(body.animations[0].channels[0].translation, [[3.0, 0.0, 0.0]; 2], "keys keep the pose delta over the new parent: brow at 5 under the body's head at 2");
+        let mut clash = rig(&["hips", "brow"], vec![None, Some(0)]);
+        let (_, _) = merge_head_rig(&mut clash, rig(&["neck", "head", "brow"], vec![None, Some(0), Some(1)]), &OnBody { neck: 0, head: 1, jaw: None, eyes: [None, None] });
+        assert_eq!(clash.names, ["hips", "brow", "brow_face"], "a name the body already has gets a suffix");
+    }
+
+    #[test]
+    fn the_head_bone_s_share_is_split_by_the_face_rig_and_the_seam_keeps_the_body_s() {
+        let map = vec![1, 2, 3, 4, 5, 6];
+        let body = vec![vec![(2, 0.8), (1, 0.2)], vec![(1, 1.0)]];
+        let face = vec![vec![(0, 0.1), (1, 0.5), (5, 0.4)], vec![(0, 1.0)]];
+        let (merged, corrective) = merge_influences(&body, &face, &map, &[2]);
+        let (with_jaw, _) = merge_influences(&[vec![(2, 0.5), (3, 0.3), (1, 0.2)]], &[vec![(1, 0.5), (2, 0.5)]], &map, &[2, 3]);
+        assert_eq!(with_jaw[0].iter().find(|e| e.0 == 1).map(|e| e.1), Some(0.2), "only the neck share stays the body's: {:?}", with_jaw[0]);
+        assert!((with_jaw[0].iter().find(|e| e.0 == 3).map_or(0.0, |e| e.1) - 0.4).abs() < 1e-12, "the preset jaw's own share is re-split with the head's: {:?}", with_jaw[0]);
+        let get = |v: &[(usize, f64)], j: usize| v.iter().find(|e| e.0 == j).map_or(0.0, |e| e.1);
+        assert!((get(&merged[0], 1) - 0.2).abs() < 1e-12, "the neck share is the body's: {:?}", merged[0]);
+        assert!((get(&merged[0], 2) - 0.8 * 0.5 / 0.9).abs() < 1e-12);
+        assert!((get(&merged[0], 6) - 0.8 * 0.4 / 0.9).abs() < 1e-12);
+        assert!((merged[0].iter().map(|e| e.1).sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((get(&corrective[0], 0) - 0.2).abs() < 1e-12 && (get(&corrective[0], 5) - 0.8 * 0.4 / 0.9).abs() < 1e-12, "{:?}", corrective[0]);
+        assert_eq!(merged[1], body[1], "a vertex the face rig gives wholly to the neck stays exactly the body's");
+        assert_eq!(corrective[1], vec![(0, 1.0)]);
+    }
 }

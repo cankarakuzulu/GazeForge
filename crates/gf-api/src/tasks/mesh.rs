@@ -86,6 +86,19 @@ pub struct GenitalMesh {
     pub flipped: bool,
 }
 
+fn preset_bone(br: &crate::body::BodyRig, profile: &str) -> Option<usize> {
+    let fallback = match profile {
+        "Jaw" => "jaw",
+        "LeftEye" => "eye.L",
+        "RightEye" => "eye.R",
+        "Neck" => "neck",
+        _ => return None,
+    };
+    let mapped = br.meta["source"]["preset"].as_str().and_then(gf_core::humanoid::godot).and_then(|m| m.iter().find(|r| r.0 == profile).map(|r| r.1.clone()));
+    let name = mapped.unwrap_or_else(|| fallback.to_string());
+    br.rig.bones.iter().position(|b| b.name == name)
+}
+
 fn gltf_v(uvs: &[[gf_geom::Uv; 3]]) -> Vec<[gf_geom::Uv; 3]> {
     uvs.iter().map(|t| t.map(|u| [u[0], 1.0 - u[1]])).collect()
 }
@@ -1136,13 +1149,17 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         (None, None) => None,
         (None, Some(_)) => return Err("--body-weights goes with --body-rig".into()),
         (Some(r), w) => {
-            if rigged {
-                return Err("--body-rig cannot be combined with --rig yet: the head and face rig on the body's head bone is the next step".into());
-            }
             let (pack, _, controls) = body.as_ref().filter(|_| world.is_some()).ok_or("--body-rig needs the spec's own body (a makehuman-mode body in the spec), not --body")?;
             let fit = crate::body::head_fit(&store, &spec, source.as_ref(), pack, controls, &positions)?;
             let (rig_json, weights_json, source) = crate::body::rig_source(r, w.map(String::as_str))?;
-            Some(crate::body::body_rig(pack, controls, &rig_json, &weights_json, source, Some(&fit))?)
+            let mut br = crate::body::body_rig(pack, controls, &rig_json, &weights_json, source, Some(&fit))?;
+            if rigged {
+                let keep: Vec<usize> = ["Jaw", "LeftEye", "RightEye"].iter().filter_map(|p| preset_bone(&br, p)).collect();
+                let report = crate::body::drop_face_bones(&mut br, &keep);
+                br.meta["bones"] = json!(br.rig.bones.len());
+                br.meta["face_bones"] = report;
+            }
+            Some(br)
         }
     };
     let mut eye_bones: [Option<usize>; 2] = [None, None];
@@ -1171,7 +1188,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
             br.meta["eyes"] = json!({"bones": placed, "method": "each eyeball rides its eye bone, whose joint is placed at the eyeball's centre (head scale included)"});
         }
     }
-    let head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
+    let mut head_influences: Option<Vec<gf_core::body_rig::Influences>> = match (&body_rig, &body) {
         (Some(br), Some((pack, _, _))) => {
             let quads = store.load_pack_quads(&spec.base.pack)?;
             let points = gf_core::cage::cage_points(&quads, dense.positions.len(), 256)?;
@@ -1592,6 +1609,33 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
         }
         rig_data = Some((rig_value, weights));
     }
+    let mut corrective_skin: Option<gf_core::face_rig::Influences> = None;
+    if let (Some(br), Some(body_rig_out), Some(hi)) = (&body_rig, body_gltf_rig.as_mut(), head_influences.as_mut())
+        && let Some((head_rig, weights)) = rig_data.take()
+    {
+        let neck = br.rig.bones[br.head_joint].parent.as_deref().and_then(|p| br.rig.bones.iter().position(|b| b.name == p)).ok_or("the body rig's head bone has no parent to take the head rig's neck")?;
+        let on = super::rig::OnBody { neck, head: br.head_joint, jaw: preset_bone(br, "Jaw"), eyes: [preset_bone(br, "LeftEye"), preset_bone(br, "RightEye")] };
+        let (map, report) = super::rig::merge_head_rig(body_rig_out, head_rig, &on);
+        if body_rig_out.names.len() > 256 {
+            return Err(format!("the body and face rigs together have {} joints; a glTF skin here holds at most 256", body_rig_out.names.len()));
+        }
+        for part in eye_parts.iter_mut() {
+            part.joint = part.joint.map(|j| map[j]);
+        }
+        let face: Vec<Vec<(usize, f64)>> = match &face_skin {
+            Some(f) => f.clone(),
+            None => weights.iter().map(|x| vec![(gf_core::rig::NECK, x[0]), (gf_core::rig::HEAD, x[1]), (2, x[2])]).collect(),
+        };
+        let taken: Vec<usize> = std::iter::once(br.head_joint).chain([on.jaw, on.eyes[0], on.eyes[1]].into_iter().flatten()).collect();
+        let (merged, corrective) = super::rig::merge_influences(hi, &face, &map, &taken);
+        let changed = merged.iter().zip(hi.iter()).filter(|(a, b)| a != b).count();
+        *hi = merged.clone();
+        face_skin = Some(merged);
+        corrective_skin = Some(corrective);
+        rig_meta["on_body"] = report;
+        rig_meta["on_body"]["head_vertices_reweighted"] = json!(changed);
+        rig_meta["on_body"]["method"] = json!("one skeleton: the body rig's joints first (indices unchanged), then the head rig's joints without its neck and head, which become the body's neck and head bones; the jaw and eyes become the preset's own where it has them (moved to the head rig's hinge and eye centres); per head vertex the body's head-bone share is split by the head rig's weights over its head, jaw and face joints, the rest (neck, spine) kept, so a vertex the head rig gives wholly to its neck keeps the body's weights; face animations drop their neck and head channels");
+    }
     let mut body_lods = Vec::new();
     let mut seam_normals: Vec<HashMap<u32, Point>> = Vec::new();
     let mut body_meta = Value::Null;
@@ -1968,7 +2012,7 @@ pub fn export_glb(opts: &Options) -> Result<Value, String> {
                 }
             }
             morphs.push(MorphData { positions: positions_delta, normals: normals_delta });
-            if let (Some((poses, pivots)), Some(influences)) = (&face2_correctives, &face_skin) {
+            if let (Some((poses, pivots)), Some(influences)) = (&face2_correctives, corrective_skin.as_ref().or(face_skin.as_ref())) {
                 let inf: Vec<&[(usize, f64)]> = surface.source.iter().map(|&g| influences[level.map[g as usize] as usize].as_slice()).collect();
                 let c = gf_core::face_rig2::corrective(&gp, &gn, &inf, pivots, &poses[corrective_morphs.len()], &ep, &enn);
                 let mut positions: Vec<[f32; 3]> = c.positions.iter().map(|d| gm::to_gltf(*d)).collect();
