@@ -30,6 +30,14 @@ pub struct WearableManifest {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attach: Option<Attach>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<Level>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Level {
+    pub from: usize,
+    pub first_face: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,7 +54,32 @@ pub struct Wearable {
     pub binding: Binding,
     pub positions: Vec<[f64; 3]>,
     pub uvs: Vec<[f64; 2]>,
-    pub faces: Vec<Vec<(u32, Option<u32>)>>,
+    pub faces: Vec<Face>,
+    pub levels: Vec<FaceSet>,
+}
+
+pub type Face = Vec<(u32, Option<u32>)>;
+
+pub type FaceSet = (usize, Vec<Face>);
+
+pub struct Extras {
+    pub double_sided: bool,
+    pub levels: Vec<Level>,
+}
+
+pub fn split_levels(mut faces: Vec<Face>, levels: &[Level]) -> Result<(Vec<Face>, Vec<FaceSet>), String> {
+    for (k, l) in levels.iter().enumerate() {
+        let after = k.checked_sub(1).map(|j| levels[j]);
+        if l.from == 0 || l.first_face == 0 || l.first_face >= faces.len() || after.is_some_and(|a| a.from >= l.from || a.first_face >= l.first_face) {
+            return Err(format!("levels[{k}] ({} from face {}) must start after level 0 and after the set before it, within the {} faces", l.from, l.first_face, faces.len()));
+        }
+    }
+    let mut sets = Vec::new();
+    for l in levels.iter().rev() {
+        sets.push((l.from, faces.split_off(l.first_face)));
+    }
+    sets.reverse();
+    Ok((faces, sets))
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
@@ -108,6 +141,7 @@ impl Store {
             source,
             notes,
             attach: None,
+            levels: Vec::new(),
         };
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
@@ -153,11 +187,12 @@ impl Store {
             source,
             notes,
             attach: Some(attach),
+            levels: Vec::new(),
         };
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
 
-    pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, double_sided: bool, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
+    pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, extras: Extras, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
         let mesh = crate::body::read_obj(obj_path, None)?;
         if mesh.positions.len() != binding.bound.len() {
             return Err(format!("the binding has {} vertices, {} has {}", binding.bound.len(), obj_path.display(), mesh.positions.len()));
@@ -182,10 +217,11 @@ impl Store {
             hidden: binding.hidden.len(),
             material,
             transparent,
-            double_sided,
+            double_sided: extras.double_sided,
             source,
             notes,
             attach: None,
+            levels: extras.levels,
         };
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
@@ -204,6 +240,30 @@ impl Store {
         if manifest.attach.is_none() && mesh.positions.len() != binding.bound.len() {
             return Err(format!("wearable {reference}: binding and mesh disagree on the vertex count"));
         }
-        Ok(Wearable { manifest, binding, positions: mesh.positions, uvs: mesh.uvs, faces: mesh.faces })
+        let (faces, levels) = split_levels(mesh.faces, &manifest.levels).map_err(|e| format!("wearable {reference}: {e}"))?;
+        Ok(Wearable { manifest, binding, positions: mesh.positions, uvs: mesh.uvs, faces, levels })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levels_split_a_mesh_into_face_sets_and_refuse_nonsense() {
+        let faces: Vec<Vec<(u32, Option<u32>)>> = (0..6).map(|k| vec![(k, None), (k + 1, None), (k + 2, None)]).collect();
+        let (first, sets) = split_levels(faces.clone(), &[Level { from: 2, first_face: 3 }, Level { from: 4, first_face: 5 }]).unwrap();
+        assert_eq!(first, faces[..3].to_vec());
+        assert_eq!(sets, vec![(2, faces[3..5].to_vec()), (4, faces[5..].to_vec())]);
+        assert_eq!(split_levels(faces.clone(), &[]).unwrap(), (faces.clone(), Vec::new()));
+        for bad in [
+            vec![Level { from: 0, first_face: 3 }],
+            vec![Level { from: 2, first_face: 0 }],
+            vec![Level { from: 2, first_face: 6 }],
+            vec![Level { from: 3, first_face: 2 }, Level { from: 3, first_face: 4 }],
+            vec![Level { from: 2, first_face: 4 }, Level { from: 3, first_face: 4 }],
+        ] {
+            assert!(split_levels(faces.clone(), &bad).is_err(), "{bad:?}");
+        }
     }
 }

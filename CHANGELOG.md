@@ -16,7 +16,15 @@ open, with its last measurement, rather than left out.
   the scalp cap and spring-bone physics. Gate (`tools/diag/groom_cards_gate.py`, not shipped, proven to fail on
   single-sided cards): deterministic, binding back within 0.01 mm, faces outward, worn and exported on six levels
   with a masked double-sided material, strands traced back from the cards. Known: the scalp shows between cards at
-  the part and the crown (the head's own skin, painted with hair colour only on the far levels).
+  the part and the crown (the head's own skin, painted with hair colour only on the far levels); the far card sets
+  ride the body's skin weights, not the spring chains.
+- **Groom cards keep their cover on the far levels.** A wearable can now carry more than one set of faces in its
+  mesh, each from a level on (`levels` in the store manifest; LOD0 and every reader that wants one mesh see the
+  first set). `groom cards` writes three: the 600 cards, then 150 cards from every other strand point (up to 80 mm
+  wide) from LOD4, and 75 from every fourth point (up to 120 mm) from LOD5, each thinned to the level's usual vertex
+  budget. Before, LOD4 and LOD5 kept a few dozen of the narrow LOD0 cards and read as loose threads. Existing
+  wearables export byte for byte as before. Gate: `groom_cards_gate.py` reads every level's index buffer (near cards
+  to LOD3, only 9- and 5-row cards on LOD4 and LOD5), proven to fail on a ladder that ignores the sets.
 - `wearable bind --double-sided on`: a bound wearable that renders both faces (hair cards, thin sheets).
 - **Grooms: hair grown from scratch (first step).** `export-glb --strands X.usda --groom GROOM.json`: strands rooted on
   the character's own scalp (the head's `scalp` skin region, from 478 built-in landmarks on the dense base, so one groom

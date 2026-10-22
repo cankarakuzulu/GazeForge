@@ -468,6 +468,10 @@ fn rewind_obj(text: &str) -> String {
 }
 
 pub fn bind(opts: &Options) -> Result<Value, String> {
+    bind_with(opts, Vec::new())
+}
+
+pub fn bind_with(opts: &Options, levels: Vec<gf_io::wearable_store::Level>) -> Result<Value, String> {
     only(opts, "wearable bind", &[BIND_KEYS])?;
     let store = gf_io::store::Store::open(Path::new(need(opts, "store")?))?;
     let spec = ch::read_spec(Path::new(need(opts, "spec")?))?;
@@ -543,7 +547,7 @@ pub fn bind(opts: &Options) -> Result<Value, String> {
         "off" => false,
         other => return Err(format!("--double-sided takes on or off, got {other}")),
     };
-    let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", double_sided, vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
+    let (reference, m) = store.import_generated(&binding, obj_path, texture.as_deref(), "obj", gf_io::wearable_store::Extras { double_sided, levels }, vec![format!("bound to {} on {}", obj_path.display(), spec.name)])?;
     Ok(json!({"ok": true, "command": "wearable bind", "wearable": reference, "name": m.name, "vertices": m.vertices, "transparent": m.transparent, "double_sided": m.double_sided,
               "reprojection_max_mm": worst * 1000.0, "offset_max_mm": offsets.iter().copied().fold(0.0, f64::max), "hides_base_vertices": m.hidden, "hidden_compared": compared, "from_glb": from_glb,
               "faces": {"facing_the_body": toward, "measured": measured, "rewound": flipped,

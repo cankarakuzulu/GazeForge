@@ -530,7 +530,8 @@ A groom becomes game hair with `groom cards --store DIR --spec FILE --base BASE_
 [--cards 600] [--atlas 1024]` (or the "Make game hair cards from a groom" task): its strands are grouped by shape,
 each group becomes a card along its mean strand, a strand texture is painted in the groom's colour, and the cards are
 stored as a double-sided hair wearable bound to the character like any garment - wear it like MakeHuman hair, on
-every level of detail, with spring-bone physics if you like.
+every level of detail (the far levels get fewer, wider cards made from the same strands), with spring-bone
+physics if you like.
 
 **Baked physics.** For engines with no spring solver, `export-glb --bake sway` (or `wearable bake --glb IN --out OUT
 --bake CLIP` on a file already exported, or the "Bake hair and cloth physics into a glb" task) simulates the spring chains offline

@@ -246,6 +246,12 @@ fn level_target(n: usize, body: usize, body0: usize, level: usize, power: f64) -
 }
 
 pub fn garment_triangles(item: &gf_io::wearable_store::Wearable, garment: &[Point]) -> (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) {
+    faces_triangles(item, garment, &item.faces)
+}
+
+type Faces = [Vec<(u32, Option<u32>)>];
+
+fn faces_triangles(item: &gf_io::wearable_store::Wearable, garment: &[Point], faces: &Faces) -> (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) {
     let mut triangles = Vec::new();
     let mut uvs: Vec<[gf_geom::Uv; 3]> = Vec::new();
     let uv = |c: Option<u32>| c.and_then(|t| item.uvs.get(t as usize)).map_or([0.0f32, 0.0], |u| [u[0] as f32, 1.0 - u[1] as f32]);
@@ -254,8 +260,8 @@ pub fn garment_triangles(item: &gf_io::wearable_store::Wearable, garment: &[Poin
         let p = garment[v as usize];
         [((p[1] - centre[1]).atan2(p[0] - centre[0]) / std::f64::consts::TAU + 0.5) as f32, p[2] as f32]
     };
-    let textured = item.faces.iter().all(|f| f.iter().all(|c| c.1.is_some())) && !item.uvs.is_empty();
-    for f in &item.faces {
+    let textured = faces.iter().all(|f| f.iter().all(|c| c.1.is_some())) && !item.uvs.is_empty();
+    for f in faces {
         for k in 1..f.len().saturating_sub(1) {
             triangles.push([f[0].0, f[k].0, f[k + 1].0]);
             uvs.push(if textured { [uv(f[0].1), uv(f[k].1), uv(f[k + 1].1)] } else { [stand_in(f[0].0), stand_in(f[k].0), stand_in(f[k + 1].0)] });
@@ -268,6 +274,9 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
     let (triangles, uvs) = garment_triangles(item, garment);
     let textured = item.faces.iter().all(|f| f.iter().all(|c| c.1.is_some())) && !item.uvs.is_empty();
     let n = garment.len();
+    if !item.levels.is_empty() {
+        return set_ladder(item, garment, (triangles, uvs), body_counts, power);
+    }
     let mut out: Vec<GarmentLevel> = vec![((0..n as u32).collect(), triangles.clone(), uvs.clone())];
     let cards = if item.manifest.transparent { card_levels(garment, &triangles, &uvs, body_counts, power) } else { None };
     if let Some(levels) = cards {
@@ -308,7 +317,32 @@ fn wearable_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], bo
 
 const CARD_LARGEST_SHARE: f64 = 0.25;
 
-fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], body_counts: &[usize], power: f64) -> Option<Vec<GarmentLevel>> {
+type Card = (f64, Vec<usize>, std::collections::BTreeSet<u32>);
+
+type LevelSet = (usize, Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>);
+
+fn set_ladder(item: &gf_io::wearable_store::Wearable, garment: &[Point], first: (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>), body_counts: &[usize], power: f64) -> Vec<GarmentLevel> {
+    let mut sets: Vec<LevelSet> = vec![(0, first.0, first.1)];
+    for (from, faces) in &item.levels {
+        let (t, u) = faces_triangles(item, garment, faces);
+        sets.push((*from, t, u));
+    }
+    let used = |t: &[[u32; 3]]| t.iter().flatten().copied().collect::<std::collections::BTreeSet<u32>>().len();
+    let n0 = used(&sets[0].1);
+    let orders: Vec<Vec<Card>> = sets.iter().map(|s| card_order(garment, &s.1, false).unwrap_or_default()).collect();
+    let mut out: Vec<GarmentLevel> = vec![((0..garment.len() as u32).collect(), sets[0].1.clone(), sets[0].2.clone())];
+    let mut above = n0;
+    for (level, &b) in body_counts.iter().enumerate().skip(1) {
+        let k = sets.iter().rposition(|s| s.0 <= level).unwrap_or(0);
+        let target = level_target(n0, b, body_counts[0], level, power).max(WEARABLE_MIN_VERTICES).min(above);
+        let next = card_prefix(&orders[k], &sets[k].1, &sets[k].2, target);
+        above = next.0.len();
+        out.push(next);
+    }
+    out
+}
+
+fn card_order(garment: &[Point], triangles: &[[u32; 3]], check_share: bool) -> Option<Vec<Card>> {
     let n = garment.len();
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn root(parent: &mut [u32], mut v: u32) -> u32 {
@@ -336,9 +370,9 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
         c.1.push(i);
         c.2.extend(t.iter().copied());
     }
-    let mut order: Vec<(f64, Vec<usize>, std::collections::BTreeSet<u32>)> = cards.into_values().collect();
+    let mut order: Vec<Card> = cards.into_values().collect();
     order.sort_by(|a, b| b.0.total_cmp(&a.0));
-    if order.iter().map(|c| c.2.len()).max().unwrap_or(n) as f64 > CARD_LARGEST_SHARE * n as f64 {
+    if check_share && order.iter().map(|c| c.2.len()).max().unwrap_or(n) as f64 > CARD_LARGEST_SHARE * n as f64 {
         return None;
     }
     let centre = |c: &(f64, Vec<usize>, std::collections::BTreeSet<u32>)| -> Point {
@@ -355,25 +389,35 @@ fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3
             *g = g.min((0..3).map(|k| (centres[i][k] - centres[next][k]).powi(2)).sum::<f64>());
         }
     }
-    let order: Vec<(f64, Vec<usize>, std::collections::BTreeSet<u32>)> = spread.into_iter().map(|i| order[i].clone()).collect();
+    Some(spread.into_iter().map(|i| order[i].clone()).collect())
+}
+
+fn card_prefix(order: &[Card], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], target: usize) -> GarmentLevel {
+    let mut keep: std::collections::BTreeSet<u32> = Default::default();
+    let mut tris: Vec<usize> = Vec::new();
+    for card in order {
+        if !keep.is_empty() && keep.len() + card.2.len() > target {
+            break;
+        }
+        keep.extend(card.2.iter().copied());
+        tris.extend(card.1.iter().copied());
+    }
+    let kept: Vec<u32> = keep.into_iter().collect();
+    let local: HashMap<u32, u32> = kept.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+    tris.sort_unstable();
+    (kept, tris.iter().map(|&i| triangles[i].map(|v| local[&v])).collect(), tris.iter().map(|&i| uvs[i]).collect())
+}
+
+fn card_levels(garment: &[Point], triangles: &[[u32; 3]], uvs: &[[gf_geom::Uv; 3]], body_counts: &[usize], power: f64) -> Option<Vec<GarmentLevel>> {
+    let n = garment.len();
+    let order = card_order(garment, triangles, true)?;
     let mut out = Vec::new();
     let mut above = n;
     for (level, &b) in body_counts.iter().enumerate().skip(1) {
         let target = level_target(n, b, body_counts[0], level, power).max(WEARABLE_MIN_VERTICES).min(above);
-        let mut keep: std::collections::BTreeSet<u32> = Default::default();
-        let mut tris: Vec<usize> = Vec::new();
-        for card in &order {
-            if !keep.is_empty() && keep.len() + card.2.len() > target {
-                break;
-            }
-            keep.extend(card.2.iter().copied());
-            tris.extend(card.1.iter().copied());
-        }
-        let kept: Vec<u32> = keep.into_iter().collect();
-        let local: HashMap<u32, u32> = kept.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
-        tris.sort_unstable();
-        above = kept.len();
-        out.push((kept, tris.iter().map(|&i| triangles[i].map(|v| local[&v])).collect(), tris.iter().map(|&i| uvs[i]).collect()));
+        let next = card_prefix(&order, triangles, uvs, target);
+        above = next.0.len();
+        out.push(next);
     }
     Some(out)
 }
