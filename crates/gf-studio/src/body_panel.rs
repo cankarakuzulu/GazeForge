@@ -714,7 +714,7 @@ impl crate::studio::Studio<'_> {
                 let all = free.len();
                 free.retain(|w| want.is_empty() || label(&w.reference).to_lowercase().contains(&want));
                 let head = if want.is_empty() { tr("body.wear_add").to_string() } else { trf("body.wear_found", &[("n", &free.len()), ("all", &all)]) };
-                egui::ComboBox::from_id_salt("body_wear_add").selected_text(head).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("body_wear_add").selected_text(head).height(360.0).show_ui(ui, |ui| {
                     let mut group: Option<&str> = None;
                     for w in free {
                         if group != Some(w.category.as_str()) {

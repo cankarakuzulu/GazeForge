@@ -181,6 +181,12 @@ impl Offscreen {
                 self.ui_frames(1)?;
                 Ok(json!({"hovered": [at.x, at.y]}))
             }
+            "ui_text" => {
+                let typed = text("text").ok_or("ui_text needs text")?.to_string();
+                self.ui_frame(vec![egui::Event::Text(typed.clone())])?;
+                self.ui_frames(1)?;
+                Ok(json!({"typed": typed}))
+            }
             "ui_key" => {
                 let b = keymap::parse(text("key").ok_or("ui_key needs key")?)?;
                 let modifiers = egui::Modifiers { alt: b.alt, ctrl: b.ctrl, shift: b.shift, mac_cmd: false, command: b.ctrl };
