@@ -301,6 +301,14 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The browser's recovery offer covered the toolbar.** "Unsaved work … was kept by autosave" floated at a fixed
+  52 px from the top, over the second toolbar row when the header wraps and over the view's chips when it does not.
+  It is now a strip between the header and the view that pushes the view down. Showing it also exposed an older fault:
+  the view's outline boxes kept their size after the view changed size (a window resize did the same), so the page
+  scrolled by the strip's height (an 855 px window held an 894 px page; now a 700 px window holds a 700 px page).
+- **Saved times were raw ISO strings.** The browser shows the autosave, save, recovery and project-list times in local
+  time ("10/23/2026, 4:21:54 AM", not "2026-10-23T01:20:19.992Z"); the studio, which has no time zone without a new
+  dependency, shows "2026-10-23 01:25:10 UTC".
 - **The browser said nothing when its server stopped.** A request that cannot reach `gazeforge serve` now puts a
   banner at the top ("Cannot reach the GazeForge server at 127.0.0.1:PORT…", with Retry); the next answer from the
   server removes it. The help now says F frames everything shown.

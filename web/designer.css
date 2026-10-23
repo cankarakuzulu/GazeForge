@@ -140,8 +140,7 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .wide.hidden { display: none; }
 .relink-row { margin: 10px 0; }
 .relink-row > label:first-child { display: block; font-weight: 600; }
-.recover { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 9; display: flex; gap: 8px; align-items: center; max-width: calc(100vw - 32px);
-  background: var(--panel); color: var(--ink); border: 2px solid var(--warn); border-radius: 6px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
+.recover { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 12px; background: var(--panel); color: var(--ink); border-bottom: 2px solid var(--warn); }
 .recover.hidden { display: none; }
 .gf-stitch-status[data-pass="no"] { color: #c62828; font-weight: 600; }
 .gf-stitch-status[data-pass="stale"] { color: var(--warn); }

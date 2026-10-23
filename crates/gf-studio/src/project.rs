@@ -294,7 +294,7 @@ impl World {
                 (Op::Save { name, recovery }, Ok(r)) => {
                     if recovery {
                         self.project.autosaved = true;
-                        self.project.status = trf("designer.autosaved", &[("reason", &tr(&format!("project.frag.{}", self.project.autosave_reason))), ("modified", &r["modified"].as_str().unwrap_or(""))]);
+                        self.project.status = trf("designer.autosaved", &[("reason", &tr(&format!("project.frag.{}", self.project.autosave_reason))), ("modified", &when(&r["modified"]))]);
                     } else {
                         let was = self.project.name.clone();
                         self.project.name = Some(name.clone());
@@ -306,7 +306,7 @@ impl World {
                             .filter_map(|(role, v)| v["hint"].as_str().map(|h| (role.clone(), json!({"path": h}))))
                             .collect();
                         self.project.saved_sig = Some(self.project_sig());
-                        self.project.status = trf("designer.project_saved", &[("path", &r["path"].as_str().unwrap_or("")), ("bytes", &r["bytes"]), ("modified", &r["modified"].as_str().unwrap_or(""))]);
+                        self.project.status = trf("designer.project_saved", &[("path", &r["path"].as_str().unwrap_or("")), ("bytes", &r["bytes"]), ("modified", &when(&r["modified"]))]);
                         if was.is_none() && name != gf_api::project::UNTITLED {
                             let _ = gf_api::call(&gf_api::Ctx::from_env(), "project.discard", &json!({"name": gf_api::project::UNTITLED, "root": root()}));
                         }
@@ -402,6 +402,16 @@ impl World {
     }
 }
 
+fn when(v: &Value) -> String {
+    let iso = v.as_str().unwrap_or("");
+    let b = iso.as_bytes();
+    let shaped = b.len() >= 20 && b[10] == b'T' && iso.ends_with('Z') && iso.is_char_boundary(19);
+    if !shaped {
+        return iso.to_string();
+    }
+    trf("project.utc_time", &[("date", &&iso[..10]), ("time", &&iso[11..19])])
+}
+
 fn message(e: &str) -> String {
     gf_api::exactjson::text(e).ok().and_then(|v| v["message"].as_str().map(str::to_string)).unwrap_or_else(|| e.to_string())
 }
@@ -461,7 +471,7 @@ impl crate::studio::Studio<'_> {
                 }
                 for p in self.world.project.list.clone() {
                     let name = p["name"].as_str().unwrap_or_default().to_string();
-                    let label = trf("designer.project_row", &[("name", &name), ("modified", &p["modified"].as_str().unwrap_or("")), ("count", &p["characters"])]);
+                    let label = trf("designer.project_row", &[("name", &name), ("modified", &when(&p["modified"])), ("count", &p["characters"])]);
                     if ui.selectable_label(self.world.project.name.as_deref() == Some(&name), label).clicked() {
                         self.s.project.confirm = Some(Confirm::Open(name.clone()));
                     }
@@ -469,7 +479,7 @@ impl crate::studio::Studio<'_> {
                 for r in self.world.project.recoveries.clone().into_iter().filter(|r| r["newer_than_saved"] == true) {
                     let name = r["name"].as_str().unwrap_or_default().to_string();
                     ui.horizontal(|ui| {
-                        ui.label(trf("designer.recover", &[("name", &name), ("modified", &r["modified"].as_str().unwrap_or(""))]));
+                        ui.label(trf("designer.recover", &[("name", &name), ("modified", &when(&r["modified"]))]));
                         if ui.small_button(tr("ui.p-restore")).clicked() {
                             self.s.project.confirm = Some(Confirm::Recover(name.clone()));
                         }
@@ -554,5 +564,18 @@ impl crate::studio::Studio<'_> {
             Confirm::Recover(n) => self.world.project_open(n, true),
             Confirm::Pick(k) => self.world.project_pick(*k),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_time_is_shown_without_the_iso_punctuation_and_names_its_zone() {
+        assert_eq!(when(&json!("2026-10-23T01:20:19.992Z")), "2026-10-23 01:20:19 UTC");
+        assert_eq!(when(&json!("2026-10-23T01:20:19Z")), "2026-10-23 01:20:19 UTC");
+        assert_eq!(when(&json!("yesterday")), "yesterday");
+        assert_eq!(when(&Value::Null), "");
     }
 }

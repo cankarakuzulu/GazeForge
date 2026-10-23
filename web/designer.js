@@ -1647,7 +1647,7 @@ async function renderRecent() {
 function renderProjectTab() {
   const doc = P.doc;
   $("p-info").textContent = doc
-    ? tr("designer.project_info", { name: doc.name, modified: doc.modified, created: doc.created, store: doc.store, pack: doc.base.pack.slice(0, 19), blobs: doc.base.blobs })
+    ? tr("designer.project_info", { name: doc.name, modified: localTime(doc.modified), created: localTime(doc.created), store: doc.store, pack: doc.base.pack.slice(0, 19), blobs: doc.base.blobs })
     : tr("designer.project_unsaved");
   $("p-chars").innerHTML = (doc ? doc.characters : [{ id: "c1", name: D.start.name, revision: "", history: [] }])
     .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.id)} ${escapeHtml((c.revision || "").slice(0, 15))} · ${tr("designer.revisions", { n: (c.history || []).length })}</span></li>`).join("");
@@ -1729,7 +1729,7 @@ async function saveProject(asName) {
     renderRecent();
     renderProjectTab();
     updateDirty();
-    $("p-status").textContent = tr("designer.project_saved", { path: r.path, bytes: r.bytes, modified: r.modified });
+    $("p-status").textContent = tr("designer.project_saved", { path: r.path, bytes: r.bytes, modified: localTime(r.modified) });
     toast(tr("designer.saved_name", { name }));
     return true;
   } catch (e) {
@@ -1748,7 +1748,7 @@ async function saveProjectAs() {
 async function openProject(name) {
   if (!name) {
     let items = [];
-    try { items = (await api("project.list", rootArg())).projects.filter((p) => !p.error).map((p) => ({ value: p.name, label: tr("designer.project_row", { name: p.name, modified: p.modified, count: p.characters }) })); } catch (e) { toast(e.message); return; }
+    try { items = (await api("project.list", rootArg())).projects.filter((p) => !p.error).map((p) => ({ value: p.name, label: tr("designer.project_row", { name: p.name, modified: localTime(p.modified), count: p.characters }) })); } catch (e) { toast(e.message); return; }
     if (!items.length) { toast(tr("designer.no_projects")); return; }
     name = await dialog({ title: tr("designer.open_title"), list: items, ok: tr("designer.open") });
     if (!name) return;
@@ -1782,7 +1782,7 @@ async function autosave(reason = "settle") {
     P.autosaves++;
     P.lastAutosave = r.modified;
     P.unresolved = r.unresolved || [];
-    $("p-status").textContent = tr("designer.autosaved", { reason, modified: r.modified }) + (P.unresolved.length ? tr("designer.not_found_suffix", { list: unresolvedText(P.unresolved) }) : "");
+    $("p-status").textContent = tr("designer.autosaved", { reason, modified: localTime(r.modified) }) + (P.unresolved.length ? tr("designer.not_found_suffix", { list: unresolvedText(P.unresolved) }) : "");
   } catch (e) {
     $("p-status").textContent = tr("designer.autosave_failed", { error: e.message });
   } finally { P.autosaving = false; }
@@ -1842,14 +1842,19 @@ function relinkDialog(unresolved, message, given) {
   });
 }
 
+function localTime(iso) {
+  return Number.isNaN(Date.parse(iso)) ? iso : new Date(iso).toLocaleString();
+}
+
 async function offerRecovery() {
   if (P.recovered) return;
   let slot = null;
   try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
   if (!slot) return;
   P.recoveryOffer = slot;
-  $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: Number.isNaN(Date.parse(slot.modified)) ? slot.modified : new Date(slot.modified).toLocaleString() });
+  $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: localTime(slot.modified) });
   $("p-recover").classList.remove("hidden");
+  request(false);
 }
 
 function buildProjectControls() {
@@ -1872,6 +1877,7 @@ function buildProjectControls() {
   $("p-restore").addEventListener("click", () => { $("p-recover").classList.add("hidden"); leave(projectUrl(slotName(), { recovery: 1, ...(P.name ? {} : { store }) })); });
   $("p-discard").addEventListener("click", async () => {
     $("p-recover").classList.add("hidden");
+    request(false);
     try { await api("project.discard", { name: slotName(), ...rootArg() }); toast(tr("designer.autosave_discarded")); } catch (e) { toast(e.message); }
   });
   window.addEventListener("beforeunload", (e) => {

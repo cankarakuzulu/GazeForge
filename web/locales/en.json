@@ -614,6 +614,7 @@
  "project.relink": "Relink resources",
  "project.save": "Save",
  "project.save_as": "Save as",
+ "project.utc_time": "{date} {time} UTC",
  "rig.changed": "Face rig: the character changed; refitting after it settles",
  "rig.error": "Face rig: {error}",
  "rig.fit_title": "Joints: p95 {p95} mm, max {max} mm, explained {pct}%",

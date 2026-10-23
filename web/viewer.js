@@ -1394,7 +1394,7 @@ export class Viewer {
 
   placeLabels(rects) {
     if (!this.labels) return;
-    const key = `${this.layout}|${this.active}|${rects.map((r) => `${this.cams[r.cam].ortho}${this.cams[r.cam].name}${this.vp[r.slot].mode}${this.vp[r.slot].lod}`).join(",")}`;
+    const key = `${this.layout}|${this.active}|${rects.map((r) => `${r.x},${r.y},${r.w},${r.h}${this.cams[r.cam].ortho}${this.cams[r.cam].name}${this.vp[r.slot].mode}${this.vp[r.slot].lod}`).join(",")}`;
     if (key === this.labelKey) return;
     this.labelKey = key;
     this.labels.innerHTML = "";
