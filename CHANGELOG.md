@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The browser's Project tab read like a log.** Its info line shows the name, saved and created times and the store;
+  the base pack hash and blob count moved to its tooltip. A character row shows its name and "N revision(s)", with
+  its id and revision hash in the tooltip.
 - **Jobs were listed by command name.** Both Jobs lists show a label ("Export a glb", "Make hair cards", "Import a
   game base") with the command in the tooltip; a studio test fails when a job command has no `job.cmd.` label.
 - **The face rig's shapes folder could only be set from outside.** Both Face rig panels have a Face shapes field (the

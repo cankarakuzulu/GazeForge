@@ -1681,10 +1681,11 @@ async function renderRecent() {
 function renderProjectTab() {
   const doc = P.doc;
   $("p-info").textContent = doc
-    ? tr("designer.project_info", { name: doc.name, modified: localTime(doc.modified), created: localTime(doc.created), store: doc.store, pack: doc.base.pack.slice(0, 19), blobs: doc.base.blobs })
+    ? tr("designer.project_info", { name: doc.name, modified: localTime(doc.modified), created: localTime(doc.created), store: doc.store })
     : tr("designer.project_unsaved");
+  $("p-info").title = doc ? tr("designer.project_info_title", { pack: doc.base.pack, blobs: doc.base.blobs }) : "";
   $("p-chars").innerHTML = (doc ? doc.characters : [{ id: "c1", name: D.start.name, revision: "", history: [] }])
-    .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.id)} ${escapeHtml((c.revision || "").slice(0, 15))} · ${tr("designer.revisions", { n: (c.history || []).length })}</span></li>`).join("");
+    .map((c, i) => `<li class="${i === P.active ? "now" : ""}" data-i="${i}" title="${escapeHtml(`${c.id} ${c.revision || ""}`)}">${escapeHtml(c.name)} <span class="muted">· ${tr("designer.revisions", { n: (c.history || []).length })}</span></li>`).join("");
   $("p-export").disabled = !P.name;
 }
 
