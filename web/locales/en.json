@@ -4,6 +4,7 @@
  "action.clip": "Clip plane 1 (Alt+wheel moves it)",
  "action.eyes": "Eye meshes",
  "action.face_grid": "Face grid: cells fixed to the topology",
+ "action.mm_grid": "Millimetre grid in the ortho views, a back plane in perspective",
  "action.probe": "Probe mode: a click shows the address of the surface point; Alt+click probes in any mode",
  "action.fov_down": "Narrower field of view",
  "action.fov_up": "Wider field of view",

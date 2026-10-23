@@ -251,7 +251,151 @@ pub struct Head<'a> {
     pub nrm: &'a [f32],
 }
 
+#[derive(Default)]
+pub struct Ruler {
+    pub minor: Vec<V3>,
+    pub major: Vec<V3>,
+    pub zero: Vec<V3>,
+    pub back: Vec<V3>,
+    pub labels: Vec<Label>,
+    pub caption: Option<(f64, f64, String)>,
+}
+
+fn axis_of(v: V3) -> Option<(usize, f64)> {
+    let mut k = 0;
+    for i in 1..3 {
+        if v[i].abs() > v[k].abs() {
+            k = i;
+        }
+    }
+    (v[k].abs() > 0.999).then_some((k, v[k].signum()))
+}
+
+pub fn ruler(m: &Matrices, target: V3, s: &Shot, bounds: &crate::viewer::Bounds, labels_on: bool) -> Ruler {
+    let mut out = Ruler::default();
+    let name = |k: usize| ["x", "y", "z"][k];
+    if m.ortho {
+        let (hh, hw) = (m.half_h, m.half_h * s.w / s.h.max(1.0));
+        let px_per_mm = s.h / (2.0 * hh * 1000.0);
+        let major = if px_per_mm * 10.0 >= 9.0 { 10 } else if px_per_mm * 50.0 >= 9.0 { 50 } else { 100 };
+        let minor = if px_per_mm >= 6.0 { 1 } else if px_per_mm * 2.0 >= 6.0 { 2 } else if px_per_mm * 5.0 >= 6.0 && major == 10 { 5 } else { 0 };
+        let every = |gap: f64| [10, 20, 50, 100, 200, 500].into_iter().find(|&st| st % major == 0 && st as f64 * px_per_mm >= gap).unwrap_or(1000);
+        let (step_v, step_h) = (every(44.0), every(18.0));
+        let (sa, ua) = (axis_of(m.s), axis_of(m.u));
+        let mut lines = |axis: Option<(usize, f64)>, dir: V3, other: V3, half: f64, other_half: f64, vertical: bool| {
+            let Some((k, sign)) = axis else { return };
+            let (lo, hi) = (target[k] - half, target[k] + half);
+            let step = if minor > 0 { minor } else { major };
+            let mut mm = (lo * 1000.0 / step as f64).ceil() as i64 * step;
+            while mm as f64 <= hi * 1000.0 {
+                let t = (mm as f64 / 1000.0 - target[k]) * sign;
+                let base = crate::viewer::add(target, mul(dir, t));
+                let seg = [crate::viewer::add(base, mul(other, -other_half * 1.05)), crate::viewer::add(base, mul(other, other_half * 1.05))];
+                let kind = if mm == 0 { 0 } else if mm % major == 0 { 1 } else { 2 };
+                match kind {
+                    0 => out.zero.extend(seg),
+                    1 => out.major.extend(seg),
+                    _ => out.minor.extend(seg),
+                }
+                if kind != 2 && labels_on && mm % if vertical { step_v } else { step_h } == 0 {
+                    let f = (t / if vertical { hw } else { hh } + 1.0) / 2.0;
+                    let (x, y) = if vertical { (s.x + f * s.w, s.y + s.h - 14.0) } else { (s.x + 4.0, s.y + (1.0 - f) * s.h) };
+                    out.labels.push(Label { x, y, text: mm.to_string(), edge: vertical });
+                }
+                mm += step;
+            }
+        };
+        lines(sa, m.s, m.u, hw, hh, true);
+        lines(ua, m.u, m.s, hh, hw, false);
+        out.caption = Some(match (sa, ua) {
+            (Some((a, _)), Some((b, _))) => (s.x + s.w - 92.0, s.y + s.h - 30.0, format!("{} → · {} ↑ · mm", name(a), name(b))),
+            _ => (s.x + s.w - 160.0, s.y + s.h - 30.0, crate::i18n::tr("viewer.mm_grid_hint").to_string()),
+        });
+        return out;
+    }
+    let f = m.f;
+    let mut k = 0;
+    for i in 1..3 {
+        if f[i].abs() > f[k].abs() {
+            k = i;
+        }
+    }
+    let plane = if f[k] > 0.0 { bounds.hi[k] + 0.02 } else { bounds.lo[k] - 0.02 };
+    let others: Vec<usize> = (0..3).filter(|&i| i != k).collect();
+    let ext = bounds.radius * 1.3;
+    for &a in &others {
+        let o2 = *others.iter().find(|&&i| i != a).expect("two others");
+        let mut mm = ((bounds.centre[a] - ext) * 1000.0 / 10.0).ceil() as i64 * 10;
+        while mm as f64 <= (bounds.centre[a] + ext) * 1000.0 {
+            let (mut p, mut q) = ([0.0; 3], [0.0; 3]);
+            p[k] = plane;
+            q[k] = plane;
+            p[a] = mm as f64 / 1000.0;
+            q[a] = p[a];
+            p[o2] = bounds.centre[o2] - ext;
+            q[o2] = bounds.centre[o2] + ext;
+            out.back.extend([p, q]);
+            mm += 10;
+        }
+    }
+    out.caption = Some((s.x + s.w - 150.0, s.y + s.h - 30.0, crate::i18n::trf("viewer.back_plane", &[("axis", &name(k))])));
+    out
+}
+
 impl crate::studio::Studio<'_> {
+    pub fn ruler_paint(&mut self, painter: &eframe::egui::Painter, rect: eframe::egui::Rect, ppp: f32, w: u32, h: u32) {
+        use eframe::egui;
+        let st = &self.world.state;
+        if !st.opts.normal_grid {
+            return;
+        }
+        let dark = st.opts.dark;
+        let (muted, ink, chip) = if dark {
+            (egui::Color32::from_gray(150), egui::Color32::from_gray(225), egui::Color32::from_rgba_unmultiplied(40, 42, 48, 210))
+        } else {
+            (egui::Color32::from_gray(95), egui::Color32::from_gray(30), egui::Color32::from_rgba_unmultiplied(232, 232, 228, 220))
+        };
+        let overlays: Vec<Boxed> = self.s.overlay_rects.iter().map(|q| Boxed { x0: (q.min.x - rect.min.x) as f64, y0: (q.min.y - rect.min.y) as f64, x1: (q.max.x - rect.min.x) as f64, y1: (q.max.y - rect.min.y) as f64 }).collect();
+        for r in crate::viewer::rects(st.layout, w, h) {
+            let cam = &st.cams[r.cam];
+            let m = cam.matrices(r.w as f64 / r.h.max(1) as f64);
+            let shot = Shot { m: &m, x: r.x as f64 / ppp as f64, y: r.y as f64 / ppp as f64, w: r.w as f64 / ppp as f64, h: r.h as f64 / ppp as f64, dist: cam.cur.dist };
+            let rl = ruler(&m, cam.cur.target, &shot, &st.bounds, st.opts.grid_labels);
+            let mut obstacles = vec![Boxed { x0: shot.x, y0: shot.y, x1: shot.x + 280.0, y1: shot.y + 28.0 }];
+            obstacles.extend(overlays.iter().copied());
+            for c in self.s.cubes.iter().filter(|c| c.slot == r.slot) {
+                let half = c.radius as f64 * 1.65;
+                let (cx, cy) = ((c.centre.x - rect.min.x) as f64, (c.centre.y - rect.min.y) as f64);
+                obstacles.push(Boxed { x0: cx - half, y0: cy - half, x1: cx + half, y1: (c.home.max.y - rect.min.y) as f64 + 4.0 });
+            }
+            let clip = egui::Rect::from_min_size(rect.min + egui::vec2(shot.x as f32, shot.y as f32), egui::vec2(shot.w as f32, shot.h as f32));
+            let p = painter.with_clip_rect(clip);
+            let chip_at = |x: f64, y: f64, text: &str, colour: egui::Color32, centred: bool| {
+                let galley = p.layout_no_wrap(text.to_string(), egui::FontId::monospace(10.0), colour);
+                let mut at = rect.min + egui::vec2(x as f32, y as f32);
+                if centred {
+                    at.y -= galley.size().y / 2.0;
+                }
+                p.rect_filled(egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(3.0, 1.0)), 2.0, chip);
+                p.galley(at, galley, colour);
+            };
+            for l in &rl.labels {
+                let wd = l.text.chars().count() as f64 * 6.2 + 8.0;
+                let b = Boxed { x0: l.x, x1: l.x + wd, y0: l.y - 7.0, y1: l.y + 7.0 };
+                if !obstacles.iter().any(|q| b.hits(q)) {
+                    chip_at(l.x, l.y, &l.text, muted, true);
+                }
+            }
+            if let Some((x, y, text)) = &rl.caption {
+                let wd = text.chars().count() as f64 * 6.2 + 8.0;
+                let b = Boxed { x0: *x, x1: x + wd, y0: *y, y1: y + 14.0 };
+                if !obstacles.iter().any(|q| b.hits(q)) {
+                    chip_at(*x, *y, text, ink, false);
+                }
+            }
+        }
+    }
+
     pub fn grid_paint(&mut self, ctx: &eframe::egui::Context, painter: &eframe::egui::Painter, rect: eframe::egui::Rect, ppp: f32, w: u32, h: u32) {
         use eframe::egui;
         let st = &self.world.state;
@@ -272,7 +416,7 @@ impl crate::studio::Studio<'_> {
             rects.iter().map(|r| { let c = &st.cams[r.cam].cur; (c.yaw, c.pitch, c.dist, c.target, c.fov, st.cams[r.cam].ortho, st.vp[r.slot].lod) }).collect::<Vec<_>>(),
             s.head.revision,
             st.opts.clip.iter().map(|c| (c.on, c.offset)).collect::<Vec<_>>(),
-            (st.opts.clip_box.on, st.opts.eyes, st.opts.eyes_grid.as_str()),
+            (st.opts.clip_box.on, st.opts.eyes, st.opts.eyes_grid.as_str(), st.opts.normal_grid),
             self.world.extras.iter().filter(|e| e.visible).map(|e| e.key).sum::<u64>(),
             ppp,
             overlays.iter().map(|b| (b.x0, b.y0, b.x1, b.y1)).collect::<Vec<_>>()
@@ -327,7 +471,15 @@ impl crate::studio::Studio<'_> {
                     let (_, by) = o(c.home.max);
                     obstacles.push(Boxed { x0: cx - half, y0: cy - half, x1: cx + half, y1: by.max(cy + half) + 4.0 });
                 }
-                all.push(place(g, ax, &Head { pos: &s.head.positions, nrm: &s.head.normals }, &shot, &z, &cut, &obstacles));
+                let ruler_box = st
+                    .opts
+                    .normal_grid
+                    .then(|| ruler(&m, cam.cur.target, &shot, &st.bounds, true).caption)
+                    .flatten()
+                    .map(|(x, y, t)| Boxed { x0: x, x1: x + t.chars().count() as f64 * 6.2 + 8.0, y0: y, y1: y + 14.0 })
+                    .filter(|b| !obstacles.iter().any(|q| b.hits(q)));
+                let how = Placing { obstacles: &obstacles, normal_grid: st.opts.normal_grid, ruler: ruler_box };
+                all.push(place(g, ax, &Head { pos: &s.head.positions, nrm: &s.head.normals }, &shot, &z, &cut, &how));
             }
             self.s.grid_labels = Some((key, all));
         }
@@ -353,9 +505,18 @@ impl crate::studio::Studio<'_> {
     }
 }
 
-pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn Fn(V3) -> bool, obstacles: &[Boxed]) -> Vec<Label> {
+pub struct Placing<'a> {
+    pub obstacles: &'a [Boxed],
+    pub normal_grid: bool,
+    pub ruler: Option<Boxed>,
+}
+
+pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn Fn(V3) -> bool, how: &Placing) -> Vec<Label> {
     let mut out = Vec::new();
+    let obstacles = how.obstacles;
     let blocked = |b: &Boxed| obstacles.iter().any(|q| b.hits(q));
+    let on_ruler = |b: &Boxed| how.ruler.is_some_and(|q| b.hits(&q));
+    let normal_grid = how.normal_grid;
     let letters = &g.letters;
     let cols = letters.len().max(1) as i64;
     let ch = &g.uv;
@@ -428,21 +589,23 @@ pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn
     cols_up = best(&cols_up);
     cols_down = best(&cols_down);
     let rows_kept = pick(&row_acc, &|_| 13.0, s.y + 8.0, s.y + s.h - 8.0, &|k| k.to_string());
-    let mut put = |it: &Item, x: f64, y: f64| {
+    let mut put = |it: &Item, x: f64, y: f64, at_bottom: bool| {
         let w = it.text.chars().count() as f64 * 7.0 + 8.0;
-        let b = Boxed { x0: x - w / 2.0, x1: x + w / 2.0, y0: y - 7.0, y1: y + 7.0 };
-        if blocked(&b) {
+        let at = |yy: f64| Boxed { x0: x - w / 2.0, x1: x + w / 2.0, y0: yy - 7.0, y1: yy + 7.0 };
+        let y = if at_bottom && on_ruler(&at(y)) { y - 18.0 } else { y };
+        let b = at(y);
+        if blocked(&b) || on_ruler(&b) {
             return;
         }
         out.push(Label { x, y, text: it.text.clone(), edge: true });
     };
-    let bottom = s.y + s.h - 14.0;
+    let bottom = s.y + s.h - if normal_grid { 32.0 } else { 14.0 };
     let top = s.y + 12.0;
     for it in &cols_up {
-        put(it, it.at, top);
+        put(it, it.at, top, false);
     }
     for it in &cols_down {
-        put(it, it.at, bottom);
+        put(it, it.at, bottom, true);
     }
     let mut rows_all: Vec<Item> = row_acc
         .0
@@ -463,13 +626,14 @@ pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn
         }
         kept
     };
-    let right = side(if roomy { rows_kept.clone() } else { rows_all.iter().filter(|it| it.k % 2 == 0).cloned().collect() });
-    let left = side(if roomy { rows_kept } else { rows_all.iter().filter(|it| it.k % 2 == 1).cloned().collect() });
+    let left_free = !normal_grid || !s.m.ortho;
+    let right = side(if roomy || !left_free { rows_kept.clone() } else { rows_all.iter().filter(|it| it.k % 2 == 0).cloned().collect() });
+    let left = if left_free { side(if roomy { rows_kept } else { rows_all.iter().filter(|it| it.k % 2 == 1).cloned().collect() }) } else { Vec::new() };
     for it in &right {
-        put(it, s.x + s.w - 14.0, it.at);
+        put(it, s.x + s.w - 14.0, it.at, false);
     }
     for it in &left {
-        put(it, s.x + 16.0, it.at);
+        put(it, s.x + 16.0, it.at, false);
     }
     let mut cand: Vec<(f64, f64, f64, String)> = Vec::new();
     for (label, v) in &g.anchors {

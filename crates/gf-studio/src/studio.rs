@@ -431,6 +431,7 @@ impl Studio<'_> {
                 ("eyes", "eye", o.eyes, tr("action.eyes")),
                 ("face_grid", "grid-3x3", o.face_grid, tr("action.face_grid")),
                 ("probe", "crosshair", self.world.probe_mode, tr("action.probe")),
+                ("mm_grid", "ruler", o.normal_grid, tr("action.mm_grid")),
                 ("back_faces", "flip-horizontal-2", o.back_hi, tr("action.back_faces")),
                 ("seams", "scissors-line-dashed", o.seams, tr("action.seams")),
                 ("light_gizmo", "lightbulb", o.light_gizmo, tr("action.light_gizmo")),
@@ -805,6 +806,7 @@ impl Studio<'_> {
             }
         }
         self.s.overlay_rects = std::mem::take(&mut self.s.overlay_next);
+        self.ruler_paint(&painter, rect, ppp, w, h);
         self.grid_paint(ui.ctx(), &painter, rect, ppp, w, h);
         self.pins_paint(&painter, rect, ppp, w, h);
         self.flash_paint(ui.ctx(), &painter, rect, ppp, w, h);

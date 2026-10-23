@@ -783,7 +783,33 @@ impl Renderer {
             let has_head = self.head.is_some();
             let o = &st.opts;
             let mut passes = Vec::new();
+            let line = |data: &[V3], col: V3, pipe: LinePipe, cap: Option<usize>, uni: &mut Vec<f32>, lines: &mut Vec<f32>| -> Draw {
+                let mut u = base;
+                u[148..151].copy_from_slice(&col.map(|x| x as f32));
+                if let Some(j) = cap {
+                    u[110] = 1.0;
+                    u[105] = j as f32;
+                }
+                let c = chunk(u, uni);
+                let first = (lines.len() / 3) as u32;
+                for p in data {
+                    lines.extend(p.iter().map(|&x| x as f32));
+                }
+                Draw::Lines(pipe, c, first, data.len() as u32)
+            };
             let mut first = PassPlan { first: true, clear_stencil: true, resolve: false, draws: Vec::new() };
+            if o.normal_grid {
+                let cam = &st.cams[r.cam];
+                let shot = crate::grid_labels::Shot { m: &m, x: 0.0, y: 0.0, w: r.w as f64 / self.dpr, h: r.h as f64 / self.dpr, dist: cam.cur.dist };
+                let rl = crate::grid_labels::ruler(&m, cam.cur.target, &shot, &st.bounds, false);
+                let (bg, ink) = (background(o.dark), if o.dark { [0.75, 0.80, 0.90] } else { [0.20, 0.26, 0.36] });
+                let tone = |a: f64| [0, 1, 2].map(|i| bg[i] + (ink[i] - bg[i]) * a);
+                for (data, a) in [(&rl.minor, 0.16), (&rl.major, 0.42), (&rl.zero, 0.75), (&rl.back, 0.3)] {
+                    if !data.is_empty() {
+                        first.draws.push(line(data, tone(a), LinePipe::Lines, None, &mut uni, &mut lines));
+                    }
+                }
+            }
             let base_chunk = chunk(base, &mut uni);
             if has_head {
                 let skin_on = o.skin && self.skin.is_some();
@@ -838,20 +864,6 @@ impl Renderer {
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
-            let line = |data: &[V3], col: V3, pipe: LinePipe, cap: Option<usize>, uni: &mut Vec<f32>, lines: &mut Vec<f32>| -> Draw {
-                let mut u = base;
-                u[148..151].copy_from_slice(&col.map(|x| x as f32));
-                if let Some(j) = cap {
-                    u[110] = 1.0;
-                    u[105] = j as f32;
-                }
-                let c = chunk(u, uni);
-                let first = (lines.len() / 3) as u32;
-                for p in data {
-                    lines.extend(p.iter().map(|&x| x as f32));
-                }
-                Draw::Lines(pipe, c, first, data.len() as u32)
-            };
             if o.caps && !planes.is_empty() && has_head {
                 for (j, q) in planes.iter().enumerate() {
                     let t1 = norm(if q.n[2].abs() < 0.9 { cross(q.n, [0.0, 0.0, 1.0]) } else { cross(q.n, [1.0, 0.0, 0.0]) });

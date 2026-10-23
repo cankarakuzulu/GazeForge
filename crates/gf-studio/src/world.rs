@@ -876,6 +876,7 @@ impl World {
             "clip" => toggle(st, "clip.0.on", tr("designer.opt.clip"))?,
             "light_gizmo" => toggle(st, "lightGizmo", tr("designer.opt.gizmo"))?,
             "face_grid" => toggle(st, "faceGrid", tr("designer.opt.grid"))?,
+            "mm_grid" => toggle(st, "normalGrid", tr("designer.opt.mm"))?,
             "probe" => {
                 self.probe_mode = !self.probe_mode;
                 self.grid_wanted |= self.probe_mode;

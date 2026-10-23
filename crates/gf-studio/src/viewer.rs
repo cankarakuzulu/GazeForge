@@ -306,6 +306,7 @@ pub struct Opts {
     pub face_grid: bool,
     pub grid_labels: bool,
     pub eyes_grid: String,
+    pub normal_grid: bool,
 }
 
 pub const MAX_LIGHTS: usize = 4;
@@ -359,6 +360,7 @@ impl Default for Opts {
             face_grid: false,
             grid_labels: true,
             eyes_grid: "grid".into(),
+            normal_grid: false,
         }
     }
 }
@@ -405,6 +407,7 @@ impl Opts {
             ["badTriangles"] => self.bad = flag()?,
             ["faceGrid"] => self.face_grid = flag()?,
             ["gridLabels"] => self.grid_labels = flag()?,
+            ["normalGrid"] => self.normal_grid = flag()?,
             ["eyesGrid"] => self.eyes_grid = v.as_str().filter(|m| ["grid", "hide", "plain"].contains(m)).ok_or_else(|| format!("{path} is grid, hide or plain"))?.to_string(),
             ["preset"] => {
                 if !self.apply_preset(v.as_str().unwrap_or("")) {
@@ -466,6 +469,7 @@ impl Opts {
             "badTriangles" => self.bad,
             "faceGrid" => self.face_grid,
             "gridLabels" => self.grid_labels,
+            "normalGrid" => self.normal_grid,
             _ => return Err(format!("{path} cannot be toggled")),
         };
         self.set(path, &serde_json::Value::Bool(!now))?;

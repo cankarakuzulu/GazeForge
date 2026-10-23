@@ -19,6 +19,7 @@ pub const ACTIONS: &[(&str, &[&str])] = &[
     ("eyes", &["Alt+Y"]),
     ("face_grid", &["Alt+U"]),
     ("probe", &["Alt+Shift+U"]),
+    ("mm_grid", &["Alt+R"]),
     ("light_gizmo", &["Alt+G"]),
     ("theme", &["Alt+T"]),
     ("interface_theme", &["Alt+Shift+T"]),
