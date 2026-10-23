@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Every wearable carried a short hash in its name.** Both clients name an item by its name alone and add the
+  first 8 hex digits of its reference only when another item in the store has the same name ("male_casualsuit01",
+  but "cape (47c7634b)" beside a second cape).
 - **Every path in the studio had to be typed.** The Store section (store, spec, macro, eyes), the save field, Body
   (store, body pack), Skin (landmarks, stamp), Topology (dense base), Timeline (clip, capture source, glb) and every task
   field that names a file or folder now have a folder button that opens the system's file dialog (rfd), starting

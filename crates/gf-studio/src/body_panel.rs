@@ -531,7 +531,8 @@ impl crate::studio::Studio<'_> {
             let label = |asset: &str| {
                 let short = asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset);
                 match ui_state.store_wear.iter().find(|w| w.reference == asset) {
-                    Some(w) => format!("{} ({short})", w.name),
+                    Some(w) if ui_state.store_wear.iter().any(|x| x.name == w.name && x.reference != asset) => format!("{} ({short})", w.name),
+                    Some(w) => w.name.clone(),
                     None => short.to_string(),
                 }
             };

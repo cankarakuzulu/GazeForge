@@ -143,7 +143,9 @@ function mount(root, api) {
 
   function wearName(asset) {
     const w = storeWear.find((x) => x.wearable === asset);
-    return `${w ? w.name : '?'} (${asset.replace('sha256:', '').slice(0, 8)})`;
+    const short = asset.replace('sha256:', '').slice(0, 8);
+    if (!w) return short;
+    return storeWear.some((x) => x.name === w.name && x.wearable !== asset) ? `${w.name} (${short})` : w.name;
   }
 
   function withWear(body, edit) {
