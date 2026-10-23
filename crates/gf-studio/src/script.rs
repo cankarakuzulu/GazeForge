@@ -752,12 +752,18 @@ impl Offscreen {
                         w.project_new();
                         w.wait(|w| w.loading.is_none() && w.project.saved_sig.is_some(), num("seconds").unwrap_or(300.0))?;
                     }
+                    "autosave" => {
+                        w.project_autosave("settle");
+                        w.wait(|w| w.project.job.is_none(), num("seconds").unwrap_or(120.0))?;
+                    }
+                    "discard_held" => w.project_discard_held(),
                     "summary" => {}
-                    other => return Err(format!("project do is save, open, notes, pick, new or summary, got {other}")),
+                    other => return Err(format!("project do is save, open, notes, pick, new, autosave, discard_held or summary, got {other}")),
                 }
                 w.tick();
                 json!({"name": w.project.name, "active": w.project.active, "characters": w.project.doc.as_ref().and_then(|d| d["characters"].as_array()).map(Vec::len),
                        "dirty": w.project_dirty(), "status": w.project.status, "notes": w.project.notes, "panels": w.panel_states(),
+                       "held": w.project.held.as_ref().map(|h| h["name"].clone()), "autosaved": w.project.autosaved,
                        "weights": w.character_input().map(|c| c["weights"].clone())})
             }
             "timeline" => {

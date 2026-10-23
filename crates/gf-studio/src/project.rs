@@ -38,6 +38,7 @@ pub struct Project {
     pub last_auto_sig: Option<String>,
     pub autosave_reason: &'static str,
     pub prior: Option<Box<Project>>,
+    pub held: Option<Value>,
 }
 
 impl Default for Project {
@@ -64,6 +65,7 @@ impl Default for Project {
             last_auto_sig: None,
             autosave_reason: "timer",
             prior: None,
+            held: None,
         }
     }
 }
@@ -329,6 +331,9 @@ impl World {
                     self.project.active = doc["active"].as_u64().unwrap_or(0) as usize;
                     self.project.notes = doc["notes"].as_str().unwrap_or_default().to_string();
                     self.project.recovered = recovery;
+                    self.project.autosaved = false;
+                    self.project.last_auto_sig = None;
+                    self.project.held = None;
                     self.project.pending_panels = Some(doc["panels"].clone());
                     let res = |role: &str| self.project.resources.get(role).and_then(|v| v["path"].as_str()).map(str::to_string);
                     let (eyes, mac) = (res("eyes"), res("macro"));
@@ -396,6 +401,29 @@ impl World {
         }
     }
 
+    fn project_held(&mut self) -> bool {
+        if self.project.autosaved || self.project.recovered {
+            return false;
+        }
+        let slot = self.project.slot();
+        if self.project.held.as_ref().is_some_and(|h| h["name"] == slot.as_str()) {
+            return true;
+        }
+        let r = gf_api::call(&gf_api::Ctx::from_env(), "project.list", &json!({"root": root()}));
+        let found = r["result"]["recoveries"].as_array().and_then(|a| a.iter().find(|x| x["name"] == slot.as_str() && x["newer_than_saved"] == true)).cloned();
+        let Some(held) = found else { return false };
+        self.project.held = Some(held);
+        true
+    }
+
+    pub fn project_discard_held(&mut self) {
+        let Some(held) = self.project.held.take() else { return };
+        let name = held["name"].as_str().unwrap_or_default().to_string();
+        let r = gf_api::call(&gf_api::Ctx::from_env(), "project.discard", &json!({"name": name, "root": root()}));
+        self.project.status = if r["ok"] == true { tr("designer.autosave_discarded").to_string() } else { r["error"]["message"].as_str().unwrap_or_default().to_string() };
+        self.project.recoveries.retain(|x| x["name"] != name.as_str());
+    }
+
     pub fn project_autosave(&mut self, reason: &'static str) {
         if self.session.is_none() || self.project.job.is_some() || self.loading.is_some() || self.project.saved_sig.is_none() {
             return;
@@ -405,6 +433,9 @@ impl World {
         }
         self.project.last_autosave = Some(Instant::now());
         if self.project_dirty() {
+            if self.project_held() {
+                return;
+            }
             let sig = self.project_sig();
             if reason == "settle" && self.project.last_auto_sig.as_deref() == Some(&sig) {
                 return;
@@ -453,8 +484,21 @@ impl crate::studio::Studio<'_> {
     pub fn project_panel(&mut self, ui: &mut egui::Ui) {
         let dirty = self.world.project_dirty();
         let title = format!("{} {}{}", tr("ui.project"), self.world.project.name.clone().unwrap_or_else(|| tr("designer.untitled").into()), if dirty { " *" } else { "" });
-        egui::CollapsingHeader::new(title).id_salt("project").default_open(false).show(ui, |ui| {
+        let held = self.world.project.held.clone();
+        egui::CollapsingHeader::new(title).id_salt("project").default_open(false).open(held.as_ref().map(|_| true)).show(ui, |ui| {
             let busy = self.world.project.job.is_some();
+            if let Some(h) = &held {
+                let name = h["name"].as_str().unwrap_or_default().to_string();
+                ui.colored_label(ui.visuals().warn_fg_color, trf("designer.recover", &[("name", &name), ("modified", &when(&h["modified"]))]));
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!busy, egui::Button::new(tr("ui.p-restore"))).clicked() {
+                        self.s.project.confirm = Some(Confirm::Recover(name.clone()));
+                    }
+                    if ui.add_enabled(!busy, egui::Button::new(tr("ui.p-discard"))).clicked() {
+                        self.world.project_discard_held();
+                    }
+                });
+            }
             if self.world.project.list.is_empty() && !self.s.project.list_open && !busy {
                 self.s.project.list_open = true;
                 self.world.project_list();
