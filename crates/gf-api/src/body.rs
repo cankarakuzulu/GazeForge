@@ -924,7 +924,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             worn.push(json!({"groom": g.name, "name": g.name, "hide_body": false, "transparent": false, "strands": report["strands"], "color": srgb,
                              "positions": f32s(&rp), "normals": f32s(&rn), "indices": b64(&idx), "vertices": rp.len(), "triangles": rt.len()}));
         }
-        if spec.body.as_ref().is_some_and(|s| !s.genitals.is_empty()) && text(input, "body").is_empty() {
+        if spec.body.as_ref().is_some_and(|s| !s.canonical().genitals.is_empty()) && text(input, "body").is_empty() {
             let level = pack.fine.as_ref().map_or(2, |f| f.level);
             let g = crate::tasks::mesh::genital_mesh(&pack, &controls, level, &st.positions, &normals).map_err(ApiError::invalid)?;
             let offset = positions.len() as u32;
