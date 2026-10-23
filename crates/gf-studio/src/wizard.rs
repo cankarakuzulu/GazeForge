@@ -178,7 +178,7 @@ impl Wizards {
         self.at = steps.iter().position(|s| s["state"] != "done").unwrap_or(steps.len().saturating_sub(1));
         self.def = Some(def);
         self.state = Some(state);
-        self.glb_live = true;
+        self.glb_live = false;
         self.prepared = Map::new();
         self.shown_for = None;
         self.error = None;

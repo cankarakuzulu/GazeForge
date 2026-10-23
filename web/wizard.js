@@ -73,6 +73,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     W.def = await api("wizards.get", { id });
     const ctx = await prepare();
     W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: W.lastGlb ? { ...ctx.values, glb: W.lastGlb } : ctx.values });
+    W.live = true;
     W.prepared = await ctx.after(W.state.dir);
     if (W.prepared?.character) W.state = await api("wizards.state", { run: W.state.run });
     W.at = 0;
@@ -83,6 +84,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   async function resume(wizard, run) {
     W.def = await api("wizards.get", { id: wizard });
     W.state = await api("wizards.state", { run });
+    W.live = false;
     W.prepared = {};
     const open = W.state.steps.findIndex((s) => s.state !== "done");
     W.at = open < 0 ? W.state.steps.length - 1 : open;
@@ -133,7 +135,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   function render() {
     const glb = (W.state?.steps || []).map((s) => s?.result?.out).filter((o) => typeof o === "string" && o.endsWith(".glb")).pop();
-    if (glb && W.def.id === "export") W.lastGlb = glb;
+    if (glb && W.live && W.def.id === "export") W.lastGlb = glb;
     const steps = W.def.steps;
     box.querySelector(".wz-steps").innerHTML = steps.map((s, i) =>
       `<button class="wz-step ${i === W.at ? "now" : ""} st-${esc(stepState(i).state)}" data-i="${i}">${i + 1}. ${esc(tr(`wizard.${W.def.id}.${s.id}.title`, null, s.title))}<small>${esc(tr(`wizard.state.${stepState(i).state}`, null, stepState(i).state))}${s.optional ? ` · ${tr("wizard.optional")}` : ""}</small></button>`).join("");
