@@ -52,7 +52,9 @@ function mount(root, api) {
   let genitals = [];
   let physics = [];
   let storeWear = [];
+  let categories = [];
   let wearKey = '';
+  const catName = (c) => tr(`wearable.category.${c}`, null, c);
   const rows = new Map();
   const note = el('div', { class: 'gf-body-note' });
   const filter = el('input', { type: 'text', class: 'wide', placeholder: tr('body.filter') });
@@ -426,9 +428,13 @@ function mount(root, api) {
         apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), line);
         if (api.toast) api.toast(tr('designer.undo_hint', { what: line }));
       });
+      const cat = el('select', { 'data-wear-category': w.asset, title: tr('body.wear_category_tip') });
+      for (const c of categories.length ? categories : ['other']) cat.appendChild(el('option', { value: c, text: catName(c) }));
+      cat.value = (storeWear.find((x) => x.wearable === w.asset) || {}).category || 'other';
+      cat.addEventListener('change', () => categorize(w.asset, cat.value));
       const more = el('details', { class: 'gf-wear-more' }, [
         el('summary', { text: tr('body.wear_more') }),
-        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), el('label', {}, [el('span', { text: tr('body.wear_coarse') }), coarse]), ...(cards ? [] : [el('label', {}, [el('span', { text: tr('body.wear_hair') }), hair])])]),
+        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [el('span', { text: tr('body.wear_category') }), cat]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), el('label', {}, [el('span', { text: tr('body.wear_coarse') }), coarse]), ...(cards ? [] : [el('label', {}, [el('span', { text: tr('body.wear_hair') }), hair])])]),
       ]);
       more.open = moreOpen.has(w.asset);
       more.addEventListener('toggle', () => { if (more.open) moreOpen.add(w.asset); else moreOpen.delete(w.asset); });
@@ -442,11 +448,33 @@ function mount(root, api) {
     fillAdd();
   }
 
+  function categorize(asset, to) {
+    const w = storeWear.find((x) => x.wearable === asset);
+    if (!w || w.category === to) return;
+    const from = w.category_source === 'store' ? w.category : '';
+    const set = async (c) => {
+      const r = await api.call('wearable.categorize', { store: api.character().store, wearable: asset, category: c });
+      w.category = r.category;
+      w.category_source = r.category_source;
+      syncWear(api.body.get());
+    };
+    set(to).then(() => api.pushUndo({ label: tr('body.undo.category', { name: wearName(asset), category: catName(to) }), undo: () => set(from), redo: () => set(to) }))
+      .catch((e) => { note.textContent = tr('body.edit_failed', { error: e.message }); syncWear(api.body.get()); });
+  }
+
   function fillAdd() {
     const want = wearFind.value.trim().toLowerCase();
     const shown = want ? freeWear.filter((x) => wearName(x.wearable).toLowerCase().includes(want)) : freeWear;
     const head = !freeWear.length ? tr('body.wear_store_empty') : want ? tr('body.wear_found', { n: shown.length, all: freeWear.length }) : tr('body.wear_add');
-    wearAdd.replaceChildren(el('option', { value: '', text: head }), ...shown.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));
+    const groups = new Map();
+    for (const x of shown) {
+      const c = x.category || 'other';
+      if (!groups.has(c)) groups.set(c, []);
+      groups.get(c).push(x);
+    }
+    const rank = (c) => (categories.indexOf(c) < 0 ? categories.length : categories.indexOf(c));
+    const opts = [...groups.keys()].sort((a, b) => rank(a) - rank(b)).map((c) => el('optgroup', { label: catName(c) }, groups.get(c).map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) }))));
+    wearAdd.replaceChildren(el('option', { value: '', text: head }), ...opts);
     wearAdd.disabled = !shown.length;
     wearAdd.value = '';
   }
@@ -497,7 +525,9 @@ function mount(root, api) {
         physics = r.physics || [];
         groomSchema = r.groom || null;
         if (character.store !== wearKey) {
-          storeWear = ((await api.call('wearable.list', { store: character.store })).wearables) || [];
+          const listed = await api.call('wearable.list', { store: character.store });
+          storeWear = (listed && listed.wearables) || [];
+          categories = (listed && listed.categories) || [];
           wearKey = character.store;
         }
         note.textContent = '';

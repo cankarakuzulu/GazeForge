@@ -143,7 +143,9 @@ impl Store {
             attach: None,
             levels: Vec::new(),
         };
-        Ok((self.put_manifest("wearables", &manifest)?, manifest))
+        let reference = self.put_manifest("wearables", &manifest)?;
+        self.keep_category(&reference, infer_category(&manifest, mhclo_folder(dir).as_deref(), &mhclo_tags(&text)))?;
+        Ok((reference, manifest))
     }
 
     pub fn import_attached(&self, name: &str, attach: Attach, local: &[[f64; 3]], obj_path: &Path, diffuse: Option<&Path>, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
@@ -189,7 +191,9 @@ impl Store {
             attach: Some(attach),
             levels: Vec::new(),
         };
-        Ok((self.put_manifest("wearables", &manifest)?, manifest))
+        let reference = self.put_manifest("wearables", &manifest)?;
+        self.keep_category(&reference, infer_category(&manifest, None, &[]))?;
+        Ok((reference, manifest))
     }
 
     pub fn import_generated(&self, binding: &Binding, obj_path: &Path, diffuse: Option<&Path>, kind: &str, extras: Extras, notes: Vec<String>) -> Result<(String, WearableManifest), String> {
@@ -223,7 +227,9 @@ impl Store {
             attach: None,
             levels: extras.levels,
         };
-        Ok((self.put_manifest("wearables", &manifest)?, manifest))
+        let reference = self.put_manifest("wearables", &manifest)?;
+        self.keep_category(&reference, infer_category(&manifest, None, &[]))?;
+        Ok((reference, manifest))
     }
 
     pub fn load_binding(&self, reference: &str) -> Result<(WearableManifest, Binding), String> {
@@ -250,9 +256,142 @@ impl Store {
     }
 }
 
+pub const CATEGORIES: [&str; 10] = ["hair", "facial_hair", "hat", "eyewear", "top", "bottom", "outfit", "shoes", "accessory", "other"];
+const CATEGORY_FILE: &str = "wearable_categories.json";
+
+pub fn mhclo_folder(dir: &Path) -> Option<String> {
+    dir.ancestors().take(2).filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().to_lowercase()).find(|n| FOLDERS.contains(&n.as_str()))
+}
+
+const FOLDERS: [&str; 7] = ["hair", "eyebrows", "eyelashes", "teeth", "tongue", "eyes", "clothes"];
+
+pub fn mhclo_tags(text: &str) -> Vec<String> {
+    text.lines().filter_map(|l| l.trim().strip_prefix("tag ")).map(|t| t.trim().to_lowercase()).collect()
+}
+
+pub fn infer_category(m: &WearableManifest, folder: Option<&str>, tags: &[String]) -> &'static str {
+    match folder.map(str::to_lowercase).as_deref() {
+        Some("hair") => return "hair",
+        Some("eyebrows" | "eyelashes") => return "facial_hair",
+        Some("teeth" | "tongue" | "eyes") => return "other",
+        _ => {}
+    }
+    for t in tags {
+        match t.as_str() {
+            "shoes" => return "shoes",
+            "hat" | "hats" => return "hat",
+            _ => {}
+        }
+    }
+    let n = m.name.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+    if has(&["beard", "moustache", "mustache", "stubble", "goatee", "eyebrow", "eyelash"]) {
+        return "facial_hair";
+    }
+    if has(&["hat", "fedora", "helmet", "beanie", "bonnet", "turban"]) {
+        return "hat";
+    }
+    if m.attach.is_some() {
+        return "accessory";
+    }
+    if m.transparent || has(&["hair", "cards", "groom", "ponytail", "braid", "afro"]) {
+        return "hair";
+    }
+    let rules: [(&str, &[&str]); 6] = [
+        ("eyewear", &["glasses", "goggles", "spectacles"]),
+        ("shoes", &["shoe", "boot", "sneaker", "sandal", "heels"]),
+        ("outfit", &["suit", "dress", "overall", "jumpsuit", "robe", "gown"]),
+        ("bottom", &["pants", "trousers", "jeans", "skirt", "shorts", "leggings"]),
+        ("top", &["shirt", "top", "jacket", "coat", "sweater", "hoodie", "blouse", "vest", "cape", "cloak"]),
+        ("accessory", &["sword", "shield", "bag", "belt", "necklace", "earring", "glove", "scarf"]),
+    ];
+    rules.iter().find(|(_, words)| has(words)).map_or("other", |(c, _)| c)
+}
+
+impl Store {
+    pub fn wearable_categories(&self) -> Result<BTreeMap<String, String>, String> {
+        let path = self.root.join(CATEGORY_FILE);
+        if !path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub fn set_wearable_category(&self, reference: &str, category: Option<&str>) -> Result<Option<String>, String> {
+        if let Some(c) = category.filter(|c| !CATEGORIES.contains(c)) {
+            return Err(format!("category {c:?} is not one of {CATEGORIES:?}"));
+        }
+        let _: WearableManifest = self.get_manifest("wearables", reference)?;
+        let mut all = self.wearable_categories()?;
+        let before = match category {
+            Some(c) => all.insert(reference.to_string(), c.to_string()),
+            None => all.remove(reference),
+        };
+        let bytes = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
+        crate::store::write_atomic(&self.root.join(CATEGORY_FILE), &bytes)?;
+        Ok(before)
+    }
+
+    pub fn category_of(&self, reference: &str, m: &WearableManifest, known: &BTreeMap<String, String>) -> (String, &'static str) {
+        if let Some(c) = known.get(reference).filter(|c| CATEGORIES.contains(&c.as_str())) {
+            return (c.clone(), "store");
+        }
+        let tags = if m.kind == "makehuman" { self.get_ref(&m.binding).map(|b| mhclo_tags(&String::from_utf8_lossy(&b))).unwrap_or_default() } else { Vec::new() };
+        (infer_category(m, None, &tags).to_string(), "inferred")
+    }
+
+    fn keep_category(&self, reference: &str, category: &str) -> Result<(), String> {
+        if !self.wearable_categories()?.contains_key(reference) {
+            self.set_wearable_category(reference, Some(category))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manifest(name: &str, kind: &str, transparent: bool, attach: bool) -> WearableManifest {
+        WearableManifest {
+            format: WEARABLE_FORMAT.into(),
+            name: name.into(),
+            kind: kind.into(),
+            binding: String::new(),
+            mesh: String::new(),
+            vertices: 0,
+            hidden: 0,
+            material: BTreeMap::new(),
+            transparent,
+            double_sided: false,
+            source: BTreeMap::new(),
+            notes: Vec::new(),
+            attach: attach.then(|| Attach { bone: "head".into(), rig: "default".into(), length_m: 0.1, scale_with_bone: false }),
+            levels: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn categories_come_from_the_folder_the_tags_then_the_name() {
+        let m = |n: &str, t: bool, a: bool| manifest(n, "obj", t, a);
+        assert_eq!(infer_category(&m("long01", true, false), Some("hair"), &[]), "hair");
+        assert_eq!(infer_category(&m("eyebrow001", false, false), Some("eyebrows"), &[]), "facial_hair");
+        assert_eq!(infer_category(&m("shoes01", false, false), Some("clothes"), &["shoes".into()]), "shoes");
+        assert_eq!(infer_category(&m("Scruffy_Beard", true, false), None, &[]), "facial_hair");
+        assert_eq!(infer_category(&m("cap check", true, false), None, &[]), "hair");
+        assert_eq!(infer_category(&m("gate cards", true, false), None, &[]), "hair");
+        assert_eq!(infer_category(&m("fedora", false, false), None, &[]), "hat");
+        assert_eq!(infer_category(&m("fedora_rigid", false, true), None, &[]), "hat");
+        assert_eq!(infer_category(&m("sword", false, true), None, &[]), "accessory");
+        assert_eq!(infer_category(&m("male_casualsuit01", false, false), None, &[]), "outfit");
+        assert_eq!(infer_category(&m("cape", false, false), None, &[]), "top");
+        assert_eq!(infer_category(&m("garment_x", false, false), None, &[]), "other");
+        assert_eq!(mhclo_folder(Path::new("assets/hair/bob01")).as_deref(), Some("hair"));
+        assert_eq!(mhclo_folder(Path::new("assets/Eyelashes")).as_deref(), Some("eyelashes"));
+        assert_eq!(mhclo_folder(Path::new("downloads/bob01")), None);
+        assert_eq!(mhclo_tags("# x\ntag Hats\ntag young\nname y\n"), vec!["hats".to_string(), "young".into()]);
+    }
 
     #[test]
     fn levels_split_a_mesh_into_face_sets_and_refuse_nonsense() {

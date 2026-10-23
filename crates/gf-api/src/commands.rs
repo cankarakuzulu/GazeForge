@@ -214,6 +214,15 @@ pub static REGISTRY: &[CommandDef] = &[
         run: wear::list,
     },
     CommandDef {
+        name: "wearable.categorize",
+        kind: Kind::Mutation,
+        summary: "Say what a wearable in a store is (hair, facial_hair, hat, eyewear, top, bottom, outfit, shoes, accessory or other); the clients group their wearable pickers by it.",
+        limits: "Kept in the store's wearable_categories.json, beside the content-addressed wearables, so a wearable's reference never changes. Imports keep a category they can tell (MakeHuman's folder and tags, a groom's cards are hair, an attached item an accessory); wearable.list infers one for the rest.",
+        input: wear::categorize_input,
+        output: wear::categorize_output,
+        run: wear::categorize,
+    },
+    CommandDef {
         name: "wearable.import",
         kind: Kind::Mutation,
         summary: "Import MakeHuman clothes files (.mhclo with their .obj, .mhmat and textures) into a store as wearables; the binding fits each one to any shaped body.",

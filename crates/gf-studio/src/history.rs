@@ -101,6 +101,7 @@ pub enum Domain {
     Shape,
     Skin,
     Panels,
+    Store,
 }
 
 #[derive(Default)]
@@ -114,6 +115,8 @@ pub struct Journal {
     last: Option<Value>,
     changed_at: Option<Instant>,
     pub pointer_down: bool,
+    pub store_done: Vec<(String, String, String, String)>,
+    store_undone: Vec<(String, String, String, String)>,
 }
 
 impl Journal {
@@ -142,6 +145,7 @@ impl World {
         let over = j.done.len().saturating_sub(LIMIT * 3);
         j.done.drain(..over);
         j.undone.clear();
+        j.store_undone.clear();
         j.panels_undone.clear();
         if let Some(shape) = self.shape.as_mut() {
             shape.history.undone.clear();
@@ -271,12 +275,25 @@ impl World {
     pub fn journal_state(&self) -> Value {
         let name = |d: &Domain| format!("{d:?}").to_lowercase();
         json!({"weights": self.shape.as_ref().map(|s| s.live.weights.clone()), "skin": self.skin.spec.as_ref().map(gf_core::skin_layers::SkinSpec::canonical),
-               "panels": self.panel_snapshot(), "done": self.journal.done.iter().map(name).collect::<Vec<_>>(), "undone": self.journal.undone.iter().map(name).collect::<Vec<_>>()})
+               "panels": self.panel_snapshot(), "categories": self.body_ui.store_wear.iter().filter(|w| w.kept).map(|w| (w.reference.clone(), json!(w.category))).collect::<Map<String, Value>>(), "done": self.journal.done.iter().map(name).collect::<Vec<_>>(), "undone": self.journal.undone.iter().map(name).collect::<Vec<_>>()})
     }
 
     pub fn journal_reset(&mut self) {
         let pointer_down = self.journal.pointer_down;
         self.journal = Journal { pointer_down, shape_seen: self.shape.as_ref().map_or(0, |s| s.history.pushes), ..Journal::default() };
+    }
+
+    fn store_step(&mut self, redo: bool) -> Option<String> {
+        let step = if redo { self.journal.store_undone.pop()? } else { self.journal.store_done.pop()? };
+        let (store, asset, before, after) = step.clone();
+        let target = if redo { after } else { before };
+        if self.wear_category_set(&store, &asset, &target).is_err() {
+            return None;
+        }
+        let now = self.body_ui.store_wear.iter().find(|w| w.reference == asset).map_or(target, |w| w.category.clone());
+        let label = trf("body.undo.category", &[("name", &self.wear_category_label(&asset)), ("category", &tr(&format!("wearable.category.{now}")))]);
+        if redo { self.journal.store_done.push(step) } else { self.journal.store_undone.push(step) }
+        Some(label)
     }
 
     fn panel_step(&mut self, redo: bool) -> Option<String> {
@@ -300,6 +317,7 @@ impl World {
                 Domain::Shape => self.shape_step(redo),
                 Domain::Skin => self.skin_step(redo),
                 Domain::Panels => self.panel_step(redo),
+                Domain::Store => self.store_step(redo),
             };
             if let Some(label) = label {
                 if redo { self.journal.done.push(d) } else { self.journal.undone.push(d) }

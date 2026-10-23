@@ -932,8 +932,12 @@ impl Offscreen {
                     "groom_style" => w.body_groom_style(text("style").ok_or("body groom_style needs style (short, bob, long, wavy or curly)")?)?,
                     "groom_set" => w.body_groom_set(text("key").ok_or("body groom_set needs key (a groom setting)")?, step.get("value").cloned().ok_or("body groom_set needs value")?)?,
                     "reset" => w.body_reset(),
+                    "categorize" => {
+                        w.wear_categorize(text("asset").ok_or("body categorize needs asset")?, text("category").ok_or("body categorize needs category")?)?;
+                        false
+                    }
                     "summary" => false,
-                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, hair, opening, coarse, cap, strands, groom, groom_style, groom_set, reset or summary, got {other}")),
+                    other => return Err(format!("body do is set, genitals, wear, unwear, hide, physics, layer, hair, opening, coarse, cap, strands, groom, groom_style, groom_set, reset, categorize or summary, got {other}")),
                 };
                 if changed {
                     w.wait(|w| w.idle(), num("seconds").unwrap_or(300.0))?;

@@ -18,6 +18,8 @@ pub struct StoreWear {
     pub name: String,
     pub z_depth: f64,
     pub transparent: bool,
+    pub category: String,
+    pub kept: bool,
 }
 
 #[derive(Default)]
@@ -182,12 +184,42 @@ impl World {
                         name: w["name"].as_str().unwrap_or("").to_string(),
                         z_depth: w["z_depth"].as_f64().unwrap_or(50.0),
                         transparent: w["transparent"].as_bool().unwrap_or(false),
+                        category: w["category"].as_str().unwrap_or("other").to_string(),
+                        kept: w["category_source"] == "store",
                     })
                 })
                 .collect();
             let _ = tx.send((store, rows));
         });
         self.body_ui.wear_job = Some(rx);
+    }
+
+    pub fn wear_categorize(&mut self, asset: &str, category: &str) -> Result<(), String> {
+        let store = self.session.as_ref().map(|s| s.store.clone()).ok_or("nothing is loaded")?;
+        let (before, current) = self.body_ui.store_wear.iter().find(|w| w.reference == asset).map(|w| (if w.kept { w.category.clone() } else { String::new() }, w.category.clone())).ok_or_else(|| format!("{asset} is not in the store's wearables"))?;
+        if current == category {
+            return Ok(());
+        }
+        self.wear_category_set(&store, asset, category)?;
+        self.journal.store_done.push((store, asset.to_string(), before, category.to_string()));
+        self.journal_push(crate::history::Domain::Store);
+        Ok(())
+    }
+
+    pub fn wear_category_set(&mut self, store: &str, asset: &str, category: &str) -> Result<(), String> {
+        let env = gf_api::call(&gf_api::Ctx::from_env(), "wearable.categorize", &json!({"store": store, "wearable": asset, "category": category}));
+        if env["ok"] != true {
+            return Err(env["error"]["message"].as_str().unwrap_or("wearable.categorize failed").to_string());
+        }
+        if let Some(w) = self.body_ui.store_wear.iter_mut().find(|w| w.reference == asset) {
+            w.category = env["result"]["category"].as_str().unwrap_or(category).to_string();
+            w.kept = env["result"]["category_source"] == "store";
+        }
+        Ok(())
+    }
+
+    pub fn wear_category_label(&self, asset: &str) -> String {
+        self.body_ui.store_wear.iter().find(|w| w.reference == asset).map_or_else(|| asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset).to_string(), |w| w.name.clone())
     }
 
     pub fn wearables_poll(&mut self) {
@@ -531,6 +563,8 @@ impl crate::studio::Studio<'_> {
             let mut strands_commit: Option<(String, bool)> = None;
             let hair_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["hair"].as_str()).unwrap_or("tuck").to_string();
             let mut hair_commit: Option<(String, String)> = None;
+            let mut category_commit: Option<(String, String)> = None;
+            let category_label = |c: &str| tr(&format!("wearable.category.{c}")).to_string();
             let label = |asset: &str| {
                 let short = asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset);
                 match ui_state.store_wear.iter().find(|w| w.reference == asset) {
@@ -545,6 +579,21 @@ impl crate::studio::Studio<'_> {
             for (asset, hide) in &worn {
                 ui.label(label(asset));
                 let cards = ui_state.store_wear.iter().find(|w| w.reference == *asset).is_some_and(|w| w.transparent);
+                let category = ui_state.store_wear.iter().find(|w| w.reference == *asset).map_or_else(|| "other".to_string(), |w| w.category.clone());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr("body.wear_category")).on_hover_text(tr("body.wear_category_tip"));
+                    egui::ComboBox::from_id_salt(("body_wear_category", asset.as_str()))
+                        .selected_text(category_label(&category))
+                        .show_ui(ui, |ui| {
+                            for c in gf_io::wearable_store::CATEGORIES {
+                                if ui.selectable_label(category == c, category_label(c)).clicked() && category != c {
+                                    category_commit = Some((asset.clone(), c.to_string()));
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(tr("body.wear_category_tip"));
+                });
                 ui.horizontal_wrapped(|ui| {
                     let mut h = *hide;
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
@@ -644,7 +693,8 @@ impl crate::studio::Studio<'_> {
                 }));
             }
             let mut free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
-            free.sort_by_key(|w| label(&w.reference).to_lowercase());
+            let rank = |w: &StoreWear| gf_io::wearable_store::CATEGORIES.iter().position(|c| *c == w.category).unwrap_or(gf_io::wearable_store::CATEGORIES.len());
+            free.sort_by_key(|w| (rank(w), label(&w.reference).to_lowercase()));
             if ui_state.wear_job.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -660,7 +710,12 @@ impl crate::studio::Studio<'_> {
                 free.retain(|w| want.is_empty() || label(&w.reference).to_lowercase().contains(&want));
                 let head = if want.is_empty() { tr("body.wear_add").to_string() } else { trf("body.wear_found", &[("n", &free.len()), ("all", &all)]) };
                 egui::ComboBox::from_id_salt("body_wear_add").selected_text(head).show_ui(ui, |ui| {
+                    let mut group: Option<&str> = None;
                     for w in free {
+                        if group != Some(w.category.as_str()) {
+                            group = Some(w.category.as_str());
+                            ui.label(egui::RichText::new(category_label(&w.category)).weak().small());
+                        }
                         if ui.selectable_label(false, label(&w.reference)).clicked() {
                             wear_commit = Some((w.reference.clone(), Some(true)));
                         }
@@ -815,6 +870,11 @@ impl crate::studio::Studio<'_> {
             }
             if let Some((asset, on)) = cap_commit {
                 self.world.body_wear_cap(&asset, on);
+            }
+            if let Some((asset, c)) = category_commit
+                && let Err(e) = self.world.wear_categorize(&asset, &c)
+            {
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, on)) = strands_commit {
                 self.world.body_wear_strands(&asset, on);
