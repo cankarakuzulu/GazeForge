@@ -301,6 +301,18 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Autosave could overwrite or delete the work it kept.** In both clients, editing a project while its recovery was
+  on offer autosaved over that recovery, so Restore gave back the new edit and the kept work was gone. Autosave now
+  waits while a recovery is on offer (the browser strip and the studio's Project section say so, with Restore and
+  Discard). In the studio, after autosaving one project, opening another and leaving it unchanged deleted the
+  second project's recovery; opening a project now starts its autosave state afresh.
+- **A tab that found its project open in another tab never autosaved it again.** It now takes the recovery slot
+  when the other tab closes, says so, and autosaves from then on.
+- **Review fixes to the day's UX changes.** A Face shapes folder change marks the project unsaved in both clients;
+  an explicit empty `face_prefix` stays empty in the browser; the start card keeps `root`, `fast` and `measure`;
+  file dialogs offer every extension a field takes, plus All files; points draw on clothes, hair and body as on the
+  head; Bake's glb comes only from an Export of the character now loaded; task progress counts per job; a project
+  load stitches once, with the project's own stitch settings.
 - **A refused Save As lost the typed name.** In the browser, when the server refuses the name ("untitled" is kept for
   the recovery slot, or a character it does not allow), the dialog opens again with the name still typed and the reason
   in place of the naming rule.
