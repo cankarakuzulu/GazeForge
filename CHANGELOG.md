@@ -8,6 +8,10 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Wearable categories.** Every wearable has a category (hair, facial hair, hats, eyewear, tops, bottoms, outfits,
+  shoes, accessories, other), kept in the store beside the wearables so references never change: imports keep the
+  one they can tell, `wearable.list` infers the rest and says which, `wearable.categorize` sets or forgets one. Both
+  clients group the add list by category and let each worn item's category be changed, as an undo step.
 - **UV checker and UV seams on the body and clothes.** `character.stitch` with `return_mesh` returns `triangle_uvs`
   for the body (genitals included) and each worn mesh except strand ribbons, and both clients draw the checker and the
   seams on them; they showed on the head and eyes only. Displacement stays on the head only.
