@@ -300,7 +300,7 @@ function mount(root, api) {
 }
 
 window.GF.registerPanel({
-  id: "timeline", title: "Timeline", order: 50, mount,
+  id: "timeline", title: "Timeline", order: 40, mount,
   getState: () => current?.getState() ?? null,
   setState: (state) => current?.setState(state),
   harness: () => current,

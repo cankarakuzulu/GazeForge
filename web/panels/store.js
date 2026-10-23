@@ -7,7 +7,7 @@ const day = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
 window.GF.registerPanel({
   id: "store",
   title: "Store",
-  order: 80,
+  order: 85,
   mount(root, api) {
     root.innerHTML = `<div class="store-body"><div class="note">${tr("store.reading")}</div></div><button class="small store-refresh">${tr("store.refresh")}</button>`;
     const body = root.querySelector(".store-body");

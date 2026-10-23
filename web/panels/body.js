@@ -547,4 +547,4 @@ function mount(root, api) {
   return {};
 }
 
-window.GF.registerPanel({ id: 'body', title: 'Body shape', order: 45, mount });
+window.GF.registerPanel({ id: 'body', title: 'Body shape', order: 10, mount });

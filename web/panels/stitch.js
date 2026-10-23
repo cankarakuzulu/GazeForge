@@ -297,4 +297,4 @@ function mount(root, api) {
   };
 }
 
-window.GF.registerPanel({ id: 'stitch', title: 'Body', order: 50, mount });
+window.GF.registerPanel({ id: 'stitch', title: 'Body', order: 15, mount });

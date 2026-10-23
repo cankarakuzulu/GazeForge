@@ -298,4 +298,4 @@ function mount(root, api) {
   };
 }
 
-window.GF.registerPanel({ id: "rig", title: "Face rig", order: 40, mount });
+window.GF.registerPanel({ id: "rig", title: "Face rig", order: 30, mount });

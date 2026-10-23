@@ -43,7 +43,7 @@ function badLines(P, T, below, dx = 0) {
 window.GF.registerPanel({
   id: "topology",
   title: "Topology",
-  order: 15,
+  order: 80,
   mount(root, api) {
     root.innerHTML = `<div class="topology">
       <label class="line"><input type="checkbox" class="show"> ${tr("topology.show")}</label>

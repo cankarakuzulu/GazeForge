@@ -533,6 +533,13 @@ impl Studio<'_> {
                 }
             });
         });
+        self.project_panel(ui);
+        self.body_panel(ui);
+        self.stitch_panel(ui);
+        self.face_rig_panel(ui);
+        self.skin_panel(ui);
+        self.timeline_panel(ui);
+        self.topology_panel(ui);
         egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
             ui.checkbox(&mut self.world.hud.on, tr("action.hud"));
             ui.label(trf("studio.shape_input", &[("name", &tr_or(&format!("studio.input.{}", self.s.input.name()), self.s.input.name()))]));
@@ -541,13 +548,6 @@ impl Studio<'_> {
                 ui.colored_label(egui::Color32::LIGHT_RED, p);
             }
         });
-        self.project_panel(ui);
-        self.topology_panel(ui);
-        self.face_rig_panel(ui);
-        self.skin_panel(ui);
-        self.body_panel(ui);
-        self.stitch_panel(ui);
-        self.timeline_panel(ui);
     }
 
     fn side_footer(&mut self, ui: &mut egui::Ui) {

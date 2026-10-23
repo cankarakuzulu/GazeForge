@@ -14,7 +14,7 @@ function boxLines(p) {
 window.GF.registerPanel({
   id: "measurements",
   title: "Measurements (mm, settled)",
-  order: 10,
+  order: 60,
   mount(root, api) {
     root.innerHTML = `<table><thead><tr><th>${tr("measure.col.measure")}</th><th>${tr("unit.mm")}</th><th>${tr("measure.col.change")}</th></tr></thead><tbody></tbody></table>
       <label class="line"><input type="checkbox" class="bbox"> ${tr("measure.bbox")}</label>

@@ -6,7 +6,7 @@ const valid = (p) => p && Number.isInteger(p.n) && Number.isInteger(p.tri) && Ar
 window.GF.registerPanel({
   id: "pins",
   title: "Pins (face grid addresses)",
-  order: 90,
+  order: 70,
   mount(root, api) {
     const G = api.grid;
     root.innerHTML = `<div class="pins">

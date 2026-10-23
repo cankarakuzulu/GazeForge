@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Design panels sat in developer order.** Both clients now list Body shape, Body, (Eyes,) Face rig, Skin (studio)
+  and Timeline first, and the developer sections (Measurements, Pins, Topology, Store, Jobs; Topology and Diagnostics
+  in the studio) after them. The studio keeps Store and Project at the top.
 - **Status lines spoke engine.** "Settled f5/1 1210 ms" reads "Ready in 1210 ms" in both clients, with the
   placement in its tooltip; a draft reads "Draft in … ms (approximate, …)". The browser header shows "20000 vertices ·
   39636 triangles · 290 targets" and keeps the GL renderer string in its tooltip.
