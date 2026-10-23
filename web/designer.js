@@ -1724,7 +1724,7 @@ function projectUrl(name, extra = {}) {
   const q = new URLSearchParams();
   for (const k of ["root", "fast", "measure"]) if (params.get(k)) q.set(k, params.get(k));
   if (name) q.set("project", name);
-  for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") q.set(k, String(v));
+  for (const [k, v] of Object.entries(extra)) if (v != null && (v !== "" || keepsEmpty(k))) q.set(k, String(v));
   return `${location.pathname}?${q}`;
 }
 
@@ -1834,9 +1834,8 @@ async function openProject(name) {
 
 async function newProject() {
   if (!(await confirmDiscard(tr("designer.frag.new_project")))) return;
-  const extra = { store };
-  for (const k of PROJECT_OPTIONS) if (opt(k)) extra[k] = opt(k);
-  leave(projectUrl(null, extra));
+  try { localStorage.removeItem("gf.stitch.v1"); } catch {}
+  leave(projectUrl(null, { store, ...currentOptions() }));
 }
 
 async function autosave(reason = "settle") {
