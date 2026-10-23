@@ -777,6 +777,7 @@ impl World {
         input.as_object_mut().map(|o| o.remove("uvs"));
         self.saved = None;
         self.jobs.send(self.epoch, Job::Save { input });
+        self.note(trf("studio.saving", &[("path", &out)]));
         Ok(())
     }
 

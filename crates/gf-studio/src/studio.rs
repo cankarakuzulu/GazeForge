@@ -101,6 +101,15 @@ impl UiState {
     }
 }
 
+fn placed(kind: &str, typed: &str) -> PathBuf {
+    let p = PathBuf::from(typed);
+    let p = if p.is_absolute() { p } else { gf_api::project::data_dir(kind).join(p) };
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    p
+}
+
 pub(crate) fn system_font() -> Option<Vec<u8>> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(win) = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")) {
@@ -212,17 +221,15 @@ impl Studio<'_> {
     }
 
     fn save(&mut self) {
-        let path = if self.s.save_path.trim().is_empty() {
+        let typed = if self.s.save_path.trim().is_empty() {
             let name = self.world.session.as_ref().map_or("character".to_string(), |s| s.character.name.clone());
             format!("{name}.gfchar.json")
         } else {
             self.s.save_path.trim().to_string()
         };
+        let path = placed("characters", &typed).display().to_string();
         self.s.save_path = path.clone();
-        self.s.status = match self.world.save(&path) {
-            Ok(()) => trf("studio.saving", &[("path", &path)]),
-            Err(e) => e,
-        };
+        self.s.status = self.world.save(&path).err().unwrap_or_default();
     }
 
     pub fn act(&mut self, id: &str) {
@@ -255,7 +262,7 @@ impl Studio<'_> {
             (a.x, a.y, a.w, a.h)
         };
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
-        let path = PathBuf::from(format!("gazeforge-studio-{stamp}.png"));
+        let path = placed("screenshots", &format!("gazeforge-studio-{stamp}.png"));
         match self.renderer.read_rgba(self.gfx.device, self.gfx.queue, x, y, w, h).and_then(|px| write_png(&path, w, h, &px)) {
             Ok(()) => trf("studio.saved", &[("path", &path.display())]),
             Err(e) => trf("studio.screenshot_failed", &[("error", &e)]),
@@ -548,7 +555,8 @@ impl Studio<'_> {
                     self.s.status = self.world.undo(true).unwrap_or_default();
                 }
                 ui.add_space(6.0);
-                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text(tr("studio.save_hint")).desired_width(ui.available_width() - 34.0));
+                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text(tr("studio.save_hint")).desired_width(ui.available_width() - 34.0))
+                    .on_hover_text(trf("studio.save_where", &[("dir", &gf_api::project::data_dir("characters").display())]));
                 let save_tip = self.tip(tr("action.save_spec"), "save_spec");
                 if icons::button(ui, "save", false, &save_tip).clicked() {
                     self.save();

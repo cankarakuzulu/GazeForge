@@ -904,6 +904,7 @@
  "studio.renderer.native": "GazeForge renderer",
  "studio.renderer.tip": "Renderer of the active viewport",
  "studio.save_hint": "Save as .gfchar.json",
+ "studio.save_where": "A name or a relative path is saved in {dir}",
  "studio.saved": "Saved {path}",
  "studio.saving": "Saving {path}",
  "studio.screenshot_failed": "Screenshot failed: {error}",

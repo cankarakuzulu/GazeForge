@@ -596,7 +596,7 @@ pub fn save_input() -> Value {
 }
 
 pub fn save_output() -> Value {
-    shape(json!({"out": {"type": "string"}, "revision": {"type": "string"}, "spec": {"type": "object"}}))
+    shape(json!({"out": {"type": "string"}, "path": {"type": "string", "description": "out made absolute against the serving process's folder"}, "revision": {"type": "string"}, "spec": {"type": "object"}}))
 }
 
 pub fn sliders(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
@@ -1067,7 +1067,8 @@ pub fn save(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     }
     let out = text(input, "out");
     let revision = ch::write_spec(Path::new(out), &spec).map_err(ApiError::internal)?;
-    Ok(json!({"out": out, "revision": revision, "spec": serde_json::to_value(&spec).map_err(|e| ApiError::internal(e.to_string()))?}))
+    let path = std::path::absolute(out).map_or_else(|_| out.to_string(), |p| p.display().to_string());
+    Ok(json!({"out": out, "path": path, "revision": revision, "spec": serde_json::to_value(&spec).map_err(|e| ApiError::internal(e.to_string()))?}))
 }
 
 type BaseRigSlot = Mutex<Option<(String, Arc<gf_core::face_rig::BaseRig>)>>;

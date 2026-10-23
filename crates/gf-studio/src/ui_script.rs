@@ -165,6 +165,12 @@ impl Offscreen {
                 self.ui_click(at)?;
                 Ok(json!({"clicked": [at.x, at.y], "status": self.ui.as_ref().map(|u| u.state.status.clone())}))
             }
+            "ui_hover" => {
+                let at = egui::pos2(num("x").ok_or("ui_hover needs x")? as f32, num("y").ok_or("ui_hover needs y")? as f32);
+                self.pointer("move", at)?;
+                self.ui_frames(1)?;
+                Ok(json!({"hovered": [at.x, at.y]}))
+            }
             "ui_key" => {
                 let b = keymap::parse(text("key").ok_or("ui_key needs key")?)?;
                 let modifiers = egui::Modifiers { alt: b.alt, ctrl: b.ctrl, shift: b.shift, mac_cmd: false, command: b.ctrl };

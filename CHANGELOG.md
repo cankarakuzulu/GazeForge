@@ -301,6 +301,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The studio saved specs and screenshots wherever it was started from.** A spec saved under a name or a relative
+  path now goes into a `characters` folder beside the projects folder (`%APPDATA%/GazeForge/characters` on Windows),
+  and a screenshot into `screenshots` there; the save field's tooltip names the folder, and the field and the status
+  show the full path. Saving no longer leaves "Saving …" beside "Saved …" in the status bar. `designer.save` answers
+  with `path`, its `out` made absolute, and the browser shows that.
 - **The studio's Load replaced unsaved work without asking.** Store → Load, a wizard's Open in studio and Topology's
   Use now ask first when there are unsaved changes (Discard changes / Cancel; Escape cancels). A load that then failed
   used to leave the edited character on screen marked as saved, its project name gone; the project, its name and its

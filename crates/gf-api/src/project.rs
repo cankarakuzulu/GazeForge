@@ -41,6 +41,11 @@ pub fn default_root() -> PathBuf {
     data.unwrap_or_else(std::env::temp_dir).join("GazeForge").join("projects")
 }
 
+pub fn data_dir(kind: &str) -> PathBuf {
+    let projects = default_root();
+    projects.parent().map_or_else(|| projects.join(kind), |p| p.join(kind))
+}
+
 fn root(ctx: &Ctx, input: &Value) -> PathBuf {
     match input.get("root").and_then(Value::as_str) {
         Some(r) if !r.is_empty() => PathBuf::from(r),

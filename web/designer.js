@@ -1520,7 +1520,7 @@ async function save() {
     const input = { ...settleInput(), out };
     delete input.eyes;
     const r = await api("designer.save", input);
-    $("saved").textContent = tr("designer.saved_spec", { out: r.out, revision: r.revision });
+    $("saved").textContent = tr("designer.saved_spec", { out: r.path || r.out, revision: r.revision });
   } catch (e) {
     $("saved").textContent = e.message;
   }

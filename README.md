@@ -1042,7 +1042,8 @@ still queued when a newer one arrives is dropped before it starts; one already r
 safe point (between solver iterations and fit rounds) when a newer commit arrives or a slider drag begins, and never
 publishes a partial mesh. A settle stopped by a drag runs again once the drag ends, so the preview has the cores while a
 slider moves and the settle has all of them otherwise; a settle that completes is identical to `designer.settle`. Every
-shape change can be undone and redone, and the spec can be saved (`Ctrl+S`). A timings overlay (`Alt+H`) shows the
+shape change can be undone and redone, and the spec can be saved (`Ctrl+S`; a name or a relative path goes into the
+`characters` folder beside the projects folder, screenshots into `screenshots`, and the status names the full path). A timings overlay (`Alt+H`) shows the
 present rate, frame times, input-to-preview latency, settle latency, the macro slope and sample costs.
 `GAZEFORGE_SETTLE_THREADS` (default: all cores) and `GAZEFORGE_PREVIEW_THREADS` (default 1) size the two.
 
