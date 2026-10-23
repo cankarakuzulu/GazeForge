@@ -301,6 +301,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The face rig's shapes folder could only be set from outside.** Both Face rig panels have a Face shapes field (the
+  studio's with a folder button) for the folder of the face shapes' .npz files; it is saved with the project like
+  the URL's `face_morphs`. Without it, `rig.face` on a store whose catalog lacks the shapes says "the face rig needs 51
+  face shapes that the store's catalog does not hold, and no face-shapes folder was given (first:
+  faceunits/browDownLeft)" with the missing list in its details, instead of "faceunits/… is not a target of the
+  catalog". Panels read options through a new `api.option` / `api.setOption`.
 - **Wearable rows were cramped.** In both clients an item's row now holds Hide body, Remove and, for hair cards, Cap
   and Strands; physics, layer, openings, coarse detail and Hair under it fold under the item's More settings, which
   remembers being open across edits (browser: checked through a rebuild; studio: egui keeps it per item). The studio's

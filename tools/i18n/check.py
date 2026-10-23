@@ -36,7 +36,7 @@ EN = os.path.join(ROOT, "web", "locales", "en.json")
 FRAGMENTS = (".frag.", "unit.")
 DYNAMIC = ("shortcut_key.", "skin.kind.", "skin.style.", "skin.add.", "skin.preset.", "skin.variant.")
 ALLOW = {
-    "web/designer.js": ["pushUndo needs { label, undo(), redo() }", "registerPanel needs { id, title, order, mount(rootEl, api) }", "setPose needs "],
+    "web/designer.js": ["pushUndo needs { label, undo(), redo() }", "registerPanel needs { id, title, order, mount(rootEl, api) }", "setPose needs ", "setOption: "],
     "web/viewer.js": ["shader: ", "program: "],
     "web/wizard.js": ["not a glb", "accessor "],
     "web/panels/topology.js": ["LOD0", "topology.inspect"],

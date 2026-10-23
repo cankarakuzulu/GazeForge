@@ -1427,6 +1427,13 @@ function setPose(id, positions) {
 function makeApi(panelId) {
   return {
     call: (command, input) => api(command, input ?? {}),
+    option: (k) => opt(k) ?? null,
+    setOption: (k, v) => {
+      if (!PROJECT_OPTIONS.includes(k)) throw new Error(`setOption: ${k} is not a project option`);
+      if (v) params.set(k, v); else params.delete(k);
+      history.replaceState(null, "", `?${params.toString()}`);
+      scheduleDirty();
+    },
     character: () => JSON.parse(JSON.stringify(settleInput())),
     onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
     setPose,

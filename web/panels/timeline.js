@@ -216,8 +216,8 @@ function mount(root, api) {
     if (S.busy) return;
     S.busy = true;
     rigNote.textContent = tr("timeline.deltas_loading");
-    const input = { ...api.character(), morphs: SHAPES.map((n) => (params.get("face_prefix") ?? "faceunits/") + n), rounds: 0 };
-    if (params.get("face_morphs")) input.morph_dir = params.get("face_morphs");
+    const input = { ...api.character(), morphs: SHAPES.map((n) => (api.option("face_prefix") ?? "faceunits/") + n), rounds: 0 };
+    if (api.option("face_morphs")) input.morph_dir = api.option("face_morphs");
     if (params.get("eyes")) input.eyes = params.get("eyes");
     try {
       const r = await api.call("rig.face", input);

@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::browse::{self, Pick};
 use crate::face_rig::{GROUPS, MANUAL, Mode, PRESETS, SHAPES, group_of, preset_weights};
 use crate::i18n::{tr, trf};
 use crate::studio::Studio;
@@ -14,6 +15,14 @@ impl Studio<'_> {
                 return;
             }
             let busy = self.world.face.job.is_some();
+            ui.horizontal(|ui| {
+                ui.label(tr("rig.shapes_dir")).on_hover_text(tr("rig.shapes_dir_tip"));
+                let mut dir = self.world.face_morphs.clone().unwrap_or_default();
+                let hint = std::env::var("GAZEFORGE_FACE_MORPHS").unwrap_or_else(|_| tr("rig.shapes_dir_hint").to_string());
+                if browse::field(ui, &mut self.s.browse, "rig.shapes", &mut dir, &hint, Pick::Folder) {
+                    self.world.face_morphs = Some(dir.trim().to_string()).filter(|d| !d.is_empty());
+                }
+            });
             ui.horizontal(|ui| {
                 if ui.add_enabled(!busy, egui::Button::new(tr("rig.load"))).clicked() {
                     self.world.face_load();

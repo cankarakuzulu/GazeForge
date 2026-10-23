@@ -57,6 +57,12 @@ function mount(root, api) {
   for (const v of ["blend", "joints"]) modeSel.appendChild(el("option", { value: v }, tr(`rig.mode.${v}`)));
   const overlayBox = el("input", { type: "checkbox", title: tr("rig.overlay_title") });
   overlayBox.checked = true;
+  const shapesRow = el("label", { class: "row", title: tr("rig.shapes_dir_tip") }, `${tr("rig.shapes_dir")} `);
+  const shapesDir = el("input", { type: "text", placeholder: tr("rig.shapes_dir_hint"), "aria-label": tr("rig.shapes_dir") });
+  shapesDir.value = api.option("face_morphs") || "";
+  shapesDir.addEventListener("change", () => api.setOption("face_morphs", shapesDir.value.trim()));
+  shapesRow.appendChild(shapesDir);
+  root.appendChild(shapesRow);
   const loadBtn = el("button", {}, tr("rig.load"));
   bar.append(loadBtn, el("label", {}, ` ${tr("rig.mode")} `), modeSel, el("label", {}, ` ${tr("rig.joints")} `), overlayBox);
   const presets = el("div", { class: "row" });
@@ -166,8 +172,8 @@ function mount(root, api) {
     S.wanted = true;
     S.stale = false;
     status.textContent = tr("rig.fitting");
-    const input = { ...api.character(), morphs: SHAPES.map((n) => (params.get("face_prefix") ?? "faceunits/") + n) };
-    if (params.get("face_morphs")) input.morph_dir = params.get("face_morphs");
+    const input = { ...api.character(), morphs: SHAPES.map((n) => (api.option("face_prefix") ?? "faceunits/") + n) };
+    if (api.option("face_morphs")) input.morph_dir = api.option("face_morphs");
     if (params.get("eyes")) input.eyes = params.get("eyes");
     try {
       const r = await api.call("rig.face", input);
@@ -193,7 +199,7 @@ function mount(root, api) {
       status.className = "note";
       status.textContent = tr("rig.loaded", { joints: r.joints.length, shapes: SHAPES.length, poor, ms: Math.round(r.timing_ms.total) });
     } catch (e) {
-      status.textContent = tr("rig.error", { error: e.message ?? e });
+      status.textContent = tr("rig.error", { error: e.plain ?? e.message ?? e });
       status.className = "note bad";
     }
     S.busy = false;

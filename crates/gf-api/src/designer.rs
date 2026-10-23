@@ -1114,6 +1114,13 @@ pub fn rig_face(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         loaded.target(id).map(|t| (*t).clone())
     };
+    let missing: Vec<&String> = ids.iter().filter(|id| !loaded.catalog.targets.contains_key(id.as_str()) && !dir.is_some_and(|d| Path::new(d).join(format!("{id}.npz")).is_file())).collect();
+    if let Some(first) = missing.first() {
+        let place = dir.map_or("no face-shapes folder was given".to_string(), |d| format!("the face-shapes folder {d} does not have them"));
+        return Err(ApiError::invalid(format!("the face rig needs {} face shapes that the store's catalog does not hold, and {place} (first: {first})", missing.len()))
+            .details(json!({"missing": missing}))
+            .hint("give the folder of the shapes' .npz files: morph_dir here, &face_morphs= in the browser, the Face shapes folder in the studio"));
+    }
     let targets: Vec<SparseTarget> = ids.iter().map(|id| fetch(id)).collect::<Result<_, _>>()?;
     let jaw_id = match input.get("jaw").and_then(Value::as_str) {
         Some(j) => j.to_string(),
