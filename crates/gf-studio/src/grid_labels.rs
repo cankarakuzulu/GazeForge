@@ -311,8 +311,8 @@ pub fn ruler(m: &Matrices, target: V3, s: &Shot, bounds: &crate::viewer::Bounds,
         lines(sa, m.s, m.u, hw, hh, true);
         lines(ua, m.u, m.s, hh, hw, false);
         out.caption = Some(match (sa, ua) {
-            (Some((a, _)), Some((b, _))) => (s.x + s.w - 92.0, s.y + s.h - 30.0, format!("{} → · {} ↑ · mm", name(a), name(b))),
-            _ => (s.x + s.w - 160.0, s.y + s.h - 30.0, crate::i18n::tr("viewer.mm_grid_hint").to_string()),
+            (Some((a, _)), Some((b, _))) => caption_at(s, 92.0, format!("{} → · {} ↑ · mm", name(a), name(b))),
+            _ => caption_at(s, 160.0, crate::i18n::tr("viewer.mm_grid_hint").to_string()),
         });
         return out;
     }
@@ -341,8 +341,12 @@ pub fn ruler(m: &Matrices, target: V3, s: &Shot, bounds: &crate::viewer::Bounds,
             mm += 10;
         }
     }
-    out.caption = Some((s.x + s.w - 150.0, s.y + s.h - 30.0, crate::i18n::trf("viewer.back_plane", &[("axis", &name(k))])));
+    out.caption = Some(caption_at(s, 150.0, crate::i18n::trf("viewer.back_plane", &[("axis", &name(k))])));
     out
+}
+
+fn caption_at(s: &Shot, inset: f64, text: String) -> (f64, f64, String) {
+    (s.x + s.w - inset.max(text.chars().count() as f64 * 6.2 + 12.0), s.y + s.h - 30.0, text)
 }
 
 impl crate::studio::Studio<'_> {

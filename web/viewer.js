@@ -77,6 +77,10 @@ export function vertexNormals(pos, idx, n) {
   return out;
 }
 
+function captionAt(r, inset, text) {
+  return { x: r.x + r.w - Math.max(inset, text.length * 6.2 + 12), y: r.y + r.h - 30, text, cls: "axis" };
+}
+
 export function windingSign(pos, idx) {
   let vol = 0;
   for (let t = 0; t < idx.length; t += 3) {
@@ -872,9 +876,9 @@ export class Viewer {
         lines(ax.s, M.s, M.u, hw, hh, true);
         lines(ax.u, M.u, M.s, hh, hw, false);
         const name = (a) => "xyz"[a.k];
-        labels.push({ x: r.x + r.w - 92, y: r.y + r.h - 30, text: `${name(ax.s)} → · ${name(ax.u)} ↑ · mm`, cls: "axis" });
+        labels.push(captionAt(r, 92, `${name(ax.s)} → · ${name(ax.u)} ↑ · mm`));
       } else {
-        labels.push({ x: r.x + r.w - 160, y: r.y + r.h - 30, text: tr("viewer.mm_grid_hint"), cls: "axis" });
+        labels.push(captionAt(r, 160, tr("viewer.mm_grid_hint")));
       }
       if (groups.minor.length) this.drawLines(M, groups.minor, tone(0.16), gl.LINES);
       if (groups.major.length) this.drawLines(M, groups.major, tone(0.42), gl.LINES);
@@ -895,7 +899,7 @@ export class Viewer {
       }
     }
     this.drawLines(M, out, tone(0.3), gl.LINES);
-    labels.push({ x: r.x + r.w - 150, y: r.y + r.h - 30, text: tr("viewer.back_plane", { axis: "xyz"[k] }), cls: "axis" });
+    labels.push(captionAt(r, 150, tr("viewer.back_plane", { axis: "xyz"[k] })));
   }
 
   project(M, r, p) {
