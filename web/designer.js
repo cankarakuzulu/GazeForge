@@ -188,9 +188,30 @@ function targetVertices(t, fraction = 0.25) {
   return out;
 }
 
+const REGION_ISLAND_MAX = 40;
+
+function fillRegionIslands(reg, weak, tris) {
+  const n = reg.length, next = Array.from({ length: n }, () => []);
+  for (let t = 0; t + 2 < tris.length; t += 3) for (let k = 0; k < 3; k++) for (let j = 0; j < 3; j++) if (k !== j && tris[t + k] < n) next[tris[t + k]].push(tris[t + j]);
+  const seen = new Uint8Array(n), fill = [];
+  for (let v = 0; v < n; v++) {
+    if (reg[v] !== 0 || seen[v]) continue;
+    const part = [v];
+    seen[v] = 1;
+    for (let i = 0; i < part.length && part.length <= REGION_ISLAND_MAX; i++) {
+      for (const u of next[part[i]]) if (u < n && reg[u] === 0 && !seen[u]) { seen[u] = 1; part.push(u); }
+    }
+    if (part.length <= REGION_ISLAND_MAX) { for (const u of part) if (weak[u] !== 0) fill.push(u); continue; }
+    const stack = part;
+    while (stack.length) { const w = stack.pop(); for (const u of next[w]) if (u < n && reg[u] === 0 && !seen[u]) { seen[u] = 1; stack.push(u); } }
+  }
+  for (const v of fill) reg[v] = weak[v];
+}
+
 function buildRegions() {
   const R = D.rows3, cats = [...new Set(D.targets.map((t) => t.category))].filter((c) => c !== "head");
   const names = ["rest of head", ...cats], best = new Float32Array(D.n), reg = new Uint8Array(D.n);
+  const weakBest = new Float32Array(D.n), weak = new Uint8Array(D.n);
   let skipped = 0;
   D.targets.forEach((t, ti) => {
     const id = names.indexOf(t.category);
@@ -205,8 +226,10 @@ function buildRegions() {
     for (let e = lo; e < hi; e++) {
       const g = R.index[e], f = mag[e - lo] / top;
       if (f >= 0.35 && f > best[g]) { best[g] = f; reg[g] = id; }
+      if (f > weakBest[g]) { weakBest[g] = f; weak[g] = id; }
     }
   });
+  fillRegionIslands(reg, weak, D.indices);
   const counts = names.map(() => 0);
   for (let g = 0; g < D.n; g++) counts[reg[g]]++;
   D.regions = { names, counts, skipped_wide_targets: skipped };

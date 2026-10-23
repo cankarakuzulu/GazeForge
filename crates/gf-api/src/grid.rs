@@ -213,7 +213,7 @@ fn grid(input: &Value) -> Result<(Arc<Grid>, bool), ApiError> {
         category_of.push(at);
     }
     let rows = designer::pack_rows(&loaded, &ids)?;
-    let (regions, skipped) = fc::designer_regions(game.kept.len(), &category_of, &rows.offsets, &rows.index, &rows.delta);
+    let (regions, skipped) = fc::designer_regions(game.kept.len(), &category_of, &rows.offsets, &rows.index, &rows.delta, &game.triangles);
     let mut best: BTreeMap<(u32, u32), (f64, u32)> = BTreeMap::new();
     for (g, &uv) in cells.game_uv.iter().enumerate() {
         let c = fc::cell_at(uv);

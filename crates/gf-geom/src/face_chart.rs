@@ -210,9 +210,64 @@ pub fn nearest_corner(bary: [f64; 3]) -> usize {
     }
 }
 
-pub fn designer_regions(vertices: usize, category_of_target: &[usize], offsets: &[u32], index: &[u32], delta: &[i16]) -> (Vec<u8>, usize) {
+pub const REGION_ISLAND_MAX: usize = 40;
+
+fn fill_region_islands(region: &mut [u8], weak: &[u8], triangles: &[[u32; 3]]) {
+    let n = region.len();
+    let mut next: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for t in triangles {
+        for k in 0..3 {
+            for j in 0..3 {
+                if k != j && (t[k] as usize) < n {
+                    next[t[k] as usize].push(t[j]);
+                }
+            }
+        }
+    }
+    let mut seen = vec![false; n];
+    let mut fill = Vec::new();
+    for v in 0..n {
+        if region[v] != 0 || seen[v] {
+            continue;
+        }
+        let mut part = vec![v as u32];
+        seen[v] = true;
+        let mut i = 0;
+        while i < part.len() && part.len() <= REGION_ISLAND_MAX {
+            for &u in &next[part[i] as usize] {
+                let u = u as usize;
+                if u < n && region[u] == 0 && !seen[u] {
+                    seen[u] = true;
+                    part.push(u as u32);
+                }
+            }
+            i += 1;
+        }
+        if part.len() <= REGION_ISLAND_MAX {
+            fill.extend(part.into_iter().map(|u| u as usize).filter(|&u| weak[u] != 0));
+        } else {
+            let mut stack = part;
+            while let Some(w) = stack.pop() {
+                for &u in &next[w as usize] {
+                    let u = u as usize;
+                    if u < n && region[u] == 0 && !seen[u] {
+                        seen[u] = true;
+                        stack.push(u as u32);
+                    }
+                }
+            }
+        }
+    }
+    for v in fill {
+        region[v] = weak[v];
+    }
+}
+
+pub fn designer_regions(vertices: usize, category_of_target: &[usize], offsets: &[u32], index: &[u32], delta: &[i16], triangles: &[[u32; 3]]) -> (Vec<u8>, usize) {
     let mut best = vec![0.0f32; vertices];
     let mut region = vec![0u8; vertices];
+    let mut weak_best = vec![0.0f32; vertices];
+    let mut weak = vec![0u8; vertices];
     let mut skipped = 0usize;
     for (t, &id) in category_of_target.iter().enumerate() {
         if id == 0 {
@@ -241,8 +296,13 @@ pub fn designer_regions(vertices: usize, category_of_target: &[usize], offsets: 
                 best[g] = f as f32;
                 region[g] = id as u8;
             }
+            if f > weak_best[g] as f64 {
+                weak_best[g] = f as f32;
+                weak[g] = id as u8;
+            }
         }
     }
+    fill_region_islands(&mut region, &weak, triangles);
     (region, skipped)
 }
 
@@ -401,8 +461,28 @@ mod tests {
         index.extend(0..10);
         let mut delta = vec![10, 0, 0, 5, 0, 0, 10, 0, 0, 10, 0, 0];
         delta.extend(std::iter::repeat_n(7, 30));
-        let (r, skipped) = designer_regions(10, &[1, 2, 3], &offsets, &index, &delta);
+        let (r, skipped) = designer_regions(10, &[1, 2, 3], &offsets, &index, &delta, &[]);
         assert_eq!(&r[..3], &[1, 2, 2]);
         assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn a_small_unlabelled_island_takes_its_strongest_target_and_a_large_rest_stays() {
+        let offsets = [0, 3, 4];
+        let index = vec![0, 1, 2, 3];
+        let delta = vec![100, 0, 0, 20, 0, 0, 100, 0, 0, 100, 0, 0];
+        let triangles = [[0, 1, 2]];
+        let (r, _) = designer_regions(50, &[1, 2], &offsets, &index, &delta, &triangles);
+        assert_eq!(&r[..5], &[1, 1, 1, 2, 0], "vertex 1 (20 % of target 1) fills in; vertex 4, moved by nothing, stays the rest of the head");
+        let ring: Vec<[u32; 3]> = (0..60u32).map(|k| [k, (k + 1) % 60, 60]).collect();
+        let index: Vec<u32> = (0..61).collect();
+        let mut delta = vec![0i16; 61 * 3];
+        delta[0] = 100;
+        for k in 1..61 {
+            delta[k * 3] = 10;
+        }
+        let (r, _) = designer_regions(61, &[1], &[0, 61], &index, &delta, &ring);
+        assert_eq!(r[0], 1);
+        assert!(r[1..].iter().all(|&x| x == 0), "an unlabelled area over the island limit is left as it is");
     }
 }
