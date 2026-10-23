@@ -511,7 +511,7 @@ impl Renderer {
             buf("extra normals", f32_bytes(&e.normals)),
             buf("extra reference", f32_bytes(&e.positions)),
             buf("extra uvs", f32_bytes(&vec![0.0; tri * 6])),
-            buf("extra flags", u32_bytes(&vec![0; tri])),
+            buf("extra flags", u32_bytes(&crate::session::edge_flags(&e.indices, &[]).0)),
             buf("extra verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
         ];
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -795,8 +795,7 @@ impl Renderer {
                 let mut u = base;
                 u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
                 u[88] = 0.0;
-                u[97] = 0.0;
-                u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, 0.0]);
+                u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, if o.seams { 1.0 } else { 0.0 }]);
                 first.draws.push(Draw::Extra(false, chunk(u, &mut uni), k));
             }
             passes.push(first);

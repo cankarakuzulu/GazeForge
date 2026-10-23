@@ -327,8 +327,10 @@ open, with its last measurement, rather than left out.
   code, not reproduced.)
 - **The studio's wireframe and back-face highlight stopped at the neck.** Both now draw on the body, clothes and hair
   as well (the browser already did): with the hat character, hair cards seen from behind light up (479 px in a front
-  render, 0 before), X-ray shows the clothes' and body's hidden edges, and points mark their vertices. Seams and the
-  analysis modes still draw on the head only.
+  render, 0 before), X-ray shows the clothes' and body's hidden edges, points mark their vertices, and Seams outlines
+  their open boundaries in orange (hems, openings, the body's hidden cut: 1,032 boundary pixels in a front render
+  against 127 from the head alone; a grown-hair run's time unchanged). UV seams and the analysis modes still draw on
+  the head only.
 - **Most of the browser's controls had no accessible name.** Every target, macro and face-rig slider, the joint and
   wearable pickers, the category select, the clip scrubber and the project dialog's name field now carry one (an
   `aria-label` from the visible text, or the dialog's heading): unnamed controls on the designer page with a dressed
