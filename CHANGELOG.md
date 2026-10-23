@@ -304,7 +304,7 @@ open, with its last measurement, rather than left out.
 - **Most of the browser's controls had no accessible name.** Every target, macro and face-rig slider, the joint and
   wearable pickers, the category select, the clip scrubber and the project dialog's name field now carry one (an
   `aria-label` from the visible text, or the dialog's heading): unnamed controls on the designer page with a dressed
-  character, 363 of 638 -> 0 while the dialog is open (its field is named by the heading it shows then). The studio
+  character, 363 of 638 -> 1: the closed dialog's field, which reads "Save project as" from its heading once open. The studio
   still has no accessibility tree (egui's AccessKit support is not built in).
 - **Sliders were named by raw ids.** Both clients read a target or macro id as words: `l-cheek-trans-down` is "Left
   cheek move down", `nose-scale-horiz-incr` "Nose scale horizontal more", `cupsize` "Cup size", and a paired slider's
