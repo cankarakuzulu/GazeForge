@@ -270,6 +270,8 @@ open, with its last measurement, rather than left out.
 
 ### Changed
 
+- **A hidden overlay stays hidden.** An overlay hidden in the visibility list (the stitch seam, the timeline's head
+  path) stays hidden when it is drawn again, in both clients; Show all shows it.
 - **Equal layer depths: the later item is outer.** Two worn items with the same `layer` / `z_depth` were never layered
   against each other (only a strictly lower depth counted as underneath); now the item listed later in
   `body.wearables` goes over the earlier one. A cape worn after a suit (both 50) started 24.6 mm inside the suit;
