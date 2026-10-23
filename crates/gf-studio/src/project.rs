@@ -320,7 +320,11 @@ impl World {
                             .collect();
                         self.project.saved_sig = Some(self.project_sig());
                         self.project.status = trf("designer.project_saved", &[("path", &r["path"].as_str().unwrap_or("")), ("bytes", &r["bytes"]), ("modified", &when(&r["modified"]))]);
-                        if was.is_none() && name != gf_api::project::UNTITLED {
+                        if self.project.held.as_ref().is_some_and(|h| h["name"] == name.as_str()) {
+                            self.project.held = None;
+                        }
+                        let untitled_held = self.project.held.as_ref().is_some_and(|h| h["name"] == gf_api::project::UNTITLED);
+                        if was.is_none() && name != gf_api::project::UNTITLED && !untitled_held {
                             let _ = gf_api::call(&gf_api::Ctx::from_env(), "project.discard", &json!({"name": gf_api::project::UNTITLED, "root": root()}));
                         }
                     }

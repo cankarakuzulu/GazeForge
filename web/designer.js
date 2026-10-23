@@ -1770,10 +1770,16 @@ async function saveProject(asName) {
   P.saveError = null;
   if (D.start.macros && !D.macros?.available) { toast(tr("designer.needs_macro")); return false; }
   const was = P.name;
+  const ownedSlot = !P.slotShared;
   P.saving = true;
   try {
     const r = await api("project.save", projectInput(name));
-    if (!was && name !== "untitled" && !P.slotShared) { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
+    if (!was && name !== "untitled" && ownedSlot && !P.slotShared && P.recoveryOffer?.name !== "untitled") { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
+    if (P.recoveryOffer?.name === name) {
+      P.recoveryOffer = null;
+      $("p-recover").classList.add("hidden");
+      request(false);
+    }
     P.name = name;
     await claimSlot();
     P.doc = r.project;
@@ -1831,7 +1837,7 @@ async function newProject() {
 }
 
 async function autosave(reason = "settle") {
-  if (!D.ready || P.saving || P.autosaving || P.slotShared || P.recoveryOffer?.name === slotName()) return;
+  if (!D.ready || P.saving || P.autosaving || P.slotShared || P.recoveryCheck || P.recoveryOffer?.name === slotName()) return;
   updateDirty();
   const name = slotName();
   if (!P.dirty) {
@@ -1959,7 +1965,7 @@ async function holdSlot(name) {
   const release = await new Promise((resolve) => {
     navigator.locks.request(`gf-slot:${name}`, { ifAvailable: true }, (lock) => (lock ? new Promise((done) => resolve(done)) : resolve(null)));
   });
-  if (!release) return false;
+  if (!release) return P.slotLock?.name === name;
   P.slotLock = { name, release };
   return true;
 }
@@ -1990,10 +1996,16 @@ async function claimSlot() {
 }
 
 async function offerRecovery() {
-  if (!(await claimSlot()) || P.recovered) return;
-  let slot = null;
-  try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
-  if (!slot) return;
+  P.recoveryCheck = (P.recoveryCheck || 0) + 1;
+  try {
+    if (!(await claimSlot()) || P.recovered) return;
+    let slot = null;
+    try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
+    if (slot) showRecovery(slot);
+  } finally { P.recoveryCheck--; }
+}
+
+function showRecovery(slot) {
   P.recoveryOffer = slot;
   $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: localTime(slot.modified) });
   $("p-recover").classList.remove("hidden");
@@ -2017,8 +2029,10 @@ function buildProjectControls() {
     if (!(await confirmDiscard(tr("designer.frag.switching")))) return;
     leave(projectUrl(P.name, { character: li.dataset.i }));
   });
-  $("p-restore").addEventListener("click", () => {
+  $("p-restore").addEventListener("click", async () => {
     const name = P.recoveryOffer?.name || slotName();
+    updateDirty();
+    if (P.dirty && !(await dialog({ title: tr("designer.unsaved"), note: tr("designer.restore_note", { name: P.name || tr("designer.untitled") }), ok: tr("designer.discard_changes") }))) return;
     $("p-recover").classList.add("hidden");
     leave(projectUrl(name, { recovery: 1, ...(name === "untitled" ? { store } : {}) }));
   });

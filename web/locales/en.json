@@ -359,6 +359,7 @@
  "designer.copied": "Address copied",
  "designer.discard_changes": "Discard changes",
  "designer.discard_note": "{name} has unsaved changes; {what} discards them (its autosave stays recoverable until you save or discard it).",
+ "designer.restore_note": "{name} has changes made while the kept work was on offer, and they were not autosaved; restoring the kept work discards them.",
  "designer.doc_title": "{dirty}{name} - GazeForge Designer",
  "designer.edit": "Edit",
  "designer.elevation": "Elevation",
