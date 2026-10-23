@@ -1183,7 +1183,7 @@
  "wizard.cannot_read": "Cannot read {path}",
  "wizard.default": "(Default)",
  "wizard.dev": "Developer tasks",
- "wizard.dev_title": "Tasks that serve building GazeForge itself: macro tools, raw dense-base gates",
+ "wizard.dev_title": "Tasks that serve building GazeForge itself (macro tools, raw dense-base gates), and every command option under Advanced, not only the task's own",
  "wizard.earlier": "From earlier steps ({n})",
  "wizard.exported_label": "Exported {name} (+0.3 m x)",
  "wizard.exported_toast": "Exported {name}: {triangles} triangles, drawn 0.3 m to the side",

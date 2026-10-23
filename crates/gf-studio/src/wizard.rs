@@ -190,7 +190,7 @@ impl Wizards {
             })
             .collect();
         for (name, schema) in props {
-            if !defined.iter().any(|f| f["name"] == name.as_str()) {
+            if self.developer && !defined.iter().any(|f| f["name"] == name.as_str()) {
                 out.push((name.clone(), tr_or(&format!("wizard.field.{name}"), &humanize(&name)).to_string(), false, schema));
             }
         }
@@ -691,8 +691,10 @@ impl Wizards {
     }
 
     fn field_ui(&mut self, ui: &mut egui::Ui, name: &str, label: &str, schema: &Value) {
-        let tip = schema["description"].as_str().unwrap_or_default();
-        ui.label(label).on_hover_text(tip);
+        let (short, more) = label.split_once(" (").map_or((label, ""), |(s, m)| (s, m.trim_end_matches(')')));
+        let described = schema["description"].as_str().unwrap_or_default();
+        let tip = [more, described].iter().filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join("\n");
+        ui.label(short).on_hover_text(tip);
         if let Some(options) = schema["enum"].as_array() {
             let cur = self.text.entry(name.to_string()).or_default();
             egui::ComboBox::from_id_salt(("wz_enum", name)).selected_text(cur.clone()).show_ui(ui, |ui| {

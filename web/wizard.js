@@ -108,8 +108,11 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   function widget(i, name, label, schema, f) {
     const v = current(i, name);
     const id = `wz-f-${i}-${name}`;
-    const tip = esc(schema.description || "");
-    const lab = `<label for="${id}" title="${tip}">${esc(tr(`wizard.${W.def.id}.${stepDef(i).id}.${name}`, null, label || name))}</label>`;
+    const full = tr(`wizard.${W.def.id}.${stepDef(i).id}.${name}`, null, label || name);
+    const cut = full.indexOf(" (");
+    const short = cut > 0 ? full.slice(0, cut) : full, more = cut > 0 ? full.slice(cut + 2).replace(/\)$/, "") : "";
+    const tip = esc([more, schema.description || ""].filter(Boolean).join("\n"));
+    const lab = `<label for="${id}" title="${tip}">${esc(short)}</label>`;
     if (Array.isArray(schema.enum)) {
       return `<div class="wz-row">${lab}<select id="${id}" data-name="${esc(name)}" data-kind="enum"><option value=""></option>${schema.enum.map((o) =>
         `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>`;
@@ -139,7 +142,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const visible = (s.fields || []).filter((f) => !f.hidden);
     const named = new Set((s.fields || []).map((f) => f.name));
     const common = visible.filter((f) => f.common), advanced = visible.filter((f) => !f.common);
-    const rest = Object.keys(s.input_schema?.properties || {}).filter((n) => !named.has(n));
+    const rest = W.dev ? Object.keys(s.input_schema?.properties || {}).filter((n) => !named.has(n)) : [];
     const hidden = (s.fields || []).filter((f) => f.hidden).map((f) => `<div class="wz-row wz-bound"><label>${esc(tr(`wizard.field.${f.name}`, null, humanize(f.name)))}</label><code>${esc(JSON.stringify(current(i, f.name) ?? null))}</code></div>`);
     box.querySelector(".wz-body").innerHTML = `
       <p class="wz-help">${esc(tr(`wizard.${W.def.id}.${s.id}.help`, null, s.help || s.summary || ""))}</p>
