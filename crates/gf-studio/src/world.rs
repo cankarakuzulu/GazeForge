@@ -60,6 +60,9 @@ pub struct World {
     anchor_values: Option<Values>,
     pub samples_info: BTreeMap<String, Value>,
     reference_wanted: bool,
+    pub ref_source: &'static str,
+    start_positions: Option<Vec<f32>>,
+    neutral_ref: Option<Vec<f32>>,
     pub saved: Option<Result<Value, String>>,
     pub log: Vec<String>,
     pub hud: Hud,
@@ -133,6 +136,9 @@ impl Default for World {
             anchor_values: None,
             samples_info: BTreeMap::new(),
             reference_wanted: false,
+            ref_source: "neutral",
+            start_positions: None,
+            neutral_ref: None,
             saved: None,
             log: Vec::new(),
             hud: Hud::default(),
@@ -466,6 +472,8 @@ impl World {
                         self.anchor_at = Some(now);
                         self.anchor_release = None;
                         self.reference_wanted = false;
+                        self.start_positions = self.session.as_ref().map(|s| s.head.positions.clone());
+                        self.neutral_ref = None;
                         self.hud.settle_latency.clear();
                         self.note(trf("studio.note.loaded", &[("ms", &format!("{load_ms:.0}"))]));
                         self.load_result = Some(Ok(summary));
@@ -587,8 +595,12 @@ impl World {
                 }
                 match result {
                     Ok(r) => {
-                        if let Some(s) = self.session.as_mut() {
+                        self.neutral_ref = Some(r.clone());
+                        if self.ref_source == "neutral"
+                            && let Some(s) = self.session.as_mut()
+                        {
                             s.head.reference = Some(r);
+                            s.head.reference_rev += 1;
                         }
                     }
                     Err(e) => self.note(trf("designer.reference_failed", &[("error", &e)])),
@@ -696,12 +708,39 @@ impl World {
     }
 
     fn want_reference(&mut self) {
-        let Some(s) = &self.session else { return };
-        if s.head.reference.is_some() || self.reference_wanted {
+        let Some(s) = self.session.as_mut() else { return };
+        if s.head.reference.is_some() {
+            return;
+        }
+        let ready = match self.ref_source {
+            "start" => self.start_positions.clone(),
+            "snapshot" => Some(s.head.positions.clone()),
+            _ => self.neutral_ref.clone(),
+        };
+        if let Some(r) = ready {
+            s.head.reference = Some(r);
+            s.head.reference_rev += 1;
+            return;
+        }
+        if self.ref_source != "neutral" || self.reference_wanted {
             return;
         }
         self.reference_wanted = true;
-        self.jobs.send(self.epoch, Job::Reference { input: s.reference_input() });
+        let input = s.reference_input();
+        self.jobs.send(self.epoch, Job::Reference { input });
+    }
+
+    pub fn set_reference(&mut self, source: &str) {
+        self.ref_source = match source {
+            "start" => "start",
+            "snapshot" => "snapshot",
+            _ => "neutral",
+        };
+        if let Some(s) = self.session.as_mut() {
+            s.head.reference = None;
+            s.head.reference_rev += 1;
+        }
+        self.want_reference();
     }
 
     pub fn shape_event(&mut self, ev: ShapeEvent) {

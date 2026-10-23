@@ -216,6 +216,7 @@ pub struct Head {
     pub normals: Vec<f32>,
     pub wind: f32,
     pub reference: Option<Vec<f32>>,
+    pub reference_rev: u64,
     pub revision: u64,
     pub eyes: Option<EyeMesh>,
     pub chart: Option<std::sync::Arc<Vec<f32>>>,
@@ -407,7 +408,7 @@ impl Session {
         }
         timings.insert("lods_ms".into(), ms(t));
         let n = scene.vertices;
-        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, revision: 0, eyes, chart: None };
+        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, reference_rev: 0, revision: 0, eyes, chart: None };
         let targets = sl["targets"].as_array().map_or(0, |a| a.len());
         let mut s = Session {
             store: store.to_string(),

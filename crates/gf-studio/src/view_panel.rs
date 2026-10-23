@@ -156,6 +156,8 @@ impl crate::studio::Studio<'_> {
         egui::CollapsingHeader::new(tr("studio.view_section")).id_salt("view_section").default_open(false).show(ui, |ui| {
             ui.spacing_mut().slider_width = 90.0;
             self.visibility_ui(ui);
+            let current_ref = self.world.ref_source;
+            let mut ref_choice: Option<&'static str> = None;
             let st = &mut self.world.state;
             egui::CollapsingHeader::new(tr("ui.render")).id_salt("view_render").default_open(false).show(ui, |ui| {
                 let o = &mut st.opts;
@@ -173,6 +175,19 @@ impl crate::studio::Studio<'_> {
                 slider(ui, tr("ui.quality_range"), &mut o.heat.quality, 5.0..=60.0, 1.0);
                 slider(ui, tr("ui.displacement_range"), &mut o.heat.displacement, 0.1..=20.0, 0.1);
                 slider(ui, tr("ui.curvature_range"), &mut o.heat.curvature, 5.0..=300.0, 1.0);
+                ui.horizontal(|ui| {
+                    ui.label(tr("ui.displacement_reference"));
+                    egui::ComboBox::from_id_salt("ref_source").selected_text(tr(&format!("ui.option.{current_ref}"))).show_ui(ui, |ui| {
+                        for s in ["start", "neutral", "snapshot"] {
+                            if ui.selectable_label(current_ref == s, tr(&format!("ui.option.{s}"))).clicked() {
+                                ref_choice = Some(s);
+                            }
+                        }
+                    });
+                });
+                if ui.button(tr("ui.ref-now")).clicked() {
+                    ref_choice = Some("snapshot");
+                }
                 ui.label(egui::RichText::new(tr("ui.quality_colours_the_smallest_angle_of_ea")).weak());
             });
             egui::CollapsingHeader::new(tr("ui.camera_active_viewport")).id_salt("view_camera").default_open(false).show(ui, |ui| {
@@ -268,6 +283,9 @@ impl crate::studio::Studio<'_> {
                 .on_hover_text(tr("ui.the_eye_spheres_while_the_face_grid_is_o.title"));
                 ui.checkbox(&mut o.normal_grid, tr("action.mm_grid"));
             });
+            if let Some(s) = ref_choice {
+                self.world.set_reference(s);
+            }
         });
     }
 }

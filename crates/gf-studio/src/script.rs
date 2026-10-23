@@ -825,6 +825,14 @@ impl Offscreen {
                 w.tick();
                 json!({"result": out, "state": w.pins_state(), "markers": w.pin_markers().len()})
             }
+            "reference" => {
+                w.set_reference(text("source").ok_or("reference needs source: start, neutral or snapshot")?);
+                w.wait(|w| w.session.as_ref().is_some_and(|s| s.head.reference.is_some()), num("seconds").unwrap_or(120.0))?;
+                let s = w.session.as_ref().ok_or("reference needs a loaded character")?;
+                let r = s.head.reference.as_ref().ok_or("no reference")?;
+                let moved = r.chunks_exact(3).zip(s.head.positions.chunks_exact(3)).map(|(a, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()).fold(0.0f32, f32::max);
+                json!({"source": w.ref_source, "max_mm": moved * 1000.0})
+            }
             "visibility" => {
                 match text("do").unwrap_or("list") {
                     "hide" | "show" => {

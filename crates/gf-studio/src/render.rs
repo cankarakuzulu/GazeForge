@@ -103,6 +103,7 @@ struct GpuHead {
     nrm: wgpu::Buffer,
     refp: wgpu::Buffer,
     has_ref: bool,
+    ref_rev: u64,
     lods: Vec<GpuLod>,
     revision: u64,
     wind: f32,
@@ -610,7 +611,7 @@ impl Renderer {
                 })
                 .collect();
             let eyes = head.eyes.as_ref().filter(|e| !e.indices.is_empty()).map(|e| self.make_eyes(device, e));
-            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes, chart, chart_of });
+            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), ref_rev: head.reference_rev, lods, revision: head.revision, wind: head.wind, n: head.n, eyes, chart, chart_of });
             return;
         }
         let want = head.eyes.as_ref().filter(|e| !e.indices.is_empty());
@@ -629,9 +630,12 @@ impl Renderer {
             g.revision = head.revision;
             g.wind = head.wind;
         }
-        if let (Some(r), false) = (&head.reference, g.has_ref) {
-            queue.write_buffer(&g.refp, 0, &f32_bytes(r));
-            g.has_ref = true;
+        if g.ref_rev != head.reference_rev || g.has_ref != head.reference.is_some() {
+            if let Some(r) = head.reference.as_ref().filter(|r| r.len() == g.n * 3) {
+                queue.write_buffer(&g.refp, 0, &f32_bytes(r));
+            }
+            g.has_ref = head.reference.is_some();
+            g.ref_rev = head.reference_rev;
         }
         let chart = head.chart.as_ref().filter(|c| c.len() == g.n * 3);
         let chart_of = chart.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
