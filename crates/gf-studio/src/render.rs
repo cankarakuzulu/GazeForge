@@ -123,6 +123,7 @@ struct GpuEyes {
 struct GpuExtra {
     key: u64,
     tri: u32,
+    verts: u32,
     bind: wgpu::BindGroup,
     colour: [f32; 3],
 }
@@ -180,6 +181,7 @@ enum Draw {
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
     Extra(bool, u32, usize),
+    ExtraPoints(u32, usize),
 }
 
 struct PassPlan {
@@ -517,7 +519,7 @@ impl Renderer {
             layout: &self.g1,
             entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
         });
-        GpuExtra { key: e.key, tri: tri as u32, bind, colour: e.colour }
+        GpuExtra { key: e.key, tri: tri as u32, verts: verts as u32, bind, colour: e.colour }
     }
 
     fn make_eyes(&self, device: &wgpu::Device, e: &crate::session::EyeMesh) -> GpuEyes {
@@ -839,7 +841,11 @@ impl Renderer {
                 let mut u = base;
                 u[148..151].copy_from_slice(&[0.95, 0.35, 0.10]);
                 u[107] = (o.point_size * self.dpr) as f32;
-                last.draws.push(Draw::Points(chunk(u, &mut uni), lod));
+                let c = chunk(u, &mut uni);
+                last.draws.push(Draw::Points(c, lod));
+                for k in 0..self.extras.len() {
+                    last.draws.push(Draw::ExtraPoints(c, k));
+                }
             }
             if o.light_gizmo {
                 let (dirs, cols) = viewer::lights_world(o, &m);
@@ -991,6 +997,13 @@ impl Renderer {
                             pass.set_bind_group(1, &x.bind, &[]);
                             pass.set_bind_group(2, white.expect("material default"), &[]);
                             pass.draw(0..x.tri * 3, 0..1);
+                        }
+                        Draw::ExtraPoints(c, k) => {
+                            let x = &self.extras[*k];
+                            pass.set_pipeline(&self.point);
+                            pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
+                            pass.set_bind_group(1, &x.bind, &[]);
+                            pass.draw(0..x.verts * 6, 0..1);
                         }
                         Draw::Points(c, lod) => {
                             let g = self.head.as_ref().expect("head");
