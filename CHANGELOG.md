@@ -320,6 +320,36 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Kept work and autosave, from a review of both clients.** Saving the project whose recovery is on offer now ends
+  the offer and starts autosaving again; in both clients it used to stop autosave for the rest of the session. Save
+  As from an untitled project keeps the untitled recovery that is on offer; it used to delete it unasked. Restore in
+  the browser asks first when there are edits since the offer appeared, as the studio does. Reopening an untitled
+  page could autosave over the kept untitled work before the offer appeared; autosave now waits for that check. A
+  browser tab that is handed the recovery slot during a save no longer discards the other tab's untitled recovery,
+  and a tab that is handed the slot while it asks for it no longer waits on its own lock.
+- **Hidden meshes and regions.** A hidden body or garment stays hidden when it is stitched again (in the studio
+  that showed it again and added an undo step nobody made). Both clients keep a garment's hidden state by its asset,
+  not by its place in the list, so unwearing one item no longer shows a hidden one or hides the next one worn. In the
+  studio a hidden head takes no clicks (probe, hover, the
+  double-click pivot, pins, skin paint), hidden face regions take none either, and neither draws grid labels or
+  points. Probe and hover no longer go through the eyes or a body or garment in front of the head, and name what
+  they hit. Hide-box changes are undo steps, labelled as in the browser. Loading another character shows every mesh and region again, drops a probe
+  that was waiting for the grid and its card, and tries a failed face chart again.
+- **Studio View and lighting.** The sliders, and the toolbar's clip offset, no longer round a value set by a script
+  or a project to their step. Grid labels follow every clip-plane setting and the hide box (they stayed for the old cut), the
+  eye chart follows the eyes in the same frame (it was one change behind), the hover chip shows the cell under the
+  last pointer position, and the orthographic millimetre grid is drawn only when both screen axes line up with the
+  model, as in the browser (it drew half a grid).
+- **Studio projects and tasks.** New starts without the previous project's pins and with default stitch and
+  timeline settings, as the browser's New does. Pin export refuses, naming the pins,
+  when a pin no longer lands on the head (it left them out and reported success). Bake no longer takes the glb of an
+  export run that was still open for the character loaded before. The Make an eyes file task shows its store and
+  catalog fields, so it runs without a loaded character.
+- **Browser projects.** An explicit empty `face_prefix` is saved with the project and kept when it is opened (it
+  went back to `faceunits/`). The Body shape panel lists the store's wearables after a failed wearable list is
+  retried (it showed an empty list).
+- **Notices for the browser wasm.** `THIRD_PARTY.md` now also lists the Rust standard library, `dlmalloc` and
+  `compiler_builtins`, which are compiled into the wasm, with their licence texts.
 - **Hiding the rest of the head cut holes at the temples.** Two small areas beside the outer eye corners belonged to
   no face region (no region target moves them by 35 % of its largest move), so they hid with the rest of the head. A
   region-less area of at most 40 connected vertices now takes the category of its strongest target; the back of the
