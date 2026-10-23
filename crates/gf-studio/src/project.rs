@@ -282,6 +282,10 @@ impl World {
         let Some(s) = &self.session else { return };
         let (store, mac, eyes) = (s.store.clone(), s.macro_file.clone(), s.eyes_file.clone());
         self.project_detach();
+        let (s, t) = (crate::stitch::Stitch::default(), crate::timeline::Timeline::default());
+        (self.stitch.store, self.stitch.body, self.stitch.values, self.stitch.show, self.stitch.seam, self.stitch.auto) = (s.store, s.body, s.values, s.show, s.seam, s.auto);
+        (self.timeline.file, self.timeline.source, self.timeline.glb, self.timeline.out) = (t.file, t.source, t.glb, t.out);
+        (self.timeline.speed, self.timeline.looping, self.timeline.apply_head) = (t.speed, t.looping, t.apply_head);
         self.project.status = tr("designer.project_unsaved").into();
         self.request_load_with(&store, None, None, mac.as_deref(), eyes.as_deref(), None);
     }
@@ -398,6 +402,10 @@ impl World {
             self.project.prior = None;
             if let Some(p) = self.project.pending_panels.take() {
                 self.apply_panel_states(&p);
+                self.journal.rebase_panels();
+            } else if self.project.doc.is_none() && !self.pins.is_empty() {
+                self.pins.clear();
+                self.pins_next = 1;
                 self.journal.rebase_panels();
             }
             self.project.saved_sig = Some(self.project_sig());
