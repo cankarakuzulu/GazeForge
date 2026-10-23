@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The browser opened without a store was a dead end.** It now shows a start card: a store folder and an optional
+  macro file (remembered from the last visit in this browser; Enter or Open loads them), Set up a store… (opens Tasks)
+  and the saved projects, each opening on a click. The viewport no longer says "Approximate preview" on an empty
+  page.
 - **Every wearable carried a short hash in its name.** Both clients name an item by its name alone and add the
   first 8 hex digits of its reference only when another item in the store has the same name ("male_casualsuit01",
   but "cape (47c7634b)" beside a second cape).

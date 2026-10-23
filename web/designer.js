@@ -1867,6 +1867,41 @@ function relinkDialog(unresolved, message, given) {
   });
 }
 
+async function startCard() {
+  const card = document.createElement("div");
+  card.className = "start-card";
+  card.innerHTML = `<h2>${tr("designer.start.title")}</h2><p class="note">${tr("designer.start.note")}</p>
+    <label>${tr("designer.start.store")}<input id="sc-store" type="text" placeholder="${tr("designer.start.store_hint")}"></label>
+    <label>${tr("designer.start.macro")}<input id="sc-macro" type="text" placeholder="${tr("designer.start.macro_hint")}"></label>
+    <div class="buttons"><button id="sc-open">${tr("designer.start.open")}</button><button id="sc-setup">${tr("designer.start.setup")}</button></div>
+    <h3>${tr("designer.start.projects")}</h3><div id="sc-projects" class="note">${tr("designer.start.no_projects")}</div>`;
+  $("view").appendChild(card);
+  const remembered = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+  $("sc-store").value = remembered("gf.lastStore");
+  $("sc-macro").value = remembered("gf.lastMacro");
+  const open = () => {
+    const s = $("sc-store").value.trim(), m = $("sc-macro").value.trim();
+    if (!s) { $("sc-store").focus(); return; }
+    location.search = new URLSearchParams(m ? { store: s, macro: m } : { store: s }).toString();
+  };
+  $("sc-open").addEventListener("click", open);
+  for (const id of ["sc-store", "sc-macro"]) $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+  $("sc-setup").addEventListener("click", () => D.wizards.open().catch((e) => toast(tr("designer.err.tasks", { error: e.message }))));
+  try {
+    const projects = (await api("project.list", rootArg())).projects.filter((p) => !p.error);
+    if (projects.length) {
+      const box = $("sc-projects");
+      box.textContent = "";
+      for (const p of projects) {
+        const b = document.createElement("button");
+        b.textContent = tr("designer.project_row", { name: p.name, modified: localTime(p.modified), count: p.characters });
+        b.addEventListener("click", () => { location.search = new URLSearchParams({ project: p.name }).toString(); });
+        box.appendChild(b);
+      }
+    }
+  } catch {}
+}
+
 function localTime(iso) {
   return Number.isNaN(Date.parse(iso)) ? iso : new Date(iso).toLocaleString();
 }
@@ -1998,8 +2033,11 @@ async function main() {
   const doc = await loadProjectDoc();
   if (!store) {
     setStatus("preview", tr("designer.no_store"));
+    $("label").textContent = "";
+    startCard();
     return;
   }
+  try { localStorage.setItem("gf.lastStore", store); if (opt("macro")) localStorage.setItem("gf.lastMacro", opt("macro")); } catch {}
   const startFrom = doc ? { character: doc.characters[P.active].spec } : { spec: opt("spec") };
   const sl = await api("designer.sliders", { store, ...startFrom, macro: opt("macro"), game: opt("game") });
   D.base = { pack: sl.pack, catalog: sl.catalog, game: sl.game };
