@@ -176,7 +176,7 @@ fn bind_garment() -> Value {
                  {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "spec", "label": "The character it was modelled on (spec)", "bind": "$run.spec", "common": true},
                  {"name": "obj", "label": "Garment .obj", "common": true},
-                 {"name": "base", "label": "MakeHuman base.obj", "common": true},
+                 {"name": "base", "label": "MakeHuman base.obj", "bind": "$run.base", "common": true},
                  {"name": "macro", "label": "Macro definition", "bind": "$run.macro", "common": true},
                  {"name": "diffuse", "label": "Colour texture (.png)"},
                  {"name": "name", "label": "Name"},
@@ -220,7 +220,7 @@ fn groom_cards() -> Value {
              "fields": [
                  {"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
                  {"name": "spec", "label": "Character with the groom (spec)", "bind": "$run.spec", "common": true},
-                 {"name": "base", "label": "MakeHuman base.obj", "common": true},
+                 {"name": "base", "label": "MakeHuman base.obj", "bind": "$run.base", "common": true},
                  {"name": "macro", "label": "Macro definition", "bind": "$run.macro", "common": true},
                  {"name": "groom", "label": "Groom file (instead of the character's own)"},
                  {"name": "cards", "label": "Cards"},
@@ -575,8 +575,20 @@ pub fn start(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let n = (1..).find(|n| !base.join(format!("{id}-{n}")).exists()).unwrap_or(1);
     let run = format!("{name}/{id}-{n}");
     let dir = base.join(format!("{id}-{n}"));
-    write_json(&dir.join("run.json"), &json!({"format": FORMAT, "wizard": id, "run": run, "values": input.get("values").cloned().unwrap_or_else(|| json!({})), "started": project::now_utc()}))?;
+    let mut values = input.get("values").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if values.get("base").and_then(Value::as_str).is_none_or(str::is_empty)
+        && let Some(obj) = values.get("macro").and_then(Value::as_str).and_then(makehuman_base_obj)
+    {
+        values["base"] = json!(obj);
+    }
+    write_json(&dir.join("run.json"), &json!({"format": FORMAT, "wizard": id, "run": run, "values": values, "started": project::now_utc()}))?;
     state_of(ctx, &dir)
+}
+
+fn makehuman_base_obj(macro_file: &str) -> Option<String> {
+    let data = Path::new(macro_file).parent()?.parent()?.parent()?;
+    let obj = data.join("3dobjs").join("base.obj");
+    obj.is_file().then(|| obj.to_string_lossy().replace('\\', "/"))
 }
 
 pub fn runs_input() -> Value {
@@ -875,6 +887,27 @@ mod tests {
         let given = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"store": "S", "spec": "mine.gfchar.json"}})).unwrap();
         std::fs::write(PathBuf::from(given["dir"].as_str().unwrap()).join(SAVED_CHARACTER), "{}").unwrap();
         assert_eq!(state(&ctx, &json!({"run": given["run"]})).unwrap()["steps"][0]["proposed"]["spec"], "mine.gfchar.json", "a spec given at the start wins");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn makehuman_s_base_obj_is_found_beside_its_macro_file() {
+        let root = std::env::temp_dir().join(format!("gf-wizard-baseobj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("mh").join("data");
+        std::fs::create_dir_all(data.join("targets").join("macrodetails")).unwrap();
+        std::fs::create_dir_all(data.join("3dobjs")).unwrap();
+        let macro_file = data.join("targets").join("macrodetails").join("macro.json");
+        std::fs::write(&macro_file, "{}").unwrap();
+        let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.join("projects") };
+        let macro_text = macro_file.to_string_lossy().to_string();
+        let s = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"macro": macro_text}})).unwrap();
+        assert!(s["steps"][0]["proposed"]["base"].is_null(), "no base.obj there yet, so none is proposed: {}", s["steps"][0]["proposed"]);
+        std::fs::write(data.join("3dobjs").join("base.obj"), "v 0 0 0\n").unwrap();
+        let s = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"macro": macro_text}})).unwrap();
+        assert!(s["steps"][0]["proposed"]["base"].as_str().is_some_and(|b| b.ends_with("3dobjs/base.obj")), "{}", s["steps"][0]["proposed"]);
+        let s = start(&ctx, &json!({"wizard": "groom_cards", "project": "demo", "values": {"macro": macro_text, "base": "mine.obj"}})).unwrap();
+        assert_eq!(s["steps"][0]["proposed"]["base"], "mine.obj", "a given base.obj wins");
         let _ = std::fs::remove_dir_all(&root);
     }
 

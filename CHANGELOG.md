@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Hair cards and garment fitting asked for MakeHuman's base.obj by hand.** Both tasks now find it beside the macro
+  definition the client was opened with (`data/3dobjs/base.obj` of the same MakeHuman install), so "Make game hair
+  cards…" opens ready to run; a base.obj you give wins, and none is proposed when the file is not there.
 - **Browser usability, from a UX review.** Typing into a number box (wearable layer, openings, every grown-hair
   setting) also fired the viewport's keys: "25" became "2" and the view switched to orthographic. Number boxes, menus
   and text areas now keep their keys. A character with a body now stitches when it opens, re-stitches after each
