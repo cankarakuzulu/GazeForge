@@ -28,11 +28,22 @@ pub fn native(pick: &Pick, near: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-fn filtered(d: rfd::FileDialog, ext: &str) -> rfd::FileDialog {
-    match ext.rsplit('.').next().filter(|e| !e.is_empty()) {
-        Some(e) => d.add_filter(ext.trim_start_matches('.'), &[e]),
-        None => d,
+fn extensions(ext: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in ext.split([' ', ',']).filter_map(|t| t.rsplit('.').next()).filter(|e| !e.is_empty()) {
+        if !out.iter().any(|x| x == e) {
+            out.push(e.to_string());
+        }
     }
+    out
+}
+
+fn filtered(d: rfd::FileDialog, ext: &str) -> rfd::FileDialog {
+    let exts = extensions(ext);
+    if exts.is_empty() {
+        return d;
+    }
+    d.add_filter(ext.trim(), &exts).add_filter(tr("studio.browse_all"), &["*"])
 }
 
 fn start_dir(p: &Path) -> Option<PathBuf> {
@@ -148,6 +159,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         None
+    }
+
+    #[test]
+    fn every_extension_of_a_field_is_offered() {
+        assert_eq!(extensions(".png .jpg"), ["png", "jpg"]);
+        assert_eq!(extensions(".gfchar.json"), ["json"]);
+        assert_eq!(extensions(".glb"), ["glb"]);
+        assert_eq!(extensions(".png,.jpg .png"), ["png", "jpg"]);
+        assert!(extensions("").is_empty());
     }
 
     #[test]

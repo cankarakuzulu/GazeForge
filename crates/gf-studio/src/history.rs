@@ -153,8 +153,8 @@ impl World {
         for (i, c) in CONTROLS.iter().enumerate() {
             self.stitch.values[i] = s["values"][i].as_f64().map_or(c.4, |x| x.clamp(c.1, c.2));
         }
-        self.stitch.seam = s["seam"] != false;
-        self.stitch.auto = s["auto"] == true;
+        self.stitch.seam = s["seam"] == true;
+        self.stitch.auto = s["auto"] != false;
         self.stitch.store = s["store"].as_str().unwrap_or_default().to_string();
         self.stitch.body = s["body"].as_str().unwrap_or_default().to_string();
         if before != (self.stitch.values, self.stitch.seam) {

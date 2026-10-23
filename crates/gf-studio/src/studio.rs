@@ -174,7 +174,7 @@ impl Studio<'_> {
             self.s.status = tr("studio.store_needed").into();
             return;
         }
-        if self.world.project_dirty() {
+        if self.world.loading.is_none() && self.world.project_dirty() {
             self.s.load_ask = Some(a);
         } else {
             self.load_now(a);

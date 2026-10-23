@@ -123,15 +123,16 @@ impl World {
             self.stitch.store = stitch_store.or_else(|| src["store"].as_str().map(str::to_string)).unwrap_or_default();
             self.stitch.body = stitch_body.or_else(|| src["body"].as_str().map(str::to_string)).unwrap_or_default();
             self.stitch.show = s["show"] != false;
-            self.stitch.seam = s["seam"] != false;
-            self.stitch.auto = s["auto"] == true;
+            self.stitch.seam = s["seam"] == true;
+            self.stitch.auto = s["auto"] != false;
             for (i, c) in CONTROLS.iter().enumerate() {
                 self.stitch.values[i] = s["values"][c.0].as_f64().map_or(c.4, |v| v.clamp(c.1, c.2));
             }
             self.stitch.last = None;
             self.stitch.stale = false;
             self.stitch_draw();
-            if s["stitched"] == true && !self.stitch.body.is_empty() {
+            let spec_body = self.session.as_ref().is_some_and(|x| !x.character.body.is_null());
+            if (s["stitched"] == true && !self.stitch.body.is_empty()) || (spec_body && self.stitch.auto && self.stitch.show) {
                 self.stitch_go();
             }
         }
@@ -168,7 +169,7 @@ impl World {
     }
 
     pub fn project_sig(&self) -> String {
-        gf_api::text(&json!({"c": self.character_input(), "p": self.panel_states(), "n": self.project.notes}))
+        gf_api::text(&json!({"c": self.character_input(), "p": self.panel_states(), "n": self.project.notes, "o": self.face_morphs}))
     }
 
     pub fn project_dirty(&self) -> bool {
@@ -264,8 +265,12 @@ impl World {
 
     pub fn project_detach(&mut self) {
         let mut old = std::mem::take(&mut self.project);
-        old.prior = None;
-        self.project = Project { list: std::mem::take(&mut old.list), recoveries: std::mem::take(&mut old.recoveries), prior: Some(Box::new(old)), ..Project::default() };
+        let (list, recoveries) = (std::mem::take(&mut old.list), std::mem::take(&mut old.recoveries));
+        let prior = match old.prior.take() {
+            Some(kept) if old.saved_sig.is_none() => kept,
+            _ => Box::new(old),
+        };
+        self.project = Project { list, recoveries, prior: Some(prior), ..Project::default() };
         self.project.pending_epoch = Some(self.epoch);
     }
 

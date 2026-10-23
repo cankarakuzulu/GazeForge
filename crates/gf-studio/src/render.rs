@@ -180,7 +180,7 @@ enum Draw {
     EyePart(u32, usize, bool),
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
-    Extra(bool, u32, usize),
+    Extra(MeshPipe, u32, usize),
     ExtraPoints(u32, usize),
 }
 
@@ -798,7 +798,7 @@ impl Renderer {
                     u[88] = 0.0;
                 }
                 u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, if o.seams { 1.0 } else { 0.0 }]);
-                first.draws.push(Draw::Extra(false, chunk(u, &mut uni), k));
+                first.draws.push(Draw::Extra(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, chunk(u, &mut uni), k));
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
@@ -835,7 +835,7 @@ impl Renderer {
                 let c = chunk(u, &mut uni);
                 last.draws.push(Draw::Mesh(MeshPipe::Xray, c, lod, false));
                 for k in 0..self.extras.len() {
-                    last.draws.push(Draw::Extra(true, c, k));
+                    last.draws.push(Draw::Extra(MeshPipe::Xray, c, k));
                 }
             }
             if has_head && o.points {
@@ -991,9 +991,15 @@ impl Renderer {
                             pass.set_bind_group(2, bind.or(white).expect("material default"), &[]);
                             pass.draw(first * 3..(first + count) * 3, 0..1);
                         }
-                        Draw::Extra(xray, c, k) => {
+                        Draw::Extra(pipe, c, k) => {
                             let x = &self.extras[*k];
-                            pass.set_pipeline(&self.mesh[if *xray { 3 } else { 0 }]);
+                            let i = match pipe {
+                                MeshPipe::Plain => 0,
+                                MeshPipe::Biased => 1,
+                                MeshPipe::Stencil => 2,
+                                MeshPipe::Xray => 3,
+                            };
+                            pass.set_pipeline(&self.mesh[i]);
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &x.bind, &[]);
                             pass.set_bind_group(2, white.expect("material default"), &[]);

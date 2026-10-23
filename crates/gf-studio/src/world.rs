@@ -434,7 +434,7 @@ impl World {
                         self.hud.settle_latency.clear();
                         self.note(trf("studio.note.loaded", &[("ms", &format!("{load_ms:.0}"))]));
                         self.load_result = Some(Ok(summary));
-                        if self.session.as_ref().is_some_and(|s| !s.character.body.is_null()) {
+                        if self.project.pending_panels.is_none() && self.stitch.auto && self.stitch.show && self.session.as_ref().is_some_and(|s| !s.character.body.is_null()) {
                             self.stitch_go();
                         }
                         if self.state.vp.iter().any(|v| v.mode == DISPLACEMENT) {

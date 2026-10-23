@@ -25,7 +25,7 @@ pub struct Wizards {
     flags: BTreeMap<String, bool>,
     error: Option<String>,
     progress: Option<Value>,
-    since: Option<(usize, Instant)>,
+    since: Option<(String, Instant)>,
     polled: Option<Instant>,
     images: BTreeMap<String, Option<egui::TextureHandle>>,
     pub open_spec: Option<(String, String)>,
@@ -35,6 +35,7 @@ pub struct Wizards {
     runs: Option<Vec<Value>>,
     pending: Option<Receiver<Result<Value, String>>>,
     last_glb: Option<String>,
+    glb_epoch: u64,
     browse: Browse,
 }
 
@@ -129,6 +130,9 @@ impl Wizards {
 
     fn remember_glb(&mut self) {
         let Some(st) = &self.state else { return };
+        if self.def.as_ref().is_none_or(|d| d["id"] != "export") {
+            return;
+        }
         let found = st["steps"].as_array().into_iter().flatten().filter_map(|s| s["result"]["out"].as_str()).rfind(|o| o.ends_with(".glb"));
         if let Some(o) = found {
             self.last_glb = Some(o.to_string());
@@ -380,6 +384,10 @@ impl Wizards {
             Ok(false) => {}
             Err(e) => self.error = Some(e),
         }
+        if self.glb_epoch != world.epoch {
+            self.glb_epoch = world.epoch;
+            self.last_glb = None;
+        }
         self.remember_glb();
         let mut open = self.open;
         let title = self.def.as_ref().map_or_else(|| tr("ui.wz-title").to_string(), |d| tr_or(&format!("wizard.{}.title", d["id"].as_str().unwrap_or("")), d["title"].as_str().unwrap_or("")).to_string());
@@ -601,10 +609,11 @@ impl Wizards {
                     }
                     if st["state"] == "running" {
                         let p = self.progress.clone().unwrap_or(Value::Null);
-                        if self.since.is_none_or(|(at, _)| at != self.at) {
-                            self.since = Some((self.at, Instant::now()));
+                        let job = st["job"].as_str().unwrap_or_default().to_string();
+                        if self.since.as_ref().is_none_or(|(j, _)| *j != job) {
+                            self.since = Some((job, Instant::now()));
                         }
-                        let secs = self.since.map_or(0, |(_, t)| t.elapsed().as_secs());
+                        let secs = self.since.as_ref().map_or(0, |(_, t)| t.elapsed().as_secs());
                         let text = progress_text(&p, secs);
                         match (p["done"].as_f64(), p["total"].as_f64()) {
                             (Some(d), Some(t)) if t > 0.0 => ui.add(egui::ProgressBar::new((d / t) as f32).text(text)),

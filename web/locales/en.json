@@ -889,6 +889,7 @@
  "store.yes": "Yes",
  "studio.busy.loading": "Loading {s} s",
  "studio.busy.macro": "Preparing the macro preview",
+ "studio.browse_all": "All files",
  "studio.browse_folder": "Choose a folder",
  "studio.browse_open": "Choose a file",
  "studio.browse_save": "Choose where to save",
