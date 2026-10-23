@@ -1655,9 +1655,11 @@ function characterInput() {
   return JSON.parse(JSON.stringify(c));
 }
 
+const keepsEmpty = (k) => k === "face_prefix";
+
 function currentOptions() {
   const o = {};
-  for (const k of PROJECT_OPTIONS) if (opt(k)) o[k] = opt(k);
+  for (const k of PROJECT_OPTIONS) if (opt(k) || (keepsEmpty(k) && params.has(k))) o[k] = params.get(k);
   return o;
 }
 
@@ -2078,7 +2080,10 @@ async function loadProjectDoc() {
   P.recovered = recovery;
   P.loadReport = r.checked;
   if (!params.get("store")) { store = doc.store; params.set("store", store); }
-  for (const k of PROJECT_OPTIONS) if (!params.get(k) && doc.options?.[k]) params.set(k, doc.options[k]);
+  for (const k of PROJECT_OPTIONS) {
+    const v = doc.options?.[k];
+    if (typeof v === "string" && (v || keepsEmpty(k)) && !(params.get(k) || (keepsEmpty(k) && params.has(k)))) params.set(k, v);
+  }
   history.replaceState(null, "", `${location.pathname}?${params}`);
   const k = params.get("character") !== null ? Number(params.get("character")) : doc.active ?? 0;
   P.active = Number.isInteger(k) && k >= 0 && k < doc.characters.length ? k : 0;

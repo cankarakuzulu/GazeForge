@@ -497,8 +497,8 @@ function mount(root, api) {
         physics = r.physics || [];
         groomSchema = r.groom || null;
         if (character.store !== wearKey) {
-          wearKey = character.store;
           storeWear = ((await api.call('wearable.list', { store: character.store })).wearables) || [];
+          wearKey = character.store;
         }
         note.textContent = '';
         build();
