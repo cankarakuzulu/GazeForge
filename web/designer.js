@@ -58,7 +58,7 @@ const D = {
   dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
-  panelHooks: new Map(), pendingVis: new Map(),
+  panelHooks: new Map(),
   grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [], eyeLooks: new Map(), eyeBaseKey: null,
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false, slotShared: false, slotLock: null },
 };
@@ -897,13 +897,16 @@ function visItems() {
 function visState() {
   const out = visItems().map((x) => [x.kind, x.key || x.id, x.on]);
   for (const [k, on] of V.keyVis) if (!meshByKey(k)) out.push(["mesh", k, on]);
+  for (const [k, on] of V.overlayVis) if (!V.overlays.has(k)) out.push(["overlay", k, on]);
   return out;
 }
 function meshByKey(key) { return V.meshes.get(key) || [...V.meshes.values()].find((m) => m.key === key); }
 function applyVis(state) {
   const listed = new Set(state.filter((s) => s[0] === "mesh").map((s) => s[1]));
   for (const k of [...V.keyVis.keys()]) if (!listed.has(k) && !meshByKey(k)) V.keyVis.delete(k);
-  for (const [kind, id, on] of state) { const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id); if (t) t.visible = on; else if (kind === "mesh") V.keyVis.set(id, on); }
+  const lines = new Set(state.filter((s) => s[0] === "overlay").map((s) => s[1]));
+  for (const k of [...V.overlayVis.keys()]) if (!lines.has(k) && !V.overlays.has(k)) V.overlayVis.delete(k);
+  for (const [kind, id, on] of state) { const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id); if (t) t.visible = on; else if (kind === "mesh") V.keyVis.set(id, on); else V.overlayVis.set(id, on); }
   renderVisibility();
   request(false);
 }
@@ -922,7 +925,7 @@ function isolate(kind, id) {
   visEdit(tr("designer.undo.isolate", { what: id }), () => { for (const m of V.meshes.values()) m.visible = kind === "mesh" && m.id === id; for (const o of V.overlays.values()) o.visible = kind === "overlay" && o.id === id; });
 }
 function showAll() {
-  visEdit(tr("designer.undo.show_all"), () => { V.keyVis.clear(); for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
+  visEdit(tr("designer.undo.show_all"), () => { V.keyVis.clear(); V.overlayVis.clear(); for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
   if (V.opts.hiddenRegions) setRegionMask(0, tr("designer.undo.show_regions"));
 }
 function renderVisibility() {
@@ -1503,9 +1506,9 @@ function makeApi(panelId) {
     character: () => JSON.parse(JSON.stringify(settleInput())),
     onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
     setPose,
-    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); pendingVisibility("mesh", String(id)); renderVisibility(); request(false); },
+    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); renderVisibility(); request(false); },
     poseExtraMesh: (id, rotation, centre) => { const ok = V.poseExtra(String(id), rotation || null, centre || null); request(false); return ok; },
-    setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
+    setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); renderVisibility(); request(false); },
     pushUndo,
     toast,
     tasks: { open: (id) => D.wizards.openTask(id) },
@@ -1632,13 +1635,6 @@ const RKEY = "gazeforge.designer.recent";
 const rootArg = () => (opt("root") ? { root: opt("root") } : {});
 const slotName = () => P.name || "untitled";
 
-function pendingVisibility(kind, id) {
-  const key = `${kind}:${id}`;
-  if (!D.pendingVis.has(key)) return;
-  const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id);
-  if (t) { t.visible = D.pendingVis.get(key); D.pendingVis.delete(key); }
-}
-
 function viewerState() {
   return JSON.parse(JSON.stringify({
     opts: V.opts, layout: V.layout, active: V.active, vp: V.vp, link: D.link, refSource: D.refSource, preset: D.preset,
@@ -1661,7 +1657,7 @@ function applyViewerState(s) {
   if (Number.isInteger(s.active)) V.active = Math.max(0, Math.min(s.active, LAYOUTS[V.layout].length - 1));
   if (Array.isArray(s.visibility)) for (const [kind, id, on] of s.visibility) {
     const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id);
-    if (t) t.visible = !!on; else if (kind === "mesh") V.keyVis.set(id, !!on); else D.pendingVis.set(`${kind}:${id}`, !!on);
+    if (t) t.visible = !!on; else if (kind === "mesh") V.keyVis.set(id, !!on); else V.overlayVis.set(id, !!on);
   }
   $("preset").value = D.preset;
   $("ref").value = D.refSource;

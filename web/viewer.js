@@ -445,6 +445,7 @@ export class Viewer {
     this.labels = labels;
     this.meshes = new Map();
     this.keyVis = new Map();
+    this.overlayVis = new Map();
     this.overlays = new Map();
     this.cams = [
       new Camera({ name: "perspective" }),
@@ -736,9 +737,10 @@ export class Viewer {
 
   setOverlay(id, spec) {
     const old = this.overlays.get(id);
+    if (old) this.overlayVis.set(id, old.visible);
     if (!spec) { this.overlays.delete(id); return; }
     const lines = spec.lines ? Float32Array.from(spec.lines) : null, points = spec.points ? Float32Array.from(spec.points) : null;
-    this.overlays.set(id, { id, lines, points, color: parseColor(spec.color, [1, 0.8, 0.1]), visible: old ? old.visible : true });
+    this.overlays.set(id, { id, lines, points, color: parseColor(spec.color, [1, 0.8, 0.1]), visible: this.overlayVis.get(id) ?? true });
   }
 
   computeBounds(positions) {
