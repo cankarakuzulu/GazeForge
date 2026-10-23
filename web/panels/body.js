@@ -63,6 +63,9 @@ function mount(root, api) {
   const genitalsRow = el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.genitals') }), genitalsPick]);
   const wearList = el('div', { class: 'gf-body-wear' });
   const wearAdd = el('select', { 'data-body': 'wear-add' });
+  const wearFind = el('input', { type: 'search', 'data-body': 'wear-find', placeholder: tr('body.wear_find'), 'aria-label': tr('body.wear_find') });
+  let freeWear = [];
+  wearFind.addEventListener('input', () => fillAdd());
   let groomSchema = null;
   let lastGroom = null;
   const groomInputs = new Map();
@@ -70,7 +73,7 @@ function mount(root, api) {
   const groomBox = el('div', { class: 'gf-body-groom' });
   const content = el('div', {}, [
     genitalsRow,
-    el('div', { class: 'gf-body-head', text: tr('body.wearables') }), wearList, wearAdd,
+    el('div', { class: 'gf-body-head', text: tr('body.wearables') }), wearList, wearFind, wearAdd,
     el('div', { class: 'gf-body-head', text: tr('body.groom') }), el('label', { class: 'gf-stitch-row' }, [groomOn, el('span', { text: tr('body.groom_on') })]), groomBox,
     el('div', { class: 'gf-body-head', text: tr('body.compounds') }), compoundBox,
     el('div', { class: 'gf-body-head', text: tr('body.regional') }), filter, familyBox, reset,
@@ -421,9 +424,16 @@ function mount(root, api) {
         el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), el('label', {}, [el('span', { text: tr('body.wear_coarse') }), coarse]), ...(cards ? [el('label', {}, [cap, el('span', { text: tr('body.wear_cap') })]), el('label', {}, [strands, el('span', { text: tr('body.wear_strands') })])] : [el('label', {}, [el('span', { text: tr('body.wear_hair') }), hair])]), remove]),
       ]);
     }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
-    const free = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable));
-    wearAdd.replaceChildren(el('option', { value: '', text: free.length ? tr('body.wear_add') : tr('body.wear_store_empty') }), ...free.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));
-    wearAdd.disabled = !free.length;
+    freeWear = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    fillAdd();
+  }
+
+  function fillAdd() {
+    const want = wearFind.value.trim().toLowerCase();
+    const shown = want ? freeWear.filter((x) => wearName(x.wearable).toLowerCase().includes(want)) : freeWear;
+    const head = !freeWear.length ? tr('body.wear_store_empty') : want ? tr('body.wear_found', { n: shown.length, all: freeWear.length }) : tr('body.wear_add');
+    wearAdd.replaceChildren(el('option', { value: '', text: head }), ...shown.map((x) => el('option', { value: x.wearable, text: wearName(x.wearable) })));
+    wearAdd.disabled = !shown.length;
     wearAdd.value = '';
   }
 

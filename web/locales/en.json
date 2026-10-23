@@ -195,6 +195,8 @@
  "body.wear_remove_line": "Take off {name}",
  "body.wear_store_empty": "No wearables in the store: import some with the Import a garment task",
  "body.wearables": "Wearables",
+ "body.wear_find": "Filter wearables by name",
+ "body.wear_found": "Add a wearable… ({n} of {all})",
  "body.regional": "Regional sliders",
  "body.reset": "Reset body shape",
  "body.slider.arms/l-lowerarm-fat": "Left lower arm fat",

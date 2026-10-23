@@ -32,6 +32,7 @@ pub struct BodyUi {
     pub error: Option<String>,
     pub edit_error: Option<String>,
     pub last_groom: Option<Value>,
+    pub wear_filter: String,
     pub filter: String,
     live: BTreeMap<String, f64>,
     groom_colour: Option<(&'static str, [u8; 3])>,
@@ -607,11 +608,17 @@ impl crate::studio::Studio<'_> {
                     }
                 });
             }
-            let free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
+            let mut free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
+            free.sort_by_key(|w| label(&w.reference).to_lowercase());
             if free.is_empty() {
                 ui.label(egui::RichText::new(tr("body.wear_store_empty")).weak());
             } else {
-                egui::ComboBox::from_id_salt("body_wear_add").selected_text(tr("body.wear_add")).show_ui(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut ui_state.wear_filter).hint_text(tr("body.wear_find")).desired_width(f32::INFINITY));
+                let want = ui_state.wear_filter.trim().to_lowercase();
+                let all = free.len();
+                free.retain(|w| want.is_empty() || label(&w.reference).to_lowercase().contains(&want));
+                let head = if want.is_empty() { tr("body.wear_add").to_string() } else { trf("body.wear_found", &[("n", &free.len()), ("all", &all)]) };
+                egui::ComboBox::from_id_salt("body_wear_add").selected_text(head).show_ui(ui, |ui| {
                     for w in free {
                         if ui.selectable_label(false, label(&w.reference)).clicked() {
                             wear_commit = Some((w.reference.clone(), Some(true)));

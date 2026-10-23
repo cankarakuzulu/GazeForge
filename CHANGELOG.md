@@ -301,6 +301,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Finding a wearable meant scrolling the whole store.** "Add a wearable…" in both clients is sorted by name and has
+  a filter box above it: "fedora" narrows the test store's 68 items to 2 and the list says so ("2 of 68").
 - **The studio's Frame and Home framed the head only.** With a body, clothes and hair shown they now frame all of
   it, as the browser's F does.
 - **Studio undo said "Panel settings" for every body, clothes and hair edit.** It now names the setting it reverts,
