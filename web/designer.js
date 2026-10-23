@@ -551,21 +551,33 @@ function pushUndo(entry) {
   H.undone.length = 0;
   renderHistory();
 }
+function stepBack(e, from, to, key) {
+  return (err) => {
+    toast(tr(key, { error: err?.message || String(err) }));
+    if (from[from.length - 1] !== e) return;
+    to.push(from.pop());
+    renderHistory();
+  };
+}
 function undo() {
   const e = D.history.done.pop();
   if (!e) return;
-  try { e.undo(); } catch (err) { toast(tr("designer.undo_failed", { error: err.message })); }
+  let r;
+  try { r = e.undo(); } catch (err) { toast(tr("designer.undo_failed", { error: err.message })); }
   D.history.undone.push(e);
   renderHistory();
   toast(tr("designer.undone", { what: e.label }));
+  if (r && typeof r.then === "function") r.catch(stepBack(e, D.history.undone, D.history.done, "designer.undo_failed"));
 }
 function redo() {
   const e = D.history.undone.pop();
   if (!e) return;
-  try { e.redo(); } catch (err) { toast(tr("designer.redo_failed", { error: err.message })); }
+  let r;
+  try { r = e.redo(); } catch (err) { toast(tr("designer.redo_failed", { error: err.message })); }
   D.history.done.push(e);
   renderHistory();
   toast(tr("designer.redone", { what: e.label }));
+  if (r && typeof r.then === "function") r.catch(stepBack(e, D.history.done, D.history.undone, "designer.redo_failed"));
 }
 function historyTo(at) {
   while (D.history.done.length > at) undo();

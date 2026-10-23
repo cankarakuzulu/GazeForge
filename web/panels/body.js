@@ -476,7 +476,8 @@ function mount(root, api) {
       const from = r.before ?? '';
       if (from === to) return;
       const label = tr('body.undo.category', { name: wearName(asset), category: catName(r.category) });
-      api.pushUndo({ label, undo: () => { catCall(asset, from).catch(catFailed); }, redo: () => { catCall(asset, to).catch(catFailed); } });
+      const step = (c) => catCall(asset, c).catch((e) => { catFailed(e); throw e; });
+      api.pushUndo({ label, undo: () => step(from), redo: () => step(to) });
     }).catch(catFailed);
   }
 
