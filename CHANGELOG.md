@@ -16,7 +16,8 @@ open, with its last measurement, rather than left out.
   browser's; a project's pins open in either client.
 - **View and lighting in the studio.** A section with the browser's View and Scene options: wire, points and heat-map
   ranges, field of view, lighting presets and four lights, exposure, the hide box, three clip planes and the face-grid
-  options. The browser's per-mesh visibility list, region hiding and displacement reference choice are not in the studio.
+  options, and the visibility list (show, hide, isolate each mesh and overlay) and region hiding as undo steps. The
+  browser's displacement reference choice is not in the studio.
 - **Measurements in the studio.** A Measurements section (after Timeline) shows the six landmark measures with their
   change from the base, a head bounding box overlay with its size, and the triangles per level, as the browser's panel
   does; the measures now have names in both clients (they showed ids such as `nose_width`). Script op `measure`.
@@ -318,6 +319,11 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Hiding the rest of the head cut holes at the temples.** Two small areas beside the outer eye corners belonged to
+  no face region (no region target moves them by 35 % of its largest move), so they hid with the rest of the head. A
+  region-less area of at most 40 connected vertices now takes the category of its strongest target; the back of the
+  head, the neck and the insides of the mouth and eye sockets are unchanged. The face grid's region names change for
+  those 31 vertices of the test base.
 - **Scripted studio runs autosaved into the user's projects folder.** `gazeforge-studio --script` without
   `GAZEFORGE_PROJECTS` now keeps projects and autosaves in `OUT/projects`.
 - **Autosave could overwrite or delete the work it kept.** In both clients, editing a project while its recovery was
