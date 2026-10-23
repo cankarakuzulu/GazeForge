@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Remove, Reset and Remove the body happened silently.** They stay one click (undo covers them), and now say so:
+  "Take off cape (47c7634b). Ctrl+Z puts it back", "Reset all sliders. …", "Reset body shape. …", "Remove the body. …"
+  (the studio names the key its keymap binds to undo). A Reset with nothing to reset says nothing, and in the browser
+  no longer adds an empty undo step.
 - **A new character opened with empty eye sockets and nothing said why.** When the catalog has an eye rig and the
   character has no eye model or eyes file, both clients show "No eyeballs in the sockets" under the head with Add eyes
   (medium brown, following the sockets; one undo step, "Eye model Medium brown") and a button that hides the note. The

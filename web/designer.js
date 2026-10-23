@@ -631,8 +631,11 @@ function buildSliders() {
     const before = D.w.slice(), mBefore = { ...D.macroW }, eBefore = D.eyeballs;
     const after = D.targets.map((t) => D.start.weights[t.id] || 0), mAfter = { ...D.macroStart }, eAfter = D.start.eyeballs ?? null;
     const apply = (w, m, e) => { setWeights(w.map((x, i) => [i, x]), m); if (JSON.stringify(e) !== JSON.stringify(D.eyeballs)) setEyeballs(e); };
+    const changed = JSON.stringify([before, mBefore, eBefore ?? null]) !== JSON.stringify([after, mAfter, eAfter]);
+    if (!changed) return;
     apply(after, mAfter, eAfter);
     pushUndo({ label: tr("designer.undo.reset"), undo: () => apply(before, mBefore, eBefore), redo: () => apply(after, mAfter, eAfter) });
+    toast(tr("designer.undo_hint", { what: tr("designer.undo.reset") }));
   });
 }
 

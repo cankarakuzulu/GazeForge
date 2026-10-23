@@ -338,6 +338,11 @@ impl Studio<'_> {
         if self.s.keymap.source == "defaults" { tr("studio.keys_defaults").to_string() } else { self.s.keymap.source.clone() }
     }
 
+    pub fn undo_hint(&mut self, what: &str) {
+        let keys = self.s.keymap.describe("undo");
+        self.s.status = if keys.is_empty() { trf("studio.undo_hint_plain", &[("what", &what)]) } else { trf("studio.undo_hint", &[("what", &what), ("keys", &keys)]) };
+    }
+
     pub fn tip(&self, what: &str, id: &str) -> String {
         let keys = self.s.keymap.describe(id);
         if keys.is_empty() { what.to_string() } else { format!("{what} ({keys})") }
@@ -571,7 +576,11 @@ impl Studio<'_> {
                 None => Vec::new(),
             };
             for e in events {
+                let reset = matches!(e, crate::shape::ShapeEvent::Reset) && self.world.shape.as_ref().is_some_and(|s| s.live != s.start);
                 self.world.shape_event(e);
+                if reset {
+                    self.undo_hint(tr("designer.undo.reset"));
+                }
             }
         }
     }

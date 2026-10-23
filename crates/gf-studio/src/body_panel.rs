@@ -440,6 +440,7 @@ impl crate::studio::Studio<'_> {
             let mut compound_commit = None;
             let mut genitals_commit = None;
             let mut wear_commit: Option<(String, Option<bool>)> = None;
+            let mut removed: Option<String> = None;
             let mut physics_commit: Option<(String, String)> = None;
             if !ui_state.genitals.is_empty() {
                 let current = body["genitals"].as_str().unwrap_or("none").to_string();
@@ -605,6 +606,7 @@ impl crate::studio::Studio<'_> {
                     }
                     if ui.small_button(tr("body.wear_remove")).clicked() {
                         wear_commit = Some((asset.clone(), None));
+                        removed = Some(label(asset));
                     }
                 });
             }
@@ -790,7 +792,11 @@ impl crate::studio::Studio<'_> {
                         self.world.body_wear_hide(&asset, h);
                     }
                     (true, None) => {
-                        self.world.body_unwear(&asset);
+                        if self.world.body_unwear(&asset)
+                            && let Some(name) = removed
+                        {
+                            self.undo_hint(&trf("body.wear_remove_line", &[("name", &name)]));
+                        }
                     }
                     (false, _) => {
                         let _ = self.world.body_wear(&asset);
@@ -820,8 +826,8 @@ impl crate::studio::Studio<'_> {
                     Err(e) => self.world.body_ui.edit_error = Some(e),
                 }
             }
-            if reset {
-                self.world.body_reset();
+            if reset && self.world.body_reset() {
+                self.undo_hint(tr("body.reset"));
             }
         });
     }

@@ -168,7 +168,11 @@ impl crate::studio::Studio<'_> {
                 ui.label(egui::RichText::new(tr("stitch.spec_body_active")).weak());
             }
             if let Some(a) = assign {
+                let removing = a.is_none();
                 self.world.body_assign(a);
+                if removing {
+                    self.undo_hint(tr("stitch.remove_body"));
+                }
             }
             let st = &mut self.world.stitch;
             let mut restitch = false;

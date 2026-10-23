@@ -417,7 +417,10 @@ function mount(root, api) {
       const remove = el('button', { type: 'button', class: 'small', 'data-wear-remove': w.asset, text: tr('body.wear_remove') });
       remove.addEventListener('click', () => {
         const b = api.body.get();
-        if (b) apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), tr('body.wear_remove_line', { name: wearName(w.asset) }));
+        if (!b) return;
+        const line = tr('body.wear_remove_line', { name: wearName(w.asset) });
+        apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), line);
+        if (api.toast) api.toast(tr('designer.undo_hint', { what: line }));
       });
       return el('div', { class: 'gf-wear-item', 'data-wear': w.asset }, [
         el('div', { class: 'gf-wear-name', text: wearName(w.asset), title: wearName(w.asset) }),
@@ -535,6 +538,7 @@ function mount(root, api) {
     delete next.weights;
     delete next.compounds;
     apply(next, tr('body.reset'));
+    if (api.toast) api.toast(tr('designer.undo_hint', { what: tr('body.reset') }));
   });
   api.onCharacterChange((c, info) => { if (!info || info.kind !== 'slider') refresh(); });
   refresh();
