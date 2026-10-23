@@ -49,3 +49,24 @@
 | `weights.mixamo.json` | 2,372,203 | `4561be4d7c0093d70e3dba4fbacbbbb6d66781573779fb12a0509cefa181b8ae` | 153,868 | `3a112fd47a195275331b960192b5ccbde5cdf283bbc570cc9d3285491836d78e` |
 | `weights.mixamo_unity.json` | 3,342,705 | `0cfa562682fe27dab69cd3abd287cc971fbe576e03297d702798ac85813fb102` | 390,493 | `2e9063ce0ab36228ccebc7b73fe04fc63988d15a04582b5b18a10b0dc3ed3d09` |
 | `weights.openpose.json` | 2,634,893 | `3f3f0b6fb208e0316fd3663b3559ee649b765969ad220347585ace3090e947ac` | 196,507 | `26a902c083c2169c64bf4890a50e216f71636e3484e57970d8d7c664a61c05a1` |
+
+## Rust crates compiled into `web/gf_wasm.wasm`
+
+The browser designer's WebAssembly module (`crates/gf-wasm`) is a compiled binary in this repository, so it carries
+the code of the crates it links. Its runtime dependencies (`cargo tree -p gf-wasm -e normal --target
+wasm32-unknown-unknown`; `serde_derive`, `syn`, `quote`, `proc-macro2` and `unicode-ident` only run at build time):
+
+| Crate | Version | Authors | Licence | Used under |
+|---|---|---|---|---|
+| `serde` | 1.0.229 | Erick Tryzelaar, David Tolnay | MIT OR Apache-2.0 | MIT |
+| `serde_core` | 1.0.229 | Erick Tryzelaar, David Tolnay | MIT OR Apache-2.0 | MIT |
+| `serde_json` | 1.0.154 | Erick Tryzelaar, David Tolnay | MIT OR Apache-2.0 | MIT |
+| `itoa` | 1.0.18 | David Tolnay | MIT OR Apache-2.0 | MIT |
+| `zmij` | 1.0.23 | David Tolnay | MIT | MIT |
+| `memchr` | 2.8.3 | Andrew Gallant, bluss | Unlicense OR MIT | Unlicense (no notice required) |
+
+The five crates used under MIT ship the same MIT text (sha256
+`23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3`), kept in `third_party/rust-wasm/LICENSE-MIT`.
+
+The native binaries (`gazeforge`, `gazeforge-studio`) are not committed here. A release of them needs its own notice
+for their much larger dependency tree, including the Unicode-3.0 data tables in `unicode-normalization`.
