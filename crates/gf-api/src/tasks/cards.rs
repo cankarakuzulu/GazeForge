@@ -383,7 +383,7 @@ pub fn run(opts: &Options) -> Result<Value, String> {
     bind.insert("double-sided".into(), "on".into());
     let bound = super::wearable::bind_with(&bind, levels)?;
     if let Some(r) = bound["wearable"].as_str() {
-        store.set_wearable_category(r, Some("hair"))?;
+        let _ = store.keep_category(r, "hair");
     }
     let members: Vec<usize> = cards.members[..near_cards].to_vec();
     Ok(json!({"ok": true, "command": "groom cards", "wearable": bound["wearable"], "name": name, "cards": members.len(), "vertices": near_vertices, "far": far_rows, "cap": {"vertices": cap_vertices, "triangles": cap_triangles, "below_hairline": cap_below_hairline, "below_hairline_mm": (cap_below_mm * 10.0).round() / 10.0, "lift_mm": CAP_LIFT_M * 1000.0}, "cut_at_face": near_cut,

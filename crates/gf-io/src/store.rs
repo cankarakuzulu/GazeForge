@@ -161,7 +161,8 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(io(dir))?;
     }
-    let partial = path.with_extension("partial");
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let partial = path.with_extension(format!("partial.{}.{}", std::process::id(), WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::write(&partial, bytes).map_err(io(&partial))?;
     std::fs::rename(&partial, path).map_err(io(path))
 }

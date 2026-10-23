@@ -29,7 +29,10 @@ pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let store = Store::open(root).map_err(ApiError::not_found)?;
     let dir = root.join("wearables");
     let mut rows = Vec::new();
-    let known = store.wearable_categories().map_err(ApiError::internal)?;
+    let (known, warning) = match store.wearable_categories() {
+        Ok(k) => (k, None),
+        Err(e) => (Default::default(), Some(format!("categories inferred: {e}"))),
+    };
     if dir.is_dir() {
         let mut names: Vec<String> = std::fs::read_dir(&dir).map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?.filter_map(Result::ok)
             .filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".json").map(str::to_string)).collect();
@@ -58,7 +61,11 @@ pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
         rows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     }
-    Ok(json!({"wearables": rows, "categories": CATEGORIES}))
+    let mut out = json!({"wearables": rows, "categories": CATEGORIES});
+    if let Some(w) = warning {
+        out["warning"] = json!(w);
+    }
+    Ok(out)
 }
 
 pub fn categorize_input() -> Value {
