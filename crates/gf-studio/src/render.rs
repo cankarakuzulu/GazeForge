@@ -179,7 +179,7 @@ enum Draw {
     EyePart(u32, usize, bool),
     Points(u32, usize),
     Lines(LinePipe, u32, u32, u32),
-    Extra(u32, usize),
+    Extra(bool, u32, usize),
 }
 
 struct PassPlan {
@@ -795,7 +795,7 @@ impl Renderer {
                 u[88] = 0.0;
                 u[97] = 0.0;
                 u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, 0.0]);
-                first.draws.push(Draw::Extra(chunk(u, &mut uni), k));
+                first.draws.push(Draw::Extra(false, chunk(u, &mut uni), k));
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
@@ -829,7 +829,11 @@ impl Renderer {
             if has_head && o.wire && o.xray {
                 let mut u = base;
                 u[95] = 1.0;
-                last.draws.push(Draw::Mesh(MeshPipe::Xray, chunk(u, &mut uni), lod, false));
+                let c = chunk(u, &mut uni);
+                last.draws.push(Draw::Mesh(MeshPipe::Xray, c, lod, false));
+                for k in 0..self.extras.len() {
+                    last.draws.push(Draw::Extra(true, c, k));
+                }
             }
             if has_head && o.points {
                 let mut u = base;
@@ -980,9 +984,9 @@ impl Renderer {
                             pass.set_bind_group(2, bind.or(white).expect("material default"), &[]);
                             pass.draw(first * 3..(first + count) * 3, 0..1);
                         }
-                        Draw::Extra(c, k) => {
+                        Draw::Extra(xray, c, k) => {
                             let x = &self.extras[*k];
-                            pass.set_pipeline(&self.mesh[0]);
+                            pass.set_pipeline(&self.mesh[if *xray { 3 } else { 0 }]);
                             pass.set_bind_group(0, &self.uniform_bg, &[(*c as u64 * USTRIDE) as u32]);
                             pass.set_bind_group(1, &x.bind, &[]);
                             pass.set_bind_group(2, white.expect("material default"), &[]);
