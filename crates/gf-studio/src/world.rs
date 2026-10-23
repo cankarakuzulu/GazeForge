@@ -798,7 +798,11 @@ impl World {
 
     pub fn frame_head(&mut self, instant: bool) {
         if let Some(s) = &self.session {
-            let b = Bounds::of(&s.head.positions);
+            let mut all = s.head.positions.clone();
+            for e in self.extras.iter().filter(|e| e.visible) {
+                all.extend_from_slice(&e.positions);
+            }
+            let b = Bounds::of(&all);
             viewer::frame_box(&b, self.state.active_cam(), instant);
             self.state.pivot_flash = 0.6;
         }

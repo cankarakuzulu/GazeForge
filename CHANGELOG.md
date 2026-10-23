@@ -301,6 +301,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The studio's Frame and Home framed the head only.** With a body, clothes and hair shown they now frame all of
+  it, as the browser's F does.
 - **Studio undo said "Panel settings" for every body, clothes and hair edit.** It now names the setting it reverts,
   such as "Undo: Body shape: Length (cm)", "Body shape: Hair under it" or "Body: Blend width (mm)".
 - **Hair cards and garment fitting asked for MakeHuman's base.obj by hand.** Both tasks now find it beside the macro
