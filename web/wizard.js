@@ -74,6 +74,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const ctx = await prepare();
     W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: W.lastGlb ? { ...ctx.values, glb: W.lastGlb } : ctx.values });
     W.live = true;
+    (W.started ||= new Set()).add(W.state.run);
     W.prepared = await ctx.after(W.state.dir);
     if (W.prepared?.character) W.state = await api("wizards.state", { run: W.state.run });
     W.at = 0;
@@ -84,7 +85,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   async function resume(wizard, run) {
     W.def = await api("wizards.get", { id: wizard });
     W.state = await api("wizards.state", { run });
-    W.live = false;
+    W.live = !!W.started?.has(run);
     W.prepared = {};
     const open = W.state.steps.findIndex((s) => s.state !== "done");
     W.at = open < 0 ? W.state.steps.length - 1 : open;

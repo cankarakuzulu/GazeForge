@@ -37,6 +37,7 @@ pub struct Wizards {
     last_glb: Option<String>,
     glb_epoch: u64,
     glb_live: bool,
+    glb_runs: std::collections::HashSet<String>,
     browse: Browse,
 }
 
@@ -161,6 +162,7 @@ impl Wizards {
             state = call("wizards.state", json!({"run": state["run"]}))?;
         }
         prepared.insert("export".into(), json!({"out": dir.join("export.glb").display().to_string()}));
+        self.glb_runs.extend(state["run"].as_str().map(str::to_string));
         self.def = Some(def);
         self.state = Some(state);
         self.glb_live = true;
@@ -178,7 +180,7 @@ impl Wizards {
         self.at = steps.iter().position(|s| s["state"] != "done").unwrap_or(steps.len().saturating_sub(1));
         self.def = Some(def);
         self.state = Some(state);
-        self.glb_live = false;
+        self.glb_live = self.glb_runs.contains(run);
         self.prepared = Map::new();
         self.shown_for = None;
         self.error = None;
@@ -383,6 +385,7 @@ impl Wizards {
             self.glb_epoch = epoch;
             self.last_glb = None;
             self.glb_live = false;
+            self.glb_runs.clear();
         }
     }
 
