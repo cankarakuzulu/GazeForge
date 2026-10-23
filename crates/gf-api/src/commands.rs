@@ -217,7 +217,7 @@ pub static REGISTRY: &[CommandDef] = &[
         name: "wearable.categorize",
         kind: Kind::Mutation,
         summary: "Say what a wearable in a store is (hair, facial_hair, hat, eyewear, top, bottom, outfit, shoes, accessory or other); the clients group their wearable pickers by it.",
-        limits: "Kept in the store's wearable_categories.json, beside the content-addressed wearables, so a wearable's reference never changes. Imports keep a category they can tell (MakeHuman's folder and tags, a groom's cards are hair, an attached item an accessory); wearable.list infers one for the rest.",
+        limits: "Kept in the store's wearable_categories.json, beside the content-addressed wearables, so a wearable's reference never changes. Imports keep a category only when their source states it (MakeHuman's asset folder and tags; a groom's cards are hair); wearable.list infers one for the rest from the name, transparency and whether the item rides a bone. Entries with a category this build does not know are kept when the file is rewritten, and ignored.",
         input: wear::categorize_input,
         output: wear::categorize_output,
         run: wear::categorize,

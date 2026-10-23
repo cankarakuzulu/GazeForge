@@ -287,18 +287,31 @@ pub fn infer_category(m: &WearableManifest, folder: Option<&str>, tags: &[String
     }
     let n = m.name.to_lowercase();
     let tokens: Vec<&str> = n.split(|c: char| !c.is_ascii_alphabetic()).filter(|s| !s.is_empty()).collect();
-    let has = |words: &[&str]| words.iter().any(|w| if w.len() <= 3 { tokens.contains(w) } else { n.contains(w) });
+    let hit = |w: &str| {
+        if w.contains('-') {
+            n.contains(w)
+        } else if let Some(s) = w.strip_prefix('^') {
+            tokens.iter().any(|t| t.starts_with(s))
+        } else if let Some(s) = w.strip_prefix('*') {
+            tokens.iter().any(|t| t.ends_with(s))
+        } else if w.len() >= 5 {
+            tokens.iter().any(|t| t.starts_with(w))
+        } else {
+            tokens.contains(&w)
+        }
+    };
+    let has = |words: &[&str]| words.iter().any(|w| hit(w));
     let rules: [(&str, &[&str]); 10] = [
-        ("other", &["teeth", "tooth", "tongue", "eyeball", "eye", "eyes", "cornea", "low-poly", "high-poly"]),
-        ("facial_hair", &["beard", "moustache", "mustache", "stubble", "goatee", "eyebrow", "eyelash", "brow", "brows"]),
-        ("eyewear", &["glasses", "goggles", "spectacles", "monocle"]),
-        ("hat", &["hat", "hats", "fedora", "helmet", "beanie", "bonnet", "turban", "tophat", "sombrero"]),
-        ("hair", &["hair", "cards", "groom", "ponytail", "braid", "afro", "bob", "bun", "dreads"]),
-        ("shoes", &["shoe", "shoes", "boot", "boots", "sneaker", "sandal", "heels"]),
-        ("outfit", &["suit", "dress", "overall", "jumpsuit", "robe", "gown"]),
-        ("bottom", &["pants", "trousers", "jeans", "skirt", "shorts", "leggings"]),
-        ("top", &["shirt", "top", "tops", "jacket", "coat", "sweater", "hoodie", "blouse", "vest", "cape", "cloak"]),
-        ("accessory", &["sword", "shield", "bag", "belt", "necklace", "earring", "glove", "gloves", "scarf"]),
+        ("other", &["teeth", "tooth", "tongue", "eyeball", "eye", "eyes", "*eyes", "cornea", "low-poly", "high-poly"]),
+        ("facial_hair", &["beard", "*beard", "moustache", "mustache", "stubble", "goatee", "eyebrow", "eyelash", "brow", "brows"]),
+        ("eyewear", &["glasses", "*glasses", "goggles", "spectacles", "monocle"]),
+        ("hat", &["hat", "hats", "*hat", "fedora", "helmet", "beanie", "bonnet", "turban", "sombrero"]),
+        ("hair", &["hair", "*hair", "^hair", "cards", "groom", "ponytail", "braid", "afro", "bob", "bun", "dreads"]),
+        ("shoes", &["shoe", "shoes", "*shoes", "boot", "boots", "sneaker", "sandal", "heels"]),
+        ("outfit", &["suit", "*suit", "dress", "*dress", "overall", "jumpsuit", "robe", "gown"]),
+        ("bottom", &["pants", "*pants", "trousers", "jeans", "skirt", "shorts", "leggings"]),
+        ("top", &["shirt", "*shirt", "top", "tops", "jacket", "coat", "*coat", "sweater", "hoodie", "blouse", "vest", "cape", "cloak"]),
+        ("accessory", &["sword", "*sword", "shield", "bag", "*bag", "belt", "necklace", "earring", "glove", "gloves", "scarf"]),
     ];
     if let Some((c, _)) = rules.iter().find(|(_, words)| has(words)) {
         return c;
@@ -328,14 +341,14 @@ fn parse_categories(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
     }
     let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let o = v.as_object().ok_or("not a JSON object")?;
-    Ok(o.iter().filter_map(|(k, c)| c.as_str().filter(|c| CATEGORIES.contains(c)).map(|c| (k.clone(), c.to_string()))).collect())
+    Ok(o.iter().filter_map(|(k, c)| c.as_str().map(|c| (k.clone(), c.to_string()))).collect())
 }
 
 impl Store {
     pub fn wearable_categories(&self) -> Result<BTreeMap<String, String>, String> {
         let path = self.root.join(CATEGORY_FILE);
         match std::fs::read(&path) {
-            Ok(bytes) => parse_categories(&bytes).map_err(|e| format!("{} is unreadable ({e}); fix or delete it", path.display())),
+            Ok(bytes) => parse_categories(&bytes).map(|all| all.into_iter().filter(|(_, c)| CATEGORIES.contains(&c.as_str())).collect()).map_err(|e| format!("{} is unreadable ({e}); fix or delete it", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
@@ -343,12 +356,12 @@ impl Store {
 
     fn index_lock(&self) -> Result<IndexLock, String> {
         let path = self.root.join(format!("{CATEGORY_FILE}.lock"));
-        for _ in 0..400 {
+        for _ in 0..240 {
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(_) => return Ok(IndexLock(path)),
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => std::thread::sleep(std::time::Duration::from_millis(25)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 30);
+                    let stale = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() >= 5);
                     if stale {
                         let _ = std::fs::remove_file(&path);
                     } else {
@@ -374,8 +387,17 @@ impl Store {
 
     fn update_index<T>(&self, f: impl FnOnce(&mut BTreeMap<String, String>) -> T) -> Result<T, String> {
         let _lock = self.index_lock()?;
-        let mut all = self.wearable_categories()?;
+        let path = self.root.join(CATEGORY_FILE);
+        let raw = match std::fs::read(&path) {
+            Ok(bytes) => parse_categories(&bytes).map_err(|e| format!("{} is unreadable ({e}); fix or delete it", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let (mut all, unknown): (BTreeMap<String, String>, BTreeMap<String, String>) = raw.into_iter().partition(|(_, c)| CATEGORIES.contains(&c.as_str()));
         let out = f(&mut all);
+        for (k, c) in unknown {
+            all.entry(k).or_insert(c);
+        }
         let bytes = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
         crate::store::write_atomic(&self.root.join(CATEGORY_FILE), &bytes)?;
         Ok(out)
@@ -443,6 +465,12 @@ mod tests {
         assert_eq!(infer_category(&m("round glasses", false, true), None, &[]), "eyewear");
         assert_eq!(infer_category(&m("see-through veil", true, false), None, &[]), "hair");
         assert_eq!(known_category(None, &["young".into()]), None);
+        for (name, want) in [("brown_jacket", "top"), ("bridegroom_suit", "outfit"), ("longhair01", "hair"), ("sunglasses", "eyewear"), ("cowboyhat", "hat"), ("male_casualsuit01", "outfit")] {
+            assert_eq!(infer_category(&m(name, false, false), None, &[]), want, "{name}");
+        }
+        let kept = parse_categories(b"{\"a\": \"hair\", \"b\": \"cloak_of_tomorrow\", \"c\": null}").unwrap();
+        assert_eq!(kept.get("b").map(String::as_str), Some("cloak_of_tomorrow"));
+        assert!(!kept.contains_key("c"));
         assert_eq!(mhclo_folder(Path::new("assets/hair/bob01")).as_deref(), Some("hair"));
         assert_eq!(mhclo_folder(Path::new("assets/Eyelashes")).as_deref(), Some("eyelashes"));
         assert_eq!(mhclo_folder(Path::new("downloads/bob01")), None);
