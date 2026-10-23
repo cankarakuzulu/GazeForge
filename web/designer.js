@@ -551,15 +551,28 @@ function pushUndo(entry) {
   H.undone.length = 0;
   renderHistory();
 }
-function stepBack(e, from, to, key) {
-  return (err) => {
-    toast(tr(key, { error: err?.message || String(err) }));
-    if (from[from.length - 1] !== e) return;
-    to.push(from.pop());
-    renderHistory();
-  };
+const histQueue = [];
+let histPending = false;
+function histRun(op) {
+  histQueue.push(op);
+  while (histQueue.length && !histPending) histQueue.shift()();
 }
-function undo() {
+function histSettle(r, e, from, to, key) {
+  if (!r || typeof r.then !== "function") return;
+  histPending = true;
+  r.catch((err) => {
+    toast(tr(key, { error: err?.message || String(err) }));
+    histQueue.length = 0;
+    const i = from.lastIndexOf(e);
+    if (i >= 0) from.splice(i, 1);
+    if (!to.includes(e)) to.push(e);
+    renderHistory();
+  }).finally(() => {
+    histPending = false;
+    histRun(() => {});
+  });
+}
+function doUndo() {
   const e = D.history.done.pop();
   if (!e) return;
   let r;
@@ -567,9 +580,9 @@ function undo() {
   D.history.undone.push(e);
   renderHistory();
   toast(tr("designer.undone", { what: e.label }));
-  if (r && typeof r.then === "function") r.catch(stepBack(e, D.history.undone, D.history.done, "designer.undo_failed"));
+  histSettle(r, e, D.history.undone, D.history.done, "designer.undo_failed");
 }
-function redo() {
+function doRedo() {
   const e = D.history.undone.pop();
   if (!e) return;
   let r;
@@ -577,11 +590,16 @@ function redo() {
   D.history.done.push(e);
   renderHistory();
   toast(tr("designer.redone", { what: e.label }));
-  if (r && typeof r.then === "function") r.catch(stepBack(e, D.history.done, D.history.undone, "designer.redo_failed"));
+  histSettle(r, e, D.history.done, D.history.undone, "designer.redo_failed");
 }
+function undo() { histRun(doUndo); }
+function redo() { histRun(doRedo); }
 function historyTo(at) {
-  while (D.history.done.length > at) undo();
-  while (D.history.done.length < at && D.history.undone.length) redo();
+  const step = () => {
+    if (D.history.done.length > at) { doUndo(); histQueue.unshift(step); }
+    else if (D.history.done.length < at && D.history.undone.length) { doRedo(); histQueue.unshift(step); }
+  };
+  histRun(step);
 }
 
 function sliderRow(label, value, onInput, onChange, onDown) {
