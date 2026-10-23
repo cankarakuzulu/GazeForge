@@ -348,6 +348,8 @@ open, with its last measurement, rather than left out.
 - **Browser projects.** An explicit empty `face_prefix` is saved with the project and kept when it is opened (it
   went back to `faceunits/`). The Body shape panel lists the store's wearables after a failed wearable list is
   retried (it showed an empty list).
+- **Millimetre grid captions.** The longer captions ran off the right edge of the view in both clients; they are now
+  placed by their width.
 - **Notices for the browser wasm.** `THIRD_PARTY.md` now also lists the Rust standard library, `dlmalloc` and
   `compiler_builtins`, which are compiled into the wasm, with their licence texts.
 - **Hiding the rest of the head cut holes at the temples.** Two small areas beside the outer eye corners belonged to
