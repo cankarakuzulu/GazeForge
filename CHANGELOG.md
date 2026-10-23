@@ -27,8 +27,8 @@ open, with its last measurement, rather than left out.
 - **View and lighting in the studio.** A section with the browser's View and Scene options: wire, points and heat-map
   ranges, field of view, lighting presets and four lights, exposure, the hide box, three clip planes and the face-grid
   options, the visibility list (show, hide, isolate each mesh and overlay) and region hiding as undo steps, and the
-  displacement reference (the starting character, the neutral base or a snapshot; the studio keeps the neutral base as
-  its default, the browser starts from the starting character).
+  displacement reference (the starting character, the neutral base or a snapshot; both clients start from the starting
+  character).
 - **Measurements in the studio.** A Measurements section (after Timeline) shows the six landmark measures with their
   change from the base, a head bounding box overlay with its size, and the triangles per level, as the browser's panel
   does; the measures now have names in both clients (they showed ids such as `nose_width`). Script op `measure`.

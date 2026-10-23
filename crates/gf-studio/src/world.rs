@@ -139,7 +139,7 @@ impl Default for World {
             anchor_values: None,
             samples_info: BTreeMap::new(),
             reference_wanted: false,
-            ref_source: "neutral",
+            ref_source: "start",
             start_positions: None,
             neutral_ref: None,
             saved: None,
