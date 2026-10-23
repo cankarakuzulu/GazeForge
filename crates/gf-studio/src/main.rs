@@ -11,6 +11,7 @@ mod icon_data;
 mod icons;
 mod input;
 mod keymap;
+mod measure_panel;
 mod preview;
 mod project;
 mod render;
@@ -39,7 +40,8 @@ use serde_json::{Value, json};
 const USAGE: &str = "gazeforge-studio [--store DIR] [--spec FILE] [--macro FILE] [--eyes FILE] [--keymap FILE] [--input sliders] [--godot-config FILE] [--bench-window SECONDS | --bench-idle SECONDS] [--present vsync|immediate]
   opens the native designer window; the core runs in-process; --input picks the shape input layer (default sliders); --godot-config names the Godot render mode's settings
 gazeforge-studio --script STEPS.json --out DIR
-  runs the steps against an offscreen GPU target with no window and prints one JSON report (also written to DIR/report.json)
+  runs the steps against an offscreen GPU target with no window and prints one JSON report (also written to DIR/report.json);
+  projects and autosaves go to DIR/projects unless GAZEFORGE_PROJECTS names a folder
 gazeforge-studio --write-keymap FILE
   writes the default key map, to edit and pass back with --keymap (or place at the default location)
 Every scripted or keymap run prints one JSON object on stdout; a non-zero exit code means it failed.";
@@ -125,6 +127,10 @@ fn main() -> ExitCode {
     }
     if let Some(script) = o.get("script") {
         let Some(out) = o.get("out") else { return emit(json!({"ok": false, "error": "--script needs --out DIR"}), 2) };
+        if std::env::var_os("GAZEFORGE_PROJECTS").is_none_or(|p| p.is_empty()) {
+            // SAFETY: no thread has started yet; a scripted run must never autosave into the user's projects folder.
+            unsafe { std::env::set_var("GAZEFORGE_PROJECTS", std::path::Path::new(out).join("projects")) };
+        }
         return match script::run(script, out) {
             Ok(report) => emit(report, 0),
             Err((mut report, e)) => {

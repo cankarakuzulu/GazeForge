@@ -86,6 +86,7 @@ pub struct World {
     pub project: Project,
     pub face_morphs: Option<String>,
     pub face_prefix: Option<String>,
+    pub measure_box: bool,
 }
 
 impl Default for World {
@@ -144,6 +145,7 @@ impl Default for World {
             project: Project::default(),
             face_morphs: None,
             face_prefix: None,
+            measure_box: false,
         }
     }
 }
@@ -236,6 +238,10 @@ impl World {
         self.timeline_poll();
         self.project_poll();
         self.project_autosave("timer");
+        self.state.head_box = self.session.as_ref().filter(|_| self.measure_box).map(|s| {
+            let b = Bounds::of(&s.head.positions);
+            (b.lo, b.hi)
+        });
         if self.preview_dirty {
             self.update_preview();
         }

@@ -539,6 +539,7 @@ impl Studio<'_> {
         self.face_rig_panel(ui);
         self.skin_panel(ui);
         self.timeline_panel(ui);
+        self.measure_panel(ui);
         self.topology_panel(ui);
         egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
             ui.checkbox(&mut self.world.hud.on, tr("action.hud"));

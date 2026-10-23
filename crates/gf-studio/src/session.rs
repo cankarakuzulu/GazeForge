@@ -163,6 +163,7 @@ pub struct SettleOut {
     pub server_ms: Value,
     pub eyes: Vec<(usize, Similarity)>,
     pub eyeballs: Option<EyeballSpec>,
+    pub measurements: serde_json::Map<String, Value>,
 }
 
 fn placed_eye(v: &Value) -> Option<(usize, Similarity)> {
@@ -195,6 +196,7 @@ pub fn run_settle(input: &Value) -> Result<SettleOut, String> {
         server_ms,
         eyes,
         eyeballs,
+        measurements: s.measurements,
     })
 }
 
@@ -204,6 +206,7 @@ pub struct SettleInfo {
     pub approximate: bool,
     pub ms: f64,
     pub server_ms: Value,
+    pub measurements: serde_json::Map<String, Value>,
 }
 
 pub struct Head {
@@ -486,7 +489,7 @@ impl Session {
         if h.revision == 0 {
             h.wind = winding_sign(&h.positions, &h.lods[0].indices);
         }
-        self.settled = Some(SettleInfo { revision: s.revision.clone(), placement: s.placement.clone(), approximate: s.approximate, ms: s.ms, server_ms: s.server_ms.clone() });
+        self.settled = Some(SettleInfo { revision: s.revision.clone(), placement: s.placement.clone(), approximate: s.approximate, ms: s.ms, server_ms: s.server_ms.clone(), measurements: s.measurements.clone() });
         self.settled_eyes = s.eyes.clone();
         self.settled_eyeballs = s.eyeballs.clone();
         let live = self.settled_eyeballs.clone();

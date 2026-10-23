@@ -868,17 +868,10 @@ impl Renderer {
             }
             if o.clip_box.on {
                 let (lo, hi) = viewer::box_world(o, &st.bounds);
-                let v = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
-                let mut e = Vec::new();
-                for i in 0..8 {
-                    for bit in [1, 2, 4] {
-                        if i & bit == 0 {
-                            e.push(v(i));
-                            e.push(v(i | bit));
-                        }
-                    }
-                }
-                last.draws.push(line(&e, [0.9, 0.3, 0.6], LinePipe::Lines, None, &mut uni, &mut lines));
+                last.draws.push(line(&box_edges(lo, hi), [0.9, 0.3, 0.6], LinePipe::Lines, None, &mut uni, &mut lines));
+            }
+            if let (Some((lo, hi)), true) = (st.head_box, has_head) {
+                last.draws.push(line(&box_edges(lo, hi), [0.88, 0.63, 0.19], LinePipe::Lines, None, &mut uni, &mut lines));
             }
             if st.pivot_flash > 0.0 && r.slot == st.active {
                 let t = cam.cur.target;
@@ -1080,6 +1073,20 @@ pub fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::
     drop(data);
     buf.unmap();
     Ok(out)
+}
+
+fn box_edges(lo: V3, hi: V3) -> Vec<V3> {
+    let v = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
+    let mut e = Vec::new();
+    for i in 0..8 {
+        for bit in [1, 2, 4] {
+            if i & bit == 0 {
+                e.push(v(i));
+                e.push(v(i | bit));
+            }
+        }
+    }
+    e
 }
 
 pub fn background(dark: bool) -> [f64; 3] {

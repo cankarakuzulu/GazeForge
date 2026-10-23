@@ -766,6 +766,17 @@ impl Offscreen {
                        "held": w.project.held.as_ref().map(|h| h["name"].clone()), "autosaved": w.project.autosaved,
                        "weights": w.character_input().map(|c| c["weights"].clone())})
             }
+            "measure" => {
+                if let Some(on) = step.get("box").and_then(Value::as_bool) {
+                    w.measure_box = on;
+                }
+                w.tick();
+                let s = w.session.as_ref().ok_or("measure needs a loaded character")?;
+                let rows = s.settled.as_ref().map(|st| crate::measure_panel::rows(&st.measurements)).unwrap_or_default();
+                json!({"measurements": rows.iter().map(|(k, mm, d, _)| json!({"name": k, "mm": mm, "delta_mm": d})).collect::<Vec<_>>(),
+                       "box_mm": w.state.head_box.map(|(lo, hi)| crate::measure_panel::box_mm(lo, hi)),
+                       "lod_triangles": s.head.lods.iter().map(|l| l.indices.len() / 3).collect::<Vec<_>>()})
+            }
             "timeline" => {
                 match text("do").unwrap_or("summary") {
                     "deltas" => {

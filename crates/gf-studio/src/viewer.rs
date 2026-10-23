@@ -593,6 +593,7 @@ pub struct ViewerState {
     pub opts: Opts,
     pub bounds: Bounds,
     pub pivot_flash: f64,
+    pub head_box: Option<(V3, V3)>,
 }
 
 impl Default for ViewerState {
@@ -605,6 +606,7 @@ impl Default for ViewerState {
             opts: Opts::default(),
             bounds: Bounds { lo: [-0.1; 3], hi: [0.1; 3], centre: [0.0; 3], radius: 0.15 },
             pivot_flash: 0.0,
+            head_box: None,
         }
     }
 }
