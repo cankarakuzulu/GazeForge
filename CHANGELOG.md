@@ -301,6 +301,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The studio's Load replaced unsaved work without asking.** Store → Load, a wizard's Open in studio and Topology's
+  Use now ask first when there are unsaved changes (Discard changes / Cancel; Escape cancels). A load that then failed
+  used to leave the edited character on screen marked as saved, its project name gone; the project, its name and its
+  unsaved mark now come back as they were (a scripted run: dirty after the failed load, true; it was false). An empty
+  Store field is refused before anything happens ("Enter a store folder to load"), and a failed load says why in
+  words ("… is not a store"), not as a JSON object.
 - **The browser's recovery offer covered the toolbar.** "Unsaved work … was kept by autosave" floated at a fixed
   52 px from the top, over the second toolbar row when the header wraps and over the view's chips when it does not.
   It is now a strip between the header and the view that pushes the view down. Showing it also exposed an older fault:

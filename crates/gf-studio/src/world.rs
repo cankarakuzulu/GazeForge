@@ -443,7 +443,7 @@ impl World {
                         self.prefetch_samples();
                     }
                     Err(e) => {
-                        self.note(trf("studio.note.load_failed", &[("error", &e)]));
+                        self.note(trf("studio.note.load_failed", &[("error", &crate::project::message(&e))]));
                         self.load_result = Some(Err(e));
                     }
                 }

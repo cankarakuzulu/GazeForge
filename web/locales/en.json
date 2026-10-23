@@ -881,6 +881,8 @@
  "studio.layout.tip": "{what} ({keys} cycles)",
  "studio.layout_status": "Layout: {name}",
  "studio.load": "Load",
+ "studio.store_needed": "Enter a store folder to load",
+ "studio.load_discards": "Loading replaces the character, and its unsaved changes are lost. Save the project first to keep them.",
  "studio.load_first": "Load a store first",
  "studio.load_tip": "Load the store (and the optional files) into the studio",
  "studio.lod_status": "LOD {n}",

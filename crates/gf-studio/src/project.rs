@@ -37,6 +37,7 @@ pub struct Project {
     pub relinked: bool,
     pub last_auto_sig: Option<String>,
     pub autosave_reason: &'static str,
+    pub prior: Option<Box<Project>>,
 }
 
 impl Default for Project {
@@ -62,6 +63,7 @@ impl Default for Project {
             relinked: false,
             last_auto_sig: None,
             autosave_reason: "timer",
+            prior: None,
         }
     }
 }
@@ -261,7 +263,9 @@ impl World {
     }
 
     pub fn project_detach(&mut self) {
-        self.project = Project { list: std::mem::take(&mut self.project.list), recoveries: std::mem::take(&mut self.project.recoveries), ..Project::default() };
+        let mut old = std::mem::take(&mut self.project);
+        old.prior = None;
+        self.project = Project { list: std::mem::take(&mut old.list), recoveries: std::mem::take(&mut old.recoveries), prior: Some(Box::new(old)), ..Project::default() };
         self.project.pending_epoch = Some(self.epoch);
     }
 
@@ -355,7 +359,15 @@ impl World {
             }
         }
         if self.project.saved_sig.is_none() && self.loading.is_none() && matches!(self.load_result, Some(Err(_))) {
-            let e = self.load_result.as_ref().and_then(|r| r.as_ref().err()).cloned().unwrap_or_default();
+            let e = message(&self.load_result.as_ref().and_then(|r| r.as_ref().err()).cloned().unwrap_or_default());
+            if let Some(prior) = self.project.prior.take().filter(|_| self.session.is_some()) {
+                let (list, recoveries) = (std::mem::take(&mut self.project.list), std::mem::take(&mut self.project.recoveries));
+                self.project = *prior;
+                self.project.list = list;
+                self.project.recoveries = recoveries;
+                self.project.status = trf("studio.note.load_failed", &[("error", &e)]);
+                return;
+            }
             self.project.pending_panels = None;
             self.project.pending_epoch = None;
             self.project.status = trf("studio.note.load_failed", &[("error", &e)]);
@@ -367,6 +379,7 @@ impl World {
         }
         if self.session.is_some() && self.project.saved_sig.is_none() && self.loading.is_none() && self.project.pending_epoch.is_none_or(|e| e != self.epoch) {
             self.project.pending_epoch = None;
+            self.project.prior = None;
             if let Some(p) = self.project.pending_panels.take() {
                 self.apply_panel_states(&p);
                 self.journal.rebase_panels();
@@ -412,7 +425,7 @@ fn when(v: &Value) -> String {
     trf("project.utc_time", &[("date", &&iso[..10]), ("time", &&iso[11..19])])
 }
 
-fn message(e: &str) -> String {
+pub(crate) fn message(e: &str) -> String {
     gf_api::exactjson::text(e).ok().and_then(|v| v["message"].as_str().map(str::to_string)).unwrap_or_else(|| e.to_string())
 }
 

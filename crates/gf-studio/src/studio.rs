@@ -47,6 +47,14 @@ pub struct UiState {
     pub cube_drag: Option<usize>,
     pub wizards: crate::wizard::Wizards,
     pub project: crate::project::ProjectUi,
+    pub load_ask: Option<LoadAsk>,
+}
+
+#[derive(Clone)]
+pub enum LoadAsk {
+    Fields,
+    Spec(String, String),
+    Game(String),
 }
 
 pub struct UiArgs {
@@ -88,6 +96,7 @@ impl UiState {
             cube_drag: None,
             wizards: Default::default(),
             project: Default::default(),
+            load_ask: None,
         })
     }
 }
@@ -139,6 +148,67 @@ impl Studio<'_> {
         let (spec, mac, eyes, game) = (opt(&self.s.spec), opt(&self.s.macro_file), opt(&self.s.eyes), opt(&self.s.game));
         self.world.request_load(self.s.store.trim(), spec.as_deref(), mac.as_deref(), eyes.as_deref(), game.as_deref());
         self.s.status = tr("studio.status.loading").into();
+    }
+
+    pub fn ask_load(&mut self, a: LoadAsk) {
+        let store = match &a {
+            LoadAsk::Spec(s, _) if !s.trim().is_empty() => s,
+            _ => &self.s.store,
+        };
+        if store.trim().is_empty() {
+            self.s.status = tr("studio.store_needed").into();
+            return;
+        }
+        if self.world.project_dirty() {
+            self.s.load_ask = Some(a);
+        } else {
+            self.load_now(a);
+        }
+    }
+
+    fn load_now(&mut self, a: LoadAsk) {
+        match a {
+            LoadAsk::Fields => self.world.project_detach(),
+            LoadAsk::Spec(store, spec) => {
+                if !store.is_empty() {
+                    self.s.store = store;
+                }
+                self.s.spec = spec;
+            }
+            LoadAsk::Game(g) => {
+                self.s.game = g;
+                self.world.topo.reset();
+            }
+        }
+        self.load();
+    }
+
+    fn load_ask_window(&mut self, ctx: &egui::Context) {
+        let Some(a) = self.s.load_ask.clone() else { return };
+        let mut discard = None;
+        let r = egui::Modal::new(egui::Id::new("load_ask")).show(ctx, |ui| {
+            ui.set_max_width(380.0);
+            ui.heading(tr("designer.unsaved"));
+            ui.label(tr("studio.load_discards"));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr("designer.discard_changes")).clicked() {
+                    discard = Some(true);
+                }
+                if ui.button(tr("ui.p-dlg-cancel")).clicked() {
+                    discard = Some(false);
+                }
+            });
+        });
+        if discard.is_none() && r.should_close() {
+            discard = Some(false);
+        }
+        if let Some(d) = discard {
+            self.s.load_ask = None;
+            if d {
+                self.load_now(a);
+            }
+        }
     }
 
     fn save(&mut self) {
@@ -249,12 +319,9 @@ impl Studio<'_> {
         let slot = self.world.project.slot();
         self.s.wizards.show(&ctx, self.world, &slot);
         if let Some((store, spec)) = self.s.wizards.open_spec.take() {
-            if !store.is_empty() {
-                self.s.store = store;
-            }
-            self.s.spec = spec;
-            self.load();
+            self.ask_load(LoadAsk::Spec(store, spec));
         }
+        self.load_ask_window(&ctx);
     }
 
     fn keymap_source(&self) -> String {
@@ -436,8 +503,7 @@ impl Studio<'_> {
             ui.horizontal(|ui| {
                 let load = ui.add_enabled(self.world.loading.is_none(), egui::Button::new(tr("studio.load"))).on_hover_text(tr("studio.load_tip"));
                 if load.clicked() {
-                    self.world.project_detach();
-                    self.load();
+                    self.ask_load(LoadAsk::Fields);
                 }
             });
         });

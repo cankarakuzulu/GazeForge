@@ -466,10 +466,8 @@ impl Studio<'_> {
             "topology_after" | "topology_before" => self.world.with_topo(|t, w| t.compare(w, id == "topology_after")).unwrap_or_else(|e| e),
             "topology_use" => match self.world.topo.result().and_then(|r| r["game"].as_str()).map(str::to_string) {
                 Some(g) => {
-                    self.s.game = g.clone();
-                    self.world.topo.reset();
-                    self.load();
-                    trf("topology.loading_base", &[("game", &short(&g))])
+                    self.ask_load(crate::studio::LoadAsk::Game(g.clone()));
+                    if self.s.load_ask.is_some() { tr("designer.unsaved").into() } else { trf("topology.loading_base", &[("game", &short(&g))]) }
                 }
                 None => tr("topology.run_first").into(),
             },

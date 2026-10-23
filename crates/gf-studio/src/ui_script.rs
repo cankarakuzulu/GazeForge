@@ -131,7 +131,7 @@ impl Offscreen {
                 if self.ui.is_none() {
                     let ctx = egui::Context::default();
                     studio::setup_context(&ctx)?;
-                    let state = UiState::new(UiArgs { keymap: text("keymap").map(Into::into), input: None, store: None, spec: None, macro_file: None, eyes: None, godot_config: None })?;
+                    let state = UiState::new(UiArgs { keymap: text("keymap").map(Into::into), input: None, store: text("store").map(Into::into), spec: text("spec").map(Into::into), macro_file: text("macro").map(Into::into), eyes: text("eyes").map(Into::into), godot_config: None })?;
                     let options = egui_wgpu::RendererOptions { dithering: false, ..Default::default() };
                     let er = egui_wgpu::Renderer::new(&self.gpu.device, wgpu::TextureFormat::Rgba8Unorm, options);
                     self.ui = Some(OffUi { ctx, egui: egui::mutex::RwLock::new(er), state, time: 0.0, modifiers: egui::Modifiers::NONE, pointer: egui::pos2(-10.0, -10.0) });
