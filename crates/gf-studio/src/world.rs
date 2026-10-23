@@ -230,6 +230,7 @@ impl World {
         }
         self.face_poll();
         self.skin_poll();
+        self.wearables_poll();
         self.journal_tick();
         self.stitch_poll();
         self.timeline_poll();

@@ -301,6 +301,13 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The studio froze for about 1.7 s the first time Body shape opened.** It read the store's wearable list on the
+  interface thread. The list is now read in the background ("Reading the store's wearables…"; worn items show their
+  short id until their names arrive): the click that opens the panel took 1608 and 1730 ms, now 11 to 14 ms, and the
+  list lands about 0.8 s later. `wearable.list` itself no longer parses every item's mesh to read its layer (1.4 s ->
+  0.9-1.05 s on the 68-item test store, same answer), and a long-running process (the server, the studio) remembers
+  each item's row by its reference, so later lists are quick (one server: 792 ms, then 22 ms, then 1 ms). A wearable whose mesh is damaged is now listed; wearing
+  it fails with its own error, where before the whole list failed.
 - **Remove, Reset and Remove the body happened silently.** They stay one click (undo covers them), and now say so:
   "Take off cape (47c7634b). Ctrl+Z puts it back", "Reset all sliders. …", "Reset body shape. …", "Remove the body. …"
   (the studio names the key its keymap binds to undo). A Reset with nothing to reset says nothing, and in the browser

@@ -193,6 +193,7 @@
  "body.wear_none": "Nothing worn",
  "body.wear_remove": "Remove",
  "body.wear_remove_line": "Take off {name}",
+ "body.wear_loading": "Reading the store's wearables…",
  "body.wear_store_empty": "No wearables in the store: import some with the Import a garment task",
  "body.wearables": "Wearables",
  "body.wear_find": "Filter wearables by name",

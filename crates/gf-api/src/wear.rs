@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use gf_io::store::Store;
 use gf_io::wearable_store::WearableManifest;
@@ -16,6 +18,11 @@ pub fn list_output() -> Value {
     shape(json!({"wearables": {"type": "array", "description": "per wearable: reference, name, kind, vertices, the base vertices it hides, transparent, its material maps, z_depth (the layer it takes unless the spec's wearables[].layer sets one: lower is closer to the skin)"}}))
 }
 
+fn rows_seen() -> &'static Mutex<HashMap<String, Value>> {
+    static SEEN: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
 pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let root = Path::new(text(input, "store"));
     let store = Store::open(root).map_err(ApiError::not_found)?;
@@ -27,10 +34,18 @@ pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         names.sort();
         for hex in names {
             let reference = format!("sha256:{hex}");
-            let m: WearableManifest = store.get_manifest("wearables", &reference).map_err(ApiError::internal)?;
-            let z_depth = store.load_wearable(&reference).map(|w| crate::tasks::wearable::depth_of(&w.binding)).map_err(ApiError::internal)?;
-            rows.push(json!({"wearable": reference, "name": m.name, "kind": m.kind, "vertices": m.vertices, "hides_base_vertices": m.hidden,
-                             "transparent": m.transparent, "material": m.material.keys().collect::<Vec<_>>(), "z_depth": z_depth}));
+            if let Some(row) = rows_seen().lock().ok().and_then(|seen| seen.get(&reference).cloned()) {
+                rows.push(row);
+                continue;
+            }
+            let (m, binding): (WearableManifest, _) = store.load_binding(&reference).map_err(ApiError::internal)?;
+            let z_depth = crate::tasks::wearable::depth_of(&binding);
+            let row = json!({"wearable": reference, "name": m.name, "kind": m.kind, "vertices": m.vertices, "hides_base_vertices": m.hidden,
+                             "transparent": m.transparent, "material": m.material.keys().collect::<Vec<_>>(), "z_depth": z_depth});
+            if let Ok(mut seen) = rows_seen().lock() {
+                seen.insert(reference, row.clone());
+            }
+            rows.push(row);
         }
         rows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     }

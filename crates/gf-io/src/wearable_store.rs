@@ -226,7 +226,7 @@ impl Store {
         Ok((self.put_manifest("wearables", &manifest)?, manifest))
     }
 
-    pub fn load_wearable(&self, reference: &str) -> Result<Wearable, String> {
+    pub fn load_binding(&self, reference: &str) -> Result<(WearableManifest, Binding), String> {
         let manifest: WearableManifest = self.get_manifest("wearables", reference)?;
         if manifest.format != WEARABLE_FORMAT {
             return Err(format!("wearable {reference} has format {:?}", manifest.format));
@@ -236,6 +236,11 @@ impl Store {
         } else {
             Binding::parse(&String::from_utf8_lossy(&self.get_ref(&manifest.binding)?)).map_err(|e| format!("wearable {reference}: {e}"))?
         };
+        Ok((manifest, binding))
+    }
+
+    pub fn load_wearable(&self, reference: &str) -> Result<Wearable, String> {
+        let (manifest, binding) = self.load_binding(reference)?;
         let mesh = crate::body::parse_obj(&String::from_utf8_lossy(&self.get_ref(&manifest.mesh)?), None).map_err(|e| format!("wearable {reference}: {e}"))?;
         if manifest.attach.is_none() && mesh.positions.len() != binding.bound.len() {
             return Err(format!("wearable {reference}: binding and mesh disagree on the vertex count"));

@@ -795,6 +795,7 @@ impl Offscreen {
             "body" => {
                 w.body_sliders_load();
                 w.wearables_load();
+                w.wait(|w| w.body_ui.wear_job.is_none(), 120.0)?;
                 if let Some(e) = &w.body_ui.error {
                     return Err(format!("body.sliders: {e}"));
                 }

@@ -29,6 +29,7 @@ pub struct BodyUi {
     pub physics: Vec<String>,
     pub wear_key: String,
     pub store_wear: Vec<StoreWear>,
+    pub wear_job: Option<std::sync::mpsc::Receiver<(String, Vec<StoreWear>)>>,
     pub error: Option<String>,
     pub edit_error: Option<String>,
     pub last_groom: Option<Value>,
@@ -164,20 +165,40 @@ impl World {
             return;
         }
         self.body_ui.wear_key = s.store.clone();
-        let env = gf_api::call(&gf_api::Ctx::from_env(), "wearable.list", &json!({"store": s.store}));
-        self.body_ui.store_wear = env["result"]["wearables"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|w| {
-                Some(StoreWear {
-                    reference: w["wearable"].as_str()?.to_string(),
-                    name: w["name"].as_str().unwrap_or("").to_string(),
-                    z_depth: w["z_depth"].as_f64().unwrap_or(50.0),
-                    transparent: w["transparent"].as_bool().unwrap_or(false),
+        let store = s.store.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let env = gf_api::call(&gf_api::Ctx::from_env(), "wearable.list", &json!({"store": store}));
+            let rows = env["result"]["wearables"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|w| {
+                    Some(StoreWear {
+                        reference: w["wearable"].as_str()?.to_string(),
+                        name: w["name"].as_str().unwrap_or("").to_string(),
+                        z_depth: w["z_depth"].as_f64().unwrap_or(50.0),
+                        transparent: w["transparent"].as_bool().unwrap_or(false),
+                    })
                 })
-            })
-            .collect();
+                .collect();
+            let _ = tx.send((store, rows));
+        });
+        self.body_ui.wear_job = Some(rx);
+    }
+
+    pub fn wearables_poll(&mut self) {
+        let Some(rx) = &self.body_ui.wear_job else { return };
+        match rx.try_recv() {
+            Ok((store, rows)) => {
+                self.body_ui.wear_job = None;
+                if store == self.body_ui.wear_key {
+                    self.body_ui.store_wear = rows;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.body_ui.wear_job = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     pub fn body_wear(&mut self, asset: &str) -> Result<bool, String> {
@@ -508,8 +529,11 @@ impl crate::studio::Studio<'_> {
             let hair_of = |asset: &str| body["wearables"].as_array().into_iter().flatten().find(|w| w["asset"] == asset).and_then(|w| w["hair"].as_str()).unwrap_or("tuck").to_string();
             let mut hair_commit: Option<(String, String)> = None;
             let label = |asset: &str| {
-                let name = ui_state.store_wear.iter().find(|w| w.reference == asset).map_or("?", |w| w.name.as_str());
-                format!("{name} ({})", asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset))
+                let short = asset.trim_start_matches("sha256:").get(..8).unwrap_or(asset);
+                match ui_state.store_wear.iter().find(|w| w.reference == asset) {
+                    Some(w) => format!("{} ({short})", w.name),
+                    None => short.to_string(),
+                }
             };
             if worn.is_empty() {
                 ui.label(egui::RichText::new(tr("body.wear_none")).weak());
@@ -612,7 +636,13 @@ impl crate::studio::Studio<'_> {
             }
             let mut free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
             free.sort_by_key(|w| label(&w.reference).to_lowercase());
-            if free.is_empty() {
+            if ui_state.wear_job.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(tr("body.wear_loading")).weak());
+                });
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            } else if free.is_empty() {
                 ui.label(egui::RichText::new(tr("body.wear_store_empty")).weak());
             } else {
                 ui.add(egui::TextEdit::singleline(&mut ui_state.wear_filter).hint_text(tr("body.wear_find")).desired_width(f32::INFINITY));
