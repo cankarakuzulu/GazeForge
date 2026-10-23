@@ -218,6 +218,7 @@ pub struct Head {
     pub reference: Option<Vec<f32>>,
     pub revision: u64,
     pub eyes: Option<EyeMesh>,
+    pub chart: Option<std::sync::Arc<Vec<f32>>>,
 }
 
 pub struct EyeMesh {
@@ -228,6 +229,8 @@ pub struct EyeMesh {
     pub parts: Vec<EyePart>,
     pub model: Option<String>,
     pub key: u64,
+    pub chart: Vec<f32>,
+    pub chart_of: Option<(u64, u64)>,
 }
 
 pub struct EyePart {
@@ -279,7 +282,7 @@ pub fn eye_meshes(eyes: &[Eye]) -> (EyeMesh, Vec<EyeBase>) {
         indices.extend(e.triangles.iter().flatten().map(|&i| first as u32 + i));
         bases.push(EyeBase { side: usize::from(e.centre[0] < 0.0), centre: e.centre, gaze: e.gaze(), first, positions: e.vertices.clone(), normals: n });
     }
-    (EyeMesh { positions, normals, indices, uvs, parts, model: None, key: 0 }, bases)
+    (EyeMesh { positions, normals, indices, uvs, parts, model: None, key: 0, chart: Vec::new(), chart_of: None }, bases)
 }
 
 fn invert(t: &Similarity) -> Similarity {
@@ -404,7 +407,7 @@ impl Session {
         }
         timings.insert("lods_ms".into(), ms(t));
         let n = scene.vertices;
-        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, revision: 0, eyes };
+        let head = Head { n, lods, positions: vec![0.0; n * 3], normals: vec![0.0; n * 3], wind: 1.0, reference: None, revision: 0, eyes, chart: None };
         let targets = sl["targets"].as_array().map_or(0, |a| a.len());
         let mut s = Session {
             store: store.to_string(),

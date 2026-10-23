@@ -39,10 +39,28 @@ fn first_difference(a: &Value, b: &Value, path: &mut Vec<String>) -> bool {
     }
 }
 
+fn pins_label(b: &Value, a: &Value) -> Option<String> {
+    let (pb, pa) = (b["pins"]["pins"].as_array()?, a["pins"]["pins"].as_array()?);
+    let n = |p: &Value| p["n"].as_u64().unwrap_or(0);
+    let only = |x: &[Value], y: &[Value]| x.iter().find(|p| !y.iter().any(|q| n(q) == n(p))).map(n);
+    if pa.len() > pb.len() {
+        return only(pa, pb).map(|k| trf("pins.undo_add_n", &[("n", &k)]));
+    }
+    if pa.len() < pb.len() {
+        return only(pb, pa).map(|k| trf("pins.undo_delete", &[("n", &k)]));
+    }
+    pa.iter().zip(pb).find(|(x, y)| x != y).map(|(p, _)| trf("pins.undo_note", &[("n", &n(p))]))
+}
+
 fn panel_label(before: &Value, after: &Value) -> String {
     let mut path = Vec::new();
     if !first_difference(before, after, &mut path) || path.is_empty() {
         return tr("history.panels").to_string();
+    }
+    if path[0] == "pins"
+        && let Some(l) = pins_label(before, after)
+    {
+        return l;
     }
     let panel = tr_or(&format!("panel.{}", path[0]), &crate::wizard::humanize(&path[0])).to_string();
     let Some(leaf) = path.iter().skip(1).rev().find(|p| p.parse::<usize>().is_err()) else { return panel };
@@ -131,6 +149,7 @@ impl World {
         json!({"rig": {"mode": f.mode.name(), "weights": weights, "manual": manual},
                "stitch": {"values": s.values, "seam": s.seam, "auto": s.auto, "store": s.store, "body": s.body},
                "timeline": {"speed": t.speed, "loop": t.looping, "apply_head": t.apply_head},
+               "pins": self.pins_state(),
                "notes": self.project.notes, "body": self.session.as_ref().map_or(Value::Null, |s| s.character.body.clone())})
     }
 
@@ -164,6 +183,7 @@ impl World {
         self.timeline.speed = t["speed"].as_f64().unwrap_or(self.timeline.speed);
         self.timeline.looping = t["loop"] != false;
         self.timeline.apply_head = t["apply_head"] != false;
+        (self.pins, self.pins_next) = crate::pins::read(&v["pins"]);
         self.project.notes = v["notes"].as_str().unwrap_or_default().to_string();
         let body = v["body"].clone();
         if self.session.as_ref().is_some_and(|s| s.character.body != body) {

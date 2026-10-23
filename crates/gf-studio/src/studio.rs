@@ -52,6 +52,13 @@ pub struct UiState {
     pub load_ask: Option<LoadAsk>,
     pub eye_note_hidden: bool,
     pub browse: crate::browse::Browse,
+    pub grid_view: Option<(String, std::time::Instant)>,
+    pub grid_labels: Option<(String, Vec<Vec<crate::grid_labels::Label>>)>,
+    pub overlay_rects: Vec<egui::Rect>,
+    pub overlay_next: Vec<egui::Rect>,
+    pub goto_text: String,
+    pub hover_at: Option<std::time::Instant>,
+    pub viewport_rect: Option<egui::Rect>,
 }
 
 #[derive(Clone)]
@@ -103,11 +110,18 @@ impl UiState {
             load_ask: None,
             eye_note_hidden: false,
             browse: Default::default(),
+            grid_view: None,
+            grid_labels: None,
+            overlay_rects: Vec::new(),
+            overlay_next: Vec::new(),
+            goto_text: String::new(),
+            hover_at: None,
+            viewport_rect: None,
         })
     }
 }
 
-fn placed(kind: &str, typed: &str) -> PathBuf {
+pub(crate) fn placed(kind: &str, typed: &str) -> PathBuf {
     let p = PathBuf::from(typed);
     let p = if p.is_absolute() { p } else { gf_api::project::data_dir(kind).join(p) };
     if let Some(d) = p.parent() {
@@ -415,6 +429,8 @@ impl Studio<'_> {
                 ("xray", "scan-eye", o.xray, tr("action.xray")),
                 ("points", "chart-scatter", o.points, tr("action.points")),
                 ("eyes", "eye", o.eyes, tr("action.eyes")),
+                ("face_grid", "grid-3x3", o.face_grid, tr("action.face_grid")),
+                ("probe", "crosshair", self.world.probe_mode, tr("action.probe")),
                 ("back_faces", "flip-horizontal-2", o.back_hi, tr("action.back_faces")),
                 ("seams", "scissors-line-dashed", o.seams, tr("action.seams")),
                 ("light_gizmo", "lightbulb", o.light_gizmo, tr("action.light_gizmo")),
@@ -540,6 +556,7 @@ impl Studio<'_> {
         self.skin_panel(ui);
         self.timeline_panel(ui);
         self.measure_panel(ui);
+        self.pins_panel(ui);
         self.topology_panel(ui);
         egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
             ui.checkbox(&mut self.world.hud.on, tr("action.hud"));
@@ -709,6 +726,9 @@ impl Studio<'_> {
                 }
             }
         }
+        if tool == crate::skin::Tool::None {
+            self.probe_input(resp, alt, rect, ppp, &rects);
+        }
         if resp.double_clicked()
             && tool == crate::skin::Tool::None
             && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), &self.world.session)
@@ -729,6 +749,7 @@ impl Studio<'_> {
     fn viewport(&mut self, ui: &mut egui::Ui, dt: f64) {
         let rect = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        self.s.viewport_rect = Some(rect);
         let ppp = ui.ctx().pixels_per_point();
         let (w, h) = (((rect.width() * ppp).round() as u32).max(1), ((rect.height() * ppp).round() as u32).max(1));
         self.input(ui, &resp, rect, ppp, w, h);
@@ -783,6 +804,11 @@ impl Studio<'_> {
                 painter.rect_stroke(rr, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(90, 150, 240)), egui::StrokeKind::Inside);
             }
         }
+        self.s.overlay_rects = std::mem::take(&mut self.s.overlay_next);
+        self.grid_paint(ui.ctx(), &painter, rect, ppp, w, h);
+        self.pins_paint(&painter, rect, ppp, w, h);
+        self.flash_paint(ui.ctx(), &painter, rect, ppp, w, h);
+        self.probe_card(ui.ctx(), rect);
         self.face_rig_paint(&painter, rect, ppp, w, h);
         self.skin_overlay(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
@@ -797,6 +823,7 @@ impl Studio<'_> {
             let galley = painter.layout_no_wrap(lines.join("\n"), font, text_col);
             let pos = rect.right_bottom() + egui::vec2(-8.0, -8.0);
             let r = egui::Rect::from_min_size(pos - galley.size(), galley.size()).expand(4.0);
+            self.s.overlay_next.push(r);
             painter.rect_filled(r, 3.0, if dark { egui::Color32::from_black_alpha(140) } else { egui::Color32::from_white_alpha(170) });
             painter.galley(r.min + egui::vec2(4.0, 4.0), galley, text_col);
         }
@@ -819,7 +846,7 @@ impl Studio<'_> {
             return;
         }
         let (mut add, mut hide) = (false, false);
-        egui::Area::new(egui::Id::new("eye_note")).order(egui::Order::Foreground).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(rect.center_bottom() - egui::vec2(0.0, 40.0)).show(ctx, |ui| {
+        let shown = egui::Area::new(egui::Id::new("eye_note")).order(egui::Order::Foreground).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(rect.center_bottom() - egui::vec2(0.0, 40.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(tr("eyes.note"));
@@ -828,6 +855,7 @@ impl Studio<'_> {
                 });
             });
         });
+        self.s.overlay_next.push(shown.response.rect);
         if hide {
             self.s.eye_note_hidden = true;
         }

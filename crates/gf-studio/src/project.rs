@@ -100,6 +100,7 @@ impl World {
         let t = &self.timeline;
         out.insert("timeline".into(), json!({"version": 1, "t": t.t, "speed": t.speed, "loop": t.looping, "applyHead": t.apply_head, "playing": t.playing,
                                              "clip": t.clip.as_ref().map_or(Value::Null, |c| c.raw.clone())}));
+        out.insert("pins".into(), self.pins_state());
         out
     }
 
@@ -138,6 +139,7 @@ impl World {
                 self.stitch_go();
             }
         }
+        (self.pins, self.pins_next) = crate::pins::read(&panels["pins"]);
         let t = &panels["timeline"];
         if t.is_object() {
             if t["clip"].is_object() {

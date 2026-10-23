@@ -303,6 +303,9 @@ pub struct Opts {
     pub clip_box: ClipBox,
     pub dark: bool,
     pub bad: bool,
+    pub face_grid: bool,
+    pub grid_labels: bool,
+    pub eyes_grid: String,
 }
 
 pub const MAX_LIGHTS: usize = 4;
@@ -353,6 +356,9 @@ impl Default for Opts {
             clip_box: ClipBox { on: false, lo: [0.4, 0.0, 0.4], hi: [1.0, 0.5, 1.0] },
             dark: true,
             bad: false,
+            face_grid: false,
+            grid_labels: true,
+            eyes_grid: "grid".into(),
         }
     }
 }
@@ -397,6 +403,9 @@ impl Opts {
             ["lightGizmo"] => self.light_gizmo = flag()?,
             ["dark"] => self.dark = flag()?,
             ["badTriangles"] => self.bad = flag()?,
+            ["faceGrid"] => self.face_grid = flag()?,
+            ["gridLabels"] => self.grid_labels = flag()?,
+            ["eyesGrid"] => self.eyes_grid = v.as_str().filter(|m| ["grid", "hide", "plain"].contains(m)).ok_or_else(|| format!("{path} is grid, hide or plain"))?.to_string(),
             ["preset"] => {
                 if !self.apply_preset(v.as_str().unwrap_or("")) {
                     return Err(format!("unknown light preset {v}"));
@@ -455,6 +464,8 @@ impl Opts {
             "clip.0.on" => self.clip[0].on,
             "dark" => self.dark,
             "badTriangles" => self.bad,
+            "faceGrid" => self.face_grid,
+            "gridLabels" => self.grid_labels,
             _ => return Err(format!("{path} cannot be toggled")),
         };
         self.set(path, &serde_json::Value::Bool(!now))?;

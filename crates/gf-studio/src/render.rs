@@ -7,7 +7,7 @@ use crate::viewer::{self, Camera, Matrices, Rect, SlotState, V3, ViewerState, ad
 pub const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SAMPLES: u32 = 4;
-const UFLOATS: usize = 160;
+const UFLOATS: usize = 168;
 const LIT_MODES: [usize; 4] = [0, 1, 3, 4];
 const USTRIDE: u64 = 768;
 const USLOTS: u64 = 256;
@@ -108,6 +108,8 @@ struct GpuHead {
     wind: f32,
     n: usize,
     eyes: Option<GpuEyes>,
+    chart: wgpu::Buffer,
+    chart_of: usize,
 }
 
 struct GpuEyes {
@@ -115,6 +117,8 @@ struct GpuEyes {
     bind: wgpu::BindGroup,
     pos: wgpu::Buffer,
     nrm: wgpu::Buffer,
+    chart: wgpu::Buffer,
+    chart_of: Option<(u64, u64)>,
     key: u64,
     model: Option<String>,
     parts: Vec<(u32, u32, String)>,
@@ -302,7 +306,7 @@ impl Renderer {
                 count: None,
             }],
         });
-        let g1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mesh"), entries: &(0..7).map(storage_entry).collect::<Vec<_>>() });
+        let g1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mesh"), entries: &(0..8).map(storage_entry).collect::<Vec<_>>() });
         let g2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("material"),
             entries: &[
@@ -513,6 +517,7 @@ impl Renderer {
             buf("extra uvs", f32_bytes(&vec![0.0; tri * 6])),
             buf("extra flags", u32_bytes(&crate::session::edge_flags(&e.indices, &[]).0)),
             buf("extra verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
+            buf("extra chart", f32_bytes(&[0.0, 0.0])),
         ];
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("extra"),
@@ -526,6 +531,7 @@ impl Renderer {
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let buf = |label: &str, bytes: Vec<u8>| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage });
         let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
+        let zeros = vec![0.0f32; verts.max(1) * 2];
         let corner: Vec<f32> = if e.uvs.len() == verts * 2 { e.indices.iter().flat_map(|&i| [e.uvs[i as usize * 2], e.uvs[i as usize * 2 + 1]]).collect() } else { vec![0.0; tri * 6] };
         let entries = [
             buf("eye indices", u32_bytes(&e.indices)),
@@ -535,15 +541,17 @@ impl Renderer {
             buf("eye uvs", f32_bytes(&corner)),
             buf("eye flags", u32_bytes(&vec![0; tri])),
             buf("eye verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
+            buf("eye chart", f32_bytes(if e.chart.len() == verts * 2 { &e.chart } else { &zeros })),
         ];
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("eyes"),
             layout: &self.g1,
             entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
         });
-        let [_, pos, nrm, ..] = entries;
+        let chart_of = e.chart_of.filter(|_| e.chart.len() == verts * 2);
+        let [_, pos, nrm, _, _, _, _, chart] = entries;
         let parts = e.parts.iter().map(|p| (p.first as u32, p.count as u32, p.name.clone())).collect();
-        GpuEyes { tri: tri as u32, bind, pos, nrm, key: e.key, model: e.model.clone(), parts }
+        GpuEyes { tri: tri as u32, bind, pos, nrm, chart, chart_of, key: e.key, model: e.model.clone(), parts }
     }
 
     fn ensure_materials(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: Option<&str>) {
@@ -578,6 +586,9 @@ impl Renderer {
             let pos = buf("positions", f32_bytes(&head.positions));
             let nrm = buf("normals", f32_bytes(&head.normals));
             let refp = buf("reference", f32_bytes(head.reference.as_deref().unwrap_or(&vec![0.0; head.n * 3])));
+            let chart_ok = head.chart.as_ref().filter(|c| c.len() == head.n * 2);
+            let chart = buf("chart", f32_bytes(chart_ok.map_or(&vec![0.0; head.n.max(1) * 2], |c| c.as_ref())));
+            let chart_of = chart_ok.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
             let lods = head
                 .lods
                 .iter()
@@ -589,7 +600,7 @@ impl Renderer {
                     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("lod"),
                         layout: &self.g1,
-                        entries: &[&idx, &pos, &nrm, &refp, &uvs, &flags, &verts]
+                        entries: &[&idx, &pos, &nrm, &refp, &uvs, &flags, &verts, &chart]
                             .iter()
                             .enumerate()
                             .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
@@ -599,7 +610,7 @@ impl Renderer {
                 })
                 .collect();
             let eyes = head.eyes.as_ref().filter(|e| !e.indices.is_empty()).map(|e| self.make_eyes(device, e));
-            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes });
+            self.head = Some(GpuHead { pos, nrm, refp, has_ref: head.reference.is_some(), lods, revision: head.revision, wind: head.wind, n: head.n, eyes, chart, chart_of });
             return;
         }
         let want = head.eyes.as_ref().filter(|e| !e.indices.is_empty());
@@ -621,6 +632,22 @@ impl Renderer {
         if let (Some(r), false) = (&head.reference, g.has_ref) {
             queue.write_buffer(&g.refp, 0, &f32_bytes(r));
             g.has_ref = true;
+        }
+        let chart = head.chart.as_ref().filter(|c| c.len() == g.n * 2);
+        let chart_of = chart.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
+        if chart_of != g.chart_of {
+            if let Some(c) = chart {
+                queue.write_buffer(&g.chart, 0, &f32_bytes(c));
+            }
+            g.chart_of = chart_of;
+        }
+        if let (Some(ge), Some(e)) = (g.eyes.as_mut(), &head.eyes)
+            && e.chart_of.is_some()
+            && ge.chart_of != e.chart_of
+            && e.chart.len() == e.positions.len() / 3 * 2
+        {
+            queue.write_buffer(&ge.chart, 0, &f32_bytes(&e.chart));
+            ge.chart_of = e.chart_of;
         }
         if uvs_changed {
             for (gl, l) in g.lods.iter().zip(&head.lods) {
@@ -747,7 +774,11 @@ impl Renderer {
                 }
             }
             let (wind, has_ref) = self.head.as_ref().map_or((1.0, false), |g| (g.wind, g.has_ref));
-            let base = Self::base_uniforms(st, slot, &m, wind, has_ref, r, height);
+            let mut base = Self::base_uniforms(st, slot, &m, wind, has_ref, r, height);
+            let grid_on = st.opts.face_grid && self.head.as_ref().is_some_and(|g| g.chart_of != 0);
+            base[160..164].copy_from_slice(&[if grid_on { 1.0 } else { 0.0 }, gf_geom::face_chart::COLUMN_DEG as f32, gf_geom::face_chart::ROW_MM as f32, 0.0]);
+            base[164..168].copy_from_slice(&if st.opts.dark { [0.30, 0.95, 0.85, 1.0] } else { [0.02, 0.36, 0.55, 1.0] });
+            let base = base;
             let lod = self.head.as_ref().map_or(0, |g| slot.lod.min(g.lods.len().saturating_sub(1)));
             let has_head = self.head.is_some();
             let o = &st.opts;
@@ -766,8 +797,12 @@ impl Renderer {
                 };
                 first.draws.push(Draw::Mesh(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, head_chunk, lod, skin_on));
             }
-            if o.eyes && let Some(e) = self.head.as_ref().and_then(|g| g.eyes.as_ref()) {
+            if o.eyes
+                && !(grid_on && o.eyes_grid == "hide")
+                && let Some(e) = self.head.as_ref().and_then(|g| g.eyes.as_ref())
+            {
                 let mut u = base;
+                u[160] = if grid_on && o.eyes_grid == "grid" && e.chart_of.is_some() { 1.0 } else { 0.0 };
                 u[72..75].copy_from_slice(&[0.93f32, 0.93, 0.95].map(|x| x.powf(2.2)));
                 u[88] = 0.0;
                 u[92] = 0.0;
@@ -793,6 +828,7 @@ impl Renderer {
             }
             for (k, x) in self.extras.iter().enumerate() {
                 let mut u = base;
+                u[160] = 0.0;
                 u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
                 if matches!(slot.mode, 9 | 11) {
                     u[88] = 0.0;
@@ -1093,11 +1129,14 @@ pub fn background(dark: bool) -> [f64; 3] {
     if dark { [0.11, 0.11, 0.12] } else { [0.93, 0.93, 0.92] }
 }
 
+#[derive(Clone)]
 pub struct Hit {
     pub distance: f64,
     pub point: V3,
     pub triangle: [u32; 3],
     pub bary: [f64; 3],
+    pub index: usize,
+    pub lod: usize,
 }
 
 pub fn pick(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f64) -> Option<(f64, V3)> {
@@ -1111,11 +1150,12 @@ pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f6
     let planes = viewer::planes(&st.opts, &st.bounds);
     let (lo, hi) = viewer::box_world(&st.opts, &st.bounds);
     let cut = |p: V3| planes.iter().any(|q| dot(q.n, p) > q.d) || (st.opts.clip_box.on && (0..3).all(|k| p[k] > lo[k] && p[k] < hi[k]));
-    let lod = &head.lods[lod.unwrap_or(st.vp[rect.slot].lod).min(head.lods.len() - 1)];
+    let level = lod.unwrap_or(st.vp[rect.slot].lod).min(head.lods.len() - 1);
+    let lod = &head.lods[level];
     let pos = &head.positions;
     let g = |i: u32| [pos[i as usize * 3] as f64, pos[i as usize * 3 + 1] as f64, pos[i as usize * 3 + 2] as f64];
     let mut best: Option<Hit> = None;
-    for t in lod.indices.chunks_exact(3) {
+    for (index, t) in lod.indices.chunks_exact(3).enumerate() {
         let (a, b, c) = (g(t[0]), g(t[1]), g(t[2]));
         let (e1, e2) = (sub(b, a), sub(c, a));
         let pv = cross(d, e2);
@@ -1142,7 +1182,7 @@ pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f6
         if cut(hit) {
             continue;
         }
-        best = Some(Hit { distance: dist, point: hit, triangle: [t[0], t[1], t[2]], bary: [1.0 - uu - vv, uu, vv] });
+        best = Some(Hit { distance: dist, point: hit, triangle: [t[0], t[1], t[2]], bary: [1.0 - uu - vv, uu, vv], index, lod: level });
     }
     best
 }

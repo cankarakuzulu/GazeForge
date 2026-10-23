@@ -87,6 +87,19 @@ pub struct World {
     pub face_morphs: Option<String>,
     pub face_prefix: Option<String>,
     pub measure_box: bool,
+    pub grid: Option<std::sync::Arc<crate::face_grid::FaceGrid>>,
+    pub grid_key: String,
+    pub grid_axis: Option<std::sync::Arc<crate::grid_labels::Axis>>,
+    pub grid_wanted: bool,
+    pub probe: Option<crate::probe::Probe>,
+    pub probe_waiting: Option<crate::render::Hit>,
+    pub flash: Option<(crate::viewer::V3, std::time::Instant)>,
+    pub pins: Vec<Value>,
+    pub pins_next: u64,
+    pub probe_mode: bool,
+    pub hover: Option<(crate::viewer::V3, usize, String)>,
+    pub grid_error: Option<String>,
+    pub grid_job: Option<std::sync::mpsc::Receiver<(String, Result<crate::face_grid::FaceGrid, String>)>>,
 }
 
 impl Default for World {
@@ -146,6 +159,19 @@ impl Default for World {
             face_morphs: None,
             face_prefix: None,
             measure_box: false,
+            grid: None,
+            grid_key: String::new(),
+            grid_axis: None,
+            grid_wanted: false,
+            probe: None,
+            probe_waiting: None,
+            flash: None,
+            pins: Vec::new(),
+            pins_next: 1,
+            probe_mode: false,
+            hover: None,
+            grid_error: None,
+            grid_job: None,
         }
     }
 }
@@ -183,7 +209,7 @@ impl World {
         self.mark(v);
     }
 
-    fn note(&mut self, text: String) {
+    pub(crate) fn note(&mut self, text: String) {
         self.log.push(text);
         if self.log.len() > 50 {
             self.log.remove(0);
@@ -238,6 +264,7 @@ impl World {
         self.timeline_poll();
         self.project_poll();
         self.project_autosave("timer");
+        self.grid_sync();
         self.state.head_box = self.session.as_ref().filter(|_| self.measure_box).map(|s| {
             let b = Bounds::of(&s.head.positions);
             (b.lo, b.hi)
@@ -848,6 +875,12 @@ impl World {
             "seams" => toggle(st, "seams", tr("designer.opt.seams"))?,
             "clip" => toggle(st, "clip.0.on", tr("designer.opt.clip"))?,
             "light_gizmo" => toggle(st, "lightGizmo", tr("designer.opt.gizmo"))?,
+            "face_grid" => toggle(st, "faceGrid", tr("designer.opt.grid"))?,
+            "probe" => {
+                self.probe_mode = !self.probe_mode;
+                self.grid_wanted |= self.probe_mode;
+                tr(if self.probe_mode { "designer.probe_on" } else { "designer.probe_off" }).to_string()
+            }
             "theme" => toggle(st, "dark", tr("studio.opt.dark"))?,
             "bad_triangles" => toggle(st, "badTriangles", tr("studio.opt.bad"))?,
             "fov_down" | "fov_up" => {

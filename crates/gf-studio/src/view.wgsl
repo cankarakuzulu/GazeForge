@@ -25,6 +25,8 @@ struct U {
   col: vec4<f32>,
   mat_col: vec4<f32>,
   mat: vec4<f32>,
+  grid: vec4<f32>,
+  grid_ink: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -35,6 +37,7 @@ struct U {
 @group(1) @binding(4) var<storage, read> uvs: array<f32>;
 @group(1) @binding(5) var<storage, read> eflag: array<u32>;
 @group(1) @binding(6) var<storage, read> verts: array<u32>;
+@group(1) @binding(7) var<storage, read> chart: array<f32>;
 @group(2) @binding(0) var mat_tex: texture_2d<f32>;
 @group(2) @binding(1) var mat_samp: sampler;
 
@@ -161,6 +164,7 @@ struct MeshOut {
   @location(7) @interpolate(flat) tq: f32,
   @location(8) @interpolate(flat) tc: f32,
   @location(9) @interpolate(flat) eflags: u32,
+  @location(10) ch: vec2<f32>,
 };
 
 @vertex
@@ -228,6 +232,13 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
   }
   if (u.mat.x > 0.5 && u.o3.z > 0.5) { o.uv = vec2<f32>(uvs[c * 2u], uvs[c * 2u + 1u]); }
   if (u.o3.w > 0.5) { o.eflags = eflag[t]; }
+  o.ch = vec2<f32>(0.0);
+  if (u.grid.x > 0.5) {
+    let c0 = vec2<f32>(chart[i0 * 2u], chart[i0 * 2u + 1u]);
+    var cm = vec2<f32>(chart[me * 2u], chart[me * 2u + 1u]);
+    cm.x = cm.x - 360.0 * floor((cm.x - c0.x + 180.0) / 360.0);
+    o.ch = cm;
+  }
   o.clip = u.mvp * vec4<f32>(p, 1.0);
   return o;
 }
@@ -236,6 +247,9 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
 fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32> {
   let texel = textureSample(mat_tex, mat_samp, i.uv);
   let fw = fwidth(i.bary);
+  let gc = vec2<f32>(i.ch.x / max(u.grid.y, 1e-6) + 0.5, i.ch.y / max(u.grid.z, 1e-6));
+  let gfw = max(fwidth(gc), vec2<f32>(1e-6));
+  let gfx = max(fwidth(i.ch.x), 1e-6);
   if (clipped(i.vp, -1)) { discard; }
   let d = i.bary / max(fw, vec3<f32>(1e-6));
   let edge = min(d.x, min(d.y, d.z));
@@ -319,6 +333,16 @@ fn fs_mesh(i: MeshOut, @builtin(front_facing) ff: bool) -> @location(0) vec4<f32
     c = mix(c, vec3<f32>(1.00, 0.55, 0.05), 1.0 - smoothstep(w2 - 0.5, w2 + 0.5, b));
   }
   if (u.o6.z > 0.5 && u.o3.w > 0.5 && (i.eflags & 64u) != 0u) { c = mix(c, vec3<f32>(1.00, 0.12, 0.62), 0.75); }
+  if (u.grid.x > 0.5) {
+    let dl = abs(fract(gc + 0.5) - 0.5) / gfw;
+    let major = 1.0 - smoothstep(0.6, 1.6, min(dl.x, dl.y));
+    let fw3 = gfw * 3.0;
+    let d3 = abs(fract(gc * 3.0 + 0.5) - 0.5) / fw3;
+    let minor = (1.0 - smoothstep(0.3, 1.1, min(d3.x, d3.y))) * (1.0 - smoothstep(0.1, 0.25, max(fw3.x, fw3.y)));
+    let mid = 1.0 - smoothstep(0.6, 1.8, abs(i.ch.x - 360.0 * floor(i.ch.x / 360.0 + 0.5)) / gfx);
+    c = mix(c, u.grid_ink.xyz, max(major * 0.85, minor * 0.45));
+    c = mix(c, vec3<f32>(0.92, 0.22, 0.18), mid * 0.85);
+  }
   if (u.o1.x > 0.5 || mode == 7) { c = mix(c, u.wire_col.xyz, wire); }
   return vec4<f32>(c, 1.0);
 }

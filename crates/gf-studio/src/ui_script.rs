@@ -143,9 +143,19 @@ impl Offscreen {
                 self.ui_frames(2)?;
                 Ok(json!({"interface": true, "size": [self.width, self.height]}))
             }
+            "ui_grid_labels" => {
+                let u = self.ui.as_ref().ok_or("ui_grid_labels needs the ui op first")?;
+                let all = u.state.grid_labels.as_ref().map(|(_, a)| a.iter().map(|l| l.iter().map(|x| json!({"text": x.text, "x": x.x, "y": x.y, "edge": x.edge})).collect::<Vec<_>>()).collect::<Vec<_>>());
+                Ok(json!({"viewports": all, "rested": u.state.grid_view.as_ref().map(|v| v.1.elapsed().as_millis() as u64),
+                          "viewport": u.state.viewport_rect.map(|r| [r.min.x, r.min.y, r.width(), r.height()])}))
+            }
             "ui_frames" => {
                 let n = num("count").unwrap_or(1.0).max(1.0) as usize;
-                self.ui_frames(n)?;
+                let pause = std::time::Duration::from_secs_f64(num("ms").unwrap_or(0.0).max(0.0) / 1000.0 / n as f64);
+                for _ in 0..n {
+                    std::thread::sleep(pause);
+                    self.ui_frames(1)?;
+                }
                 Ok(json!({"frames": n}))
             }
             "ui_screenshot" => {

@@ -766,6 +766,75 @@ impl Offscreen {
                        "held": w.project.held.as_ref().map(|h| h["name"].clone()), "autosaved": w.project.autosaved,
                        "weights": w.character_input().map(|c| c["weights"].clone())})
             }
+            "grid" => {
+                if let Some(on) = step.get("on").and_then(Value::as_bool) {
+                    w.state.opts.face_grid = on;
+                }
+                if w.state.opts.face_grid {
+                    w.wait(|w| w.grid.is_some() || w.grid_error.is_some(), num("seconds").unwrap_or(120.0))?;
+                }
+                w.tick();
+                json!({"on": w.state.opts.face_grid, "error": w.grid_error, "anchors": w.grid.as_ref().map(|g| g.anchors.len()),
+                       "chart": w.session.as_ref().and_then(|s| s.head.chart.as_ref()).map(|c| c.len() / 2),
+                       "eye_chart": w.session.as_ref().and_then(|s| s.head.eyes.as_ref()).map(|e| e.chart.len() / 2)})
+            }
+            "probe" => {
+                w.grid_wanted = true;
+                w.wait(|w| w.grid.is_some() || w.grid_error.is_some(), num("seconds").unwrap_or(120.0))?;
+                let g = w.grid.clone().ok_or_else(|| w.grid_error.clone().unwrap_or_default())?;
+                let tag = w.char_tag();
+                let s = w.session.as_ref().ok_or("probe needs a loaded character")?;
+                let lod = num("lod").unwrap_or(0.0) as usize;
+                let tri = num("triangle").ok_or("probe needs triangle")? as usize;
+                let b = step.get("bary").and_then(Value::as_array).ok_or("probe needs bary [b0, b1, b2]")?;
+                let bary = [0, 1, 2].map(|k| b.get(k).and_then(Value::as_f64).unwrap_or(0.0));
+                let p = crate::probe::describe(&g, &s.head, lod, tri, bary, None, &tag).ok_or("no such triangle")?;
+                let lod0 = if lod == 0 { None } else { crate::probe::to_lod0(&s.head, p.point) };
+                json!({"address": p.address, "cell": p.cell, "vcell": p.vcell, "region": p.region, "game": p.game, "dense": p.dense,
+                       "lod0": lod0.map(|(t, b, mm)| json!({"triangle": t, "bary": b, "err_mm": mm}))})
+            }
+            "pins" => {
+                let out = match text("do").unwrap_or("list") {
+                    "add" => {
+                        if let Some(tri) = num("triangle") {
+                            w.grid_wanted = true;
+                            w.wait(|w| w.grid.is_some() || w.grid_error.is_some(), num("seconds").unwrap_or(120.0))?;
+                            let g = w.grid.clone().ok_or_else(|| w.grid_error.clone().unwrap_or_default())?;
+                            let tag = w.char_tag();
+                            let s = w.session.as_ref().ok_or("pins add needs a loaded character")?;
+                            let b = step.get("bary").and_then(Value::as_array).ok_or("pins add with a triangle needs bary")?;
+                            let bary = [0, 1, 2].map(|k| b.get(k).and_then(Value::as_f64).unwrap_or(0.0));
+                            let mut p = crate::probe::describe(&g, &s.head, 0, tri as usize, bary, None, &tag).ok_or("no such triangle")?;
+                            p.lod0 = Some((tri as usize, bary, 0.0));
+                            w.probe = Some(p);
+                        }
+                        json!(w.pins_add()?)
+                    }
+                    "delete" => {
+                        w.pins_delete(num("n").ok_or("pins delete needs n")? as u64);
+                        Value::Null
+                    }
+                    "note" => {
+                        w.pins_note(num("n").ok_or("pins note needs n")? as u64, text("text").unwrap_or_default());
+                        Value::Null
+                    }
+                    "export" => w.pins_export()?,
+                    "list" => Value::Null,
+                    other => return Err(format!("pins do is add, delete, note, export or list, got {other}")),
+                };
+                w.tick();
+                json!({"result": out, "state": w.pins_state(), "markers": w.pin_markers().len()})
+            }
+            "probe_last" => {
+                let p = w.probe.as_ref();
+                json!({"address": p.map(|p| p.address.clone()), "lod": p.map(|p| p.lod), "triangle": p.map(|p| p.triangle), "bary": p.map(|p| p.bary),
+                       "lod0": p.and_then(|p| p.lod0).map(|(t, b, mm)| json!({"triangle": t, "bary": b, "err_mm": mm}))})
+            }
+            "goto" => {
+                let go = w.go_to(text("text").unwrap_or_default())?;
+                let cam = w.state.active_cam();
+                json!({"what": go.what, "warn": go.warn, "target": go.target, "radius": go.radius, "dist": cam.goal.dist})
+            }
             "measure" => {
                 if let Some(on) = step.get("box").and_then(Value::as_bool) {
                     w.measure_box = on;
