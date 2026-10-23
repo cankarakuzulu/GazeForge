@@ -32,6 +32,11 @@ export function tr(key, vars, otherwise) {
   return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
 }
 
+export function readable(id) {
+  const s = String(id).split(/[-_]/).filter(Boolean).map((w) => tr(`target.frag.${w}`, null, w)).join(" ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function applyDom(root = document) {
   for (const el of root.querySelectorAll("[data-i18n]")) el.textContent = tr(el.dataset.i18n);
   for (const el of root.querySelectorAll("[data-i18n-title]")) el.title = tr(el.dataset.i18nTitle);

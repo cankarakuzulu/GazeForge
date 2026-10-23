@@ -40,6 +40,13 @@ pub fn tr_or<'a>(key: &str, otherwise: &'a str) -> &'a str {
     table().get(key).copied().unwrap_or(otherwise)
 }
 
+pub fn readable(id: &str) -> String {
+    let words: Vec<&str> = id.split(['-', '_']).filter(|w| !w.is_empty()).map(|w| tr_or(&format!("target.frag.{w}"), w)).collect();
+    let s = words.join(" ");
+    let mut c = s.chars();
+    c.next().map_or(s.clone(), |f| f.to_uppercase().chain(c).collect())
+}
+
 pub fn trf(key: &str, vars: &[(&str, &dyn std::fmt::Display)]) -> String {
     let mut s = tr(key).to_string();
     for (name, value) in vars {
@@ -57,5 +64,15 @@ mod tests {
         assert_eq!(tr("ui.wz-run"), "Run");
         assert_eq!(trf("designer.light_n", &[("n", &3)]), "Light 3");
         assert_eq!(tr_or("no.such.key", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn a_target_id_reads_as_words() {
+        assert_eq!(readable("l-cheek-trans-down"), "Left cheek move down");
+        assert_eq!(readable("nose-scale-horiz-incr"), "Nose scale horizontal more");
+        assert_eq!(readable("mouth-upperlip-height"), "Mouth upper lip height");
+        assert_eq!(readable("cupsize"), "Cup size");
+        assert_eq!(readable("gender"), "Gender");
+        assert_eq!(readable(""), "");
     }
 }

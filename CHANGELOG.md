@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Sliders were named by raw ids.** Both clients read a target or macro id as words: `l-cheek-trans-down` is "Left
+  cheek move down", `nose-scale-horiz-incr` "Nose scale horizontal more", `cupsize` "Cup size", and a paired slider's
+  ends read "less" / "more" instead of "decr" / "incr". The words are in the locale table (`target.frag.*`), the id
+  stays in the hover, and the browser's search finds a slider by either ("upper lip" and "upperlip" find the same 10).
 - **A task took a missing file in one step and failed in the next, in schema words.** A step that asks for a file
   (`file_open`) now refuses one that is not there when that step is submitted, naming the field ("Character spec:
   there is no file at …"), so the error shows where the path can be fixed instead of in the next step, where the field

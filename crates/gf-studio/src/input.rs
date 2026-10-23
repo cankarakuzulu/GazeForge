@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use eframe::egui;
 use gf_core::eyerig::{self as er, EyeAdjust, EyeballSpec};
 
-use crate::i18n::{tr, tr_or, trf};
+use crate::i18n::{readable, tr, tr_or, trf};
 use crate::shape::{Edit, ShapeEvent, ShapeModel, Slider, pair_edits};
 
 const EYE_FIELDS: [(&str, f64, f64); 7] = [
@@ -73,6 +73,7 @@ enum Row {
 
 struct RowSpec<'a> {
     label: &'a str,
+    shown: Option<String>,
     value: f64,
     start: f64,
     range: RangeInclusive<f64>,
@@ -81,10 +82,11 @@ struct RowSpec<'a> {
 }
 
 fn slider_row(ui: &mut egui::Ui, r: RowSpec, edits: impl Fn(f64) -> Vec<Edit>, reset: Vec<Edit>, out: &mut Vec<ShapeEvent>) {
-    let (label, value) = (r.label, r.value);
+    let (key, value) = (r.label, r.value);
+    let label = r.shown.unwrap_or_else(|| key.to_string());
     let mut v = value;
-    let text = if value != r.start { egui::RichText::new(label).strong() } else { egui::RichText::new(label) };
-    let ends = r.ends;
+    let text = if value != r.start { egui::RichText::new(&label).strong() } else { egui::RichText::new(&label) };
+    let ends = r.ends.map(|(neg, pos)| (tr_or(&format!("target.frag.{neg}"), neg), tr_or(&format!("target.frag.{pos}"), pos)));
     let slider = egui::Slider::new(&mut v, r.range).text(text).custom_formatter(move |x, _| match ends {
         Some((neg, _)) if x < 0.0 => format!("{neg} {:.3}", -x),
         Some((_, pos)) if x > 0.0 => format!("{pos} {x:.3}"),
@@ -92,7 +94,7 @@ fn slider_row(ui: &mut egui::Ui, r: RowSpec, edits: impl Fn(f64) -> Vec<Edit>, r
     });
     let resp = ui.add(slider).on_hover_text(r.hover);
     if resp.drag_started() {
-        out.push(ShapeEvent::Begin(vec![label.to_string()]));
+        out.push(ShapeEvent::Begin(vec![key.to_string()]));
     }
     if resp.secondary_clicked() {
         out.push(ShapeEvent::Preview(reset));
@@ -116,7 +118,7 @@ fn target_row(ui: &mut egui::Ui, shape: &ShapeModel, s: &Slider, out: &mut Vec<S
         Slider::One(i) => {
             let t = &shape.targets[*i];
             let id = t.id.clone();
-            let spec = RowSpec { label: &t.label, value: live.weight(&t.id), start: start.weight(&t.id), range: 0.0..=1.0, ends: None, hover: format!("{}\n{}", t.id, tr("studio.shape.reset_one")) };
+            let spec = RowSpec { label: &t.label, shown: Some(readable(&t.label)), value: live.weight(&t.id), start: start.weight(&t.id), range: 0.0..=1.0, ends: None, hover: format!("{}\n{}", t.id, tr("studio.shape.reset_one")) };
             let reset = vec![Edit::Weight(t.id.clone(), start.weight(&t.id))];
             slider_row(ui, spec, |x| vec![Edit::Weight(id.clone(), x)], reset, out);
         }
@@ -127,7 +129,7 @@ fn target_row(ui: &mut egui::Ui, shape: &ShapeModel, s: &Slider, out: &mut Vec<S
             if wn > 0.0 && wp > 0.0 {
                 hover.push_str(&format!("\n{}", trf("studio.shape.both_set", &[("left", &ends.0), ("wl", &format!("{wn:.3}")), ("right", &ends.1), ("wr", &format!("{wp:.3}"))])));
             }
-            let spec = RowSpec { label, value: wp - wn, start: start.weight(p) - start.weight(n), range: -1.0..=1.0, ends: Some(*ends), hover };
+            let spec = RowSpec { label, shown: Some(readable(label)), value: wp - wn, start: start.weight(p) - start.weight(n), range: -1.0..=1.0, ends: Some(*ends), hover };
             let reset = vec![Edit::Weight(n.clone(), start.weight(n)), Edit::Weight(p.clone(), start.weight(p))];
             slider_row(ui, spec, |x| pair_edits(n, p, x), reset, out);
         }
@@ -160,7 +162,7 @@ impl SliderPanel {
         for m in &shape.macros {
             let value = shape.live.macros.get(&m.name).copied().unwrap_or(m.start);
             let name = m.name.clone();
-            let spec = RowSpec { label: &m.name, value, start: m.start, range: 0.0..=1.0, ends: None, hover: tr("studio.shape.reset_one").into() };
+            let spec = RowSpec { label: &m.name, shown: Some(readable(&m.name)), value, start: m.start, range: 0.0..=1.0, ends: None, hover: format!("{}\n{}", m.name, tr("studio.shape.reset_one")) };
             slider_row(ui, spec, |x| vec![Edit::Macro(name.clone(), x)], vec![Edit::Macro(m.name.clone(), m.start)], out);
         }
     }
@@ -194,7 +196,7 @@ impl SliderPanel {
             if let Some(m) = &live.model {
                 let start_r = start.model.as_ref().map_or(gf_api::eyes::DEFAULT_RADIUS_MM, |m| m.radius_mm);
                 let with = |x: f64| vec![Edit::Eyes(Some(EyeballSpec { model: Some(er::EyeModelChoice { id: m.id.clone(), radius_mm: x }), ..live.clone() }))];
-                let spec = RowSpec { label: tr("eyes.radius"), value: m.radius_mm, start: start_r, range: 5.0..=20.0, ends: None, hover: format!("{}\n{}", tr("studio.eyes.radius_title"), tr("studio.shape.reset_one")) };
+                let spec = RowSpec { label: tr("eyes.radius"), shown: None, value: m.radius_mm, start: start_r, range: 5.0..=20.0, ends: None, hover: format!("{}\n{}", tr("studio.eyes.radius_title"), tr("studio.shape.reset_one")) };
                 slider_row(ui, spec, with, with(start_r), out);
             }
             ui.separator();
@@ -231,7 +233,7 @@ impl SliderPanel {
                     vec![Edit::Eyes(Some(s))]
                 };
                 let reset = with(first);
-                let spec = RowSpec { label: &label, value, start: first, range: lo..=hi, ends: None, hover: format!("{}\n{}", trf("studio.eyes.field_title", &[("field", &label)]), tr("studio.shape.reset_one")) };
+                let spec = RowSpec { label: &label, shown: None, value, start: first, range: lo..=hi, ends: None, hover: format!("{}\n{}", trf("studio.eyes.field_title", &[("field", &label)]), tr("studio.shape.reset_one")) };
                 slider_row(ui, spec, with, reset, out);
             }
         }

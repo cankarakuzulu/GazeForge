@@ -1,7 +1,7 @@
 import { Viewer, MODES, MODE_INDEX, LIGHT_PRESETS, MAX_LIGHTS, LAYOUTS, vertexNormals } from "./viewer.js";
 import { ViewCube, elementName, elementDir, yawPitch } from "./cube.js";
 import { createWizards } from "./wizard.js";
-import { tr, loadLocale, applyDom } from "./i18n.js";
+import { tr, loadLocale, applyDom, readable } from "./i18n.js";
 
 const params = new URLSearchParams(location.search);
 let store = params.get("store");
@@ -598,7 +598,7 @@ function buildSliders() {
       o.textContent = tr(`category.${current}`, null, current);
       cats.appendChild(o);
     }
-    const name = t.id.split("/").pop();
+    const name = readable(t.id.split("/").pop());
     const s = sliderRow(name, D.w[i], (x) => {
       D.w[i] = x;
       D.lastTarget = i;
@@ -615,6 +615,8 @@ function buildSliders() {
       scheduleSettle();
     });
     s.row.dataset.id = t.id;
+    s.row.dataset.label = name.toLowerCase();
+    s.row.querySelector(".name").title = t.id;
     s.row.dataset.category = t.category;
     s.input.addEventListener("dblclick", () => { s.input.value = D.start.weights[t.id] || 0; s.input.dispatchEvent(new Event("input")); s.input.dispatchEvent(new Event("change")); });
     list.appendChild(s.row);
@@ -622,7 +624,7 @@ function buildSliders() {
   });
   const filter = () => {
     const q = $("search").value.toLowerCase(), c = cats.value;
-    D.rows.forEach((s) => s.row.classList.toggle("hidden", !(s.row.dataset.id.toLowerCase().includes(q) && (!c || s.row.dataset.category === c))));
+    D.rows.forEach((s) => s.row.classList.toggle("hidden", !((s.row.dataset.id.toLowerCase().includes(q) || s.row.dataset.label.includes(q)) && (!c || s.row.dataset.category === c))));
     list.querySelectorAll(".group").forEach((h) => h.classList.toggle("hidden", !!c && h.dataset.category !== c));
   };
   $("search").addEventListener("input", filter);
@@ -651,11 +653,11 @@ function buildMacros() {
     return;
   }
   D.macroRows = D.macros.sliders.map((m) => {
-    const s = sliderRow(m.name, m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", tr("designer.status.preview")); request(true); notify("slider"); }, () => {
+    const s = sliderRow(readable(m.name), m.value, (x) => { D.macroW[m.name] = x; setStatus("preview", tr("designer.status.preview")); request(true); notify("slider"); }, () => {
       const from = D.macroCommitted[m.name], to = D.macroW[m.name];
       if (from !== to) {
         D.macroCommitted[m.name] = to;
-        pushUndo({ label: tr("designer.undo.macro", { name: m.name, from: Number(from).toFixed(3), to: Number(to).toFixed(3) }), undo: () => setWeights([], { [m.name]: from }), redo: () => setWeights([], { [m.name]: to }) });
+        pushUndo({ label: tr("designer.undo.macro", { name: readable(m.name), from: Number(from).toFixed(3), to: Number(to).toFixed(3) }), undo: () => setWeights([], { [m.name]: from }), redo: () => setWeights([], { [m.name]: to }) });
       }
       scheduleSettle();
     }, async () => {
@@ -673,6 +675,7 @@ function buildMacros() {
       }
     });
     s.name = m.name;
+    s.row.querySelector(".name").title = m.name;
     box.appendChild(s.row);
     return s;
   });
