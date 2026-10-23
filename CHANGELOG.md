@@ -8,6 +8,9 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **UV checker and UV seams on the body and clothes.** `character.stitch` with `return_mesh` returns `triangle_uvs`
+  for the body (genitals included) and each worn mesh except strand ribbons, and both clients draw the checker and the
+  seams on them; they showed on the head and eyes only. Displacement stays on the head only.
 - **Face grid, addresses, pins and the millimetre grid in the studio.** They were in the browser only. The studio draws
   the face grid (Alt+U) with its edge and cell labels, probes a point (Alt+Shift+U or Alt+click) into the same `GF@`
   address with copy and pin, goes to an address from its card, keeps pins in a Pins section (notes, go, delete, export
