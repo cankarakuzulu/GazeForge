@@ -294,8 +294,10 @@ pub fn infer_category(m: &WearableManifest, folder: Option<&str>, tags: &[String
             tokens.iter().any(|t| t.starts_with(s))
         } else if let Some(s) = w.strip_prefix('*') {
             tokens.iter().any(|t| t.ends_with(s))
+        } else if let Some(s) = w.strip_prefix('=') {
+            tokens.contains(&s)
         } else if w.len() >= 5 {
-            tokens.iter().any(|t| t.starts_with(w))
+            tokens.iter().any(|t| t.starts_with(w) || t.ends_with(w))
         } else {
             tokens.contains(&w)
         }
@@ -306,11 +308,11 @@ pub fn infer_category(m: &WearableManifest, folder: Option<&str>, tags: &[String
         ("facial_hair", &["beard", "*beard", "moustache", "mustache", "stubble", "goatee", "eyebrow", "eyelash", "brow", "brows"]),
         ("eyewear", &["glasses", "*glasses", "goggles", "spectacles", "monocle"]),
         ("hat", &["hat", "hats", "*hat", "fedora", "helmet", "beanie", "bonnet", "turban", "sombrero"]),
-        ("hair", &["hair", "*hair", "^hair", "cards", "groom", "ponytail", "braid", "afro", "bob", "bun", "dreads"]),
-        ("shoes", &["shoe", "shoes", "*shoes", "boot", "boots", "sneaker", "sandal", "heels"]),
-        ("outfit", &["suit", "*suit", "dress", "*dress", "overall", "jumpsuit", "robe", "gown"]),
+        ("hair", &["hair", "*hair", "^hair", "cards", "=groom", "ponytail", "braid", "afro", "bob", "bun", "dreads"]),
+        ("shoes", &["shoe", "shoes", "*shoes", "boot", "*boot", "boots", "sneaker", "sandal", "heels"]),
+        ("outfit", &["suit", "*suit", "dress", "*dress", "overall", "jumpsuit", "robe", "*robe", "gown", "*gown"]),
         ("bottom", &["pants", "*pants", "trousers", "jeans", "skirt", "shorts", "leggings"]),
-        ("top", &["shirt", "*shirt", "top", "tops", "jacket", "coat", "*coat", "sweater", "hoodie", "blouse", "vest", "cape", "cloak"]),
+        ("top", &["shirt", "*shirt", "top", "tops", "jacket", "coat", "*coat", "coats", "sweater", "hoodie", "blouse", "vest", "cape", "cloak"]),
         ("accessory", &["sword", "*sword", "shield", "bag", "*bag", "belt", "necklace", "earring", "glove", "gloves", "scarf"]),
     ];
     if let Some((c, _)) = rules.iter().find(|(_, words)| has(words)) {
@@ -379,13 +381,13 @@ impl Store {
             return Err(format!("category {c:?} is not one of {CATEGORIES:?}"));
         }
         let _: WearableManifest = self.get_manifest("wearables", reference)?;
-        self.update_index(|all| match category {
+        self.update_index(|all, _| match category {
             Some(c) => all.insert(reference.to_string(), c.to_string()),
             None => all.remove(reference),
         })
     }
 
-    fn update_index<T>(&self, f: impl FnOnce(&mut BTreeMap<String, String>) -> T) -> Result<T, String> {
+    fn update_index<T>(&self, f: impl FnOnce(&mut BTreeMap<String, String>, &BTreeMap<String, String>) -> T) -> Result<T, String> {
         let _lock = self.index_lock()?;
         let path = self.root.join(CATEGORY_FILE);
         let raw = match std::fs::read(&path) {
@@ -394,7 +396,7 @@ impl Store {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         let (mut all, unknown): (BTreeMap<String, String>, BTreeMap<String, String>) = raw.into_iter().partition(|(_, c)| CATEGORIES.contains(&c.as_str()));
-        let out = f(&mut all);
+        let out = f(&mut all, &unknown);
         for (k, c) in unknown {
             all.entry(k).or_insert(c);
         }
@@ -412,8 +414,10 @@ impl Store {
     }
 
     pub fn keep_category(&self, reference: &str, category: &'static str) -> Result<(), String> {
-        self.update_index(|all| {
-            all.entry(reference.to_string()).or_insert_with(|| category.to_string());
+        self.update_index(|all, unknown| {
+            if !unknown.contains_key(reference) {
+                all.entry(reference.to_string()).or_insert_with(|| category.to_string());
+            }
         })
     }
 }
@@ -465,7 +469,9 @@ mod tests {
         assert_eq!(infer_category(&m("round glasses", false, true), None, &[]), "eyewear");
         assert_eq!(infer_category(&m("see-through veil", true, false), None, &[]), "hair");
         assert_eq!(known_category(None, &["young".into()]), None);
-        for (name, want) in [("brown_jacket", "top"), ("bridegroom_suit", "outfit"), ("longhair01", "hair"), ("sunglasses", "eyewear"), ("cowboyhat", "hat"), ("male_casualsuit01", "outfit")] {
+        for (name, want) in [("brown_jacket", "top"), ("bridegroom_suit", "outfit"), ("longhair01", "hair"), ("sunglasses", "eyewear"), ("cowboyhat", "hat"), ("male_casualsuit01", "outfit"),
+                             ("miniskirt01", "bottom"), ("longskirt", "bottom"), ("bluejeans", "bottom"), ("cowboyboots", "shoes"), ("rainboots", "shoes"), ("highheels", "shoes"),
+                             ("ballgown", "outfit"), ("nightgown", "outfit"), ("bathrobe", "outfit"), ("leatherjacket", "top"), ("denimjacket", "top"), ("coats", "top"), ("groom cards", "hair")] {
             assert_eq!(infer_category(&m(name, false, false), None, &[]), want, "{name}");
         }
         let kept = parse_categories(b"{\"a\": \"hair\", \"b\": \"cloak_of_tomorrow\", \"c\": null}").unwrap();
