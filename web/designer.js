@@ -545,6 +545,9 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
 
 function pushUndo(entry) {
   if (!entry || typeof entry.undo !== "function" || typeof entry.redo !== "function") throw new Error("pushUndo needs { label, undo(), redo() }");
+  histRun(() => recordUndo(entry), true);
+}
+function recordUndo(entry) {
   const H = D.history;
   H.done.push({ label: String(entry.label || tr("designer.edit")), undo: entry.undo, redo: entry.redo });
   if (H.done.length > H.limit) H.done.shift();
@@ -553,16 +556,16 @@ function pushUndo(entry) {
 }
 const histQueue = [];
 let histPending = false;
-function histRun(op) {
-  histQueue.push(op);
-  while (histQueue.length && !histPending) histQueue.shift()();
+function histRun(op, edit = false) {
+  histQueue.push({ op, edit });
+  while (histQueue.length && !histPending) histQueue.shift().op();
 }
 function histSettle(r, e, from, to, key) {
   if (!r || typeof r.then !== "function") return;
   histPending = true;
   r.catch((err) => {
     toast(tr(key, { error: err?.message || String(err) }));
-    histQueue.length = 0;
+    histQueue.splice(0, histQueue.length, ...histQueue.filter((q) => q.edit));
     const i = from.lastIndexOf(e);
     if (i >= 0) from.splice(i, 1);
     if (!to.includes(e)) to.push(e);
@@ -595,9 +598,12 @@ function doRedo() {
 function undo() { histRun(doUndo); }
 function redo() { histRun(doRedo); }
 function historyTo(at) {
+  const H = D.history;
+  if (!Number.isFinite(Number(at))) return;
+  const to = Math.max(0, Math.min(H.done.length + H.undone.length, Math.round(Number(at))));
   const step = () => {
-    if (D.history.done.length > at) { doUndo(); histQueue.unshift(step); }
-    else if (D.history.done.length < at && D.history.undone.length) { doRedo(); histQueue.unshift(step); }
+    if (H.done.length > to) { doUndo(); histQueue.unshift({ op: step, edit: false }); }
+    else if (H.done.length < to && H.undone.length) { doRedo(); histQueue.unshift({ op: step, edit: false }); }
   };
   histRun(step);
 }
