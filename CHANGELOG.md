@@ -8,6 +8,8 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Translatable task text.** Every task's title, summary, steps, help and field labels have locale entries (221), so
+  both clients can show them in another language; a test keeps them in step with the tasks.
 - **Wearable categories.** Every wearable has a category (hair, facial hair, hats, eyewear, tops, bottoms, outfits,
   shoes, accessories, other), kept in the store beside the wearables so references never change: imports keep the
   one they can tell, `wearable.list` infers the rest and says which, `wearable.categorize` sets or forgets one. Both
