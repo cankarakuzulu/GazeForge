@@ -14,7 +14,7 @@ open, with its last measurement, rather than left out.
   clients group the add list by category and let each worn item's category be changed, as an undo step. Reviewed
   before release: writers take turns (two at once could corrupt the file), an unreadable file is ignored with a
   warning, imports keep only categories their source states, and category undo runs in order from the store's own
-  previous value.
+  previous value; an undo that fails stays at its step in both clients.
 - **UV checker and UV seams on the body and clothes.** `character.stitch` with `return_mesh` returns `triangle_uvs`
   for the body (genitals included) and each worn mesh except strand ribbons, and both clients draw the checker and the
   seams on them; they showed on the head and eyes only. Displacement stays on the head only.
