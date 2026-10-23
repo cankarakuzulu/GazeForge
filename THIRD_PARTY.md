@@ -68,5 +68,14 @@ wasm32-unknown-unknown`; `serde_derive`, `syn`, `quote`, `proc-macro2` and `unic
 The five crates used under MIT ship the same MIT text (sha256
 `23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3`), kept in `third_party/rust-wasm/LICENSE-MIT`.
 
+The wasm also carries Rust's own runtime from the toolchain that built it (rustc 1.93.1, target
+`wasm32-unknown-unknown`; the wasm's strings name `library/core`, `library/std` and `dlmalloc-0.2.11`):
+
+| Component | Version | Authors | Licence | Used under | Text |
+|---|---|---|---|---|---|
+| Rust standard library (`core`, `alloc`, `std`) | rustc 1.93.1 | The Rust Project Developers | MIT OR Apache-2.0 | MIT | `third_party/rust-wasm/LICENSE-MIT` (the same text) |
+| `dlmalloc` (the wasm allocator) | 0.2.11 | Alex Crichton | MIT OR Apache-2.0 | MIT | `third_party/rust-wasm/dlmalloc-LICENSE-MIT` (copied from the crate, sha256 of the `.crate` `06cdfe34...fa30` as locked by the standard library) |
+| `compiler_builtins` (linked by the standard library) | 0.1.160 | The Rust Project Developers and LLVM contributors | MIT AND Apache-2.0 WITH LLVM-exception AND (MIT OR Apache-2.0) | as stated | `third_party/rust-wasm/compiler-builtins-LICENSE.txt` (from the toolchain's `library/compiler-builtins/LICENSE.txt`) |
+
 The native binaries (`gazeforge`, `gazeforge-studio`) are not committed here. A release of them needs its own notice
 for their much larger dependency tree, including the Unicode-3.0 data tables in `unicode-normalization`.
