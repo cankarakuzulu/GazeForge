@@ -272,8 +272,9 @@ impl crate::studio::Studio<'_> {
             self.world.grid_wanted = true;
             let (r, px, py) = at(p);
             let hit = self.world.session.as_ref().and_then(|s| crate::render::pick_triangle(&self.world.state, &s.head, &r, px, py, None));
-            let blocked = hit.as_ref().and_then(|h| self.world.occluder(&r, px, py, h.distance));
+            let blocked = self.world.occluder(&r, px, py, hit.as_ref().map_or(f64::INFINITY, |h| h.distance));
             self.s.status = match (hit, blocked) {
+                (None, Some(mesh)) => trf("designer.probe_not_head", &[("mesh", &mesh)]),
                 (None, _) => tr("designer.no_surface").to_string(),
                 (Some(_), Some(mesh)) => trf("designer.probe_not_head", &[("mesh", &mesh)]),
                 (Some(h), None) => match self.world.probe_hit(&h) {

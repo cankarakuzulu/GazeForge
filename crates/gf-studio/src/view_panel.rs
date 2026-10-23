@@ -85,6 +85,8 @@ impl crate::world::World {
         for (item, _, _) in self.items() {
             self.set_visible(&item, true);
         }
+        self.hidden_extras.clear();
+        self.hidden_overlays.clear();
         self.state.hidden_regions = 0;
     }
 

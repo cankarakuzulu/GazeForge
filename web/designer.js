@@ -858,9 +858,15 @@ function visItems() {
   for (const o of V.overlays.values()) items.push({ kind: "overlay", id: o.id, label: tr("designer.overlay_item", { id: o.id }), on: o.visible });
   return items;
 }
-function visState() { return visItems().map((x) => [x.kind, x.key || x.id, x.on]); }
+function visState() {
+  const out = visItems().map((x) => [x.kind, x.key || x.id, x.on]);
+  for (const [k, on] of V.keyVis) if (!meshByKey(k)) out.push(["mesh", k, on]);
+  return out;
+}
 function meshByKey(key) { return V.meshes.get(key) || [...V.meshes.values()].find((m) => m.key === key); }
 function applyVis(state) {
+  const listed = new Set(state.filter((s) => s[0] === "mesh").map((s) => s[1]));
+  for (const k of [...V.keyVis.keys()]) if (!listed.has(k) && !meshByKey(k)) V.keyVis.delete(k);
   for (const [kind, id, on] of state) { const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id); if (t) t.visible = on; else if (kind === "mesh") V.keyVis.set(id, on); }
   renderVisibility();
   request(false);

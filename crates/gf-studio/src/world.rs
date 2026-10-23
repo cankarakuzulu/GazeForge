@@ -329,7 +329,7 @@ impl World {
     pub fn extra_label(&self, id: &str) -> String {
         match (id, self.wear_slot(id)) {
             (_, Some((_, name))) if !name.is_empty() => name.clone(),
-            ("stitch-body", _) => tr("stitch.mesh_ok").to_string(),
+            ("stitch-body", _) => tr(if self.stitch.pass == Some(false) { "stitch.mesh_failed" } else { "stitch.mesh_ok" }).to_string(),
             _ => id.to_string(),
         }
     }

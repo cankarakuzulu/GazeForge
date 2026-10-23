@@ -665,7 +665,9 @@ export class Viewer {
     }
     const key = spec.key || id;
     const live = [...this.meshes.values()].find((x) => x.key === key);
-    const m = { id, key, label: spec.label || id, kind, n, visible: live ? live.visible : this.keyVis.get(key) ?? true, color: parseColor(spec.color, [0.72, 0.70, 0.68]),
+    const legacy = key !== id && this.keyVis.has(id) ? this.keyVis.get(id) : undefined;
+    if (legacy !== undefined) this.keyVis.delete(id);
+    const m = { id, key, label: spec.label || id, kind, n, visible: live ? live.visible : this.keyVis.get(key) ?? legacy ?? true, color: parseColor(spec.color, [0.72, 0.70, 0.68]),
                 pos: this.tex("f3", n, pos), nrm: this.tex("f3", n, nrm), ref: null, region: null, lods: [this.makeLod(idx, corner)], cpuPos: pos, nrmCPU: nrm, wind: windingSign(pos, idx),
                 parts: spec.parts && spec.look ? spec.parts : null, look: spec.parts && spec.look ? spec.look : null };
     this.meshes.set(id, m);
@@ -1423,10 +1425,12 @@ export class Viewer {
     const cam = this.cams[r.cam], { o, d } = cam.ray(nx, ny, r.w / r.h), st = this.vp[r.slot];
     const P = this.planes(), box = this.boxWorld();
     const cut = (p) => P.some((q) => dot(q.n, p) > q.d) || (this.opts.box.on && p.every((x, k) => x > box.lo[k] && x < box.hi[k]));
+    const hid = this.opts.hiddenRegions >>> 0;
     let best = null;
     for (const m of this.visibleMeshes()) {
-      const pos = m.cpuPos, idx = this.lodOf(m, st).idxCPU;
+      const pos = m.cpuPos, idx = this.lodOf(m, st).idxCPU, reg = hid && m.regionCPU ? m.regionCPU : null;
       for (let t = 0; t < idx.length; t += 3) {
+        if (reg && ((hid >>> reg[idx[t]]) & 1) + ((hid >>> reg[idx[t + 1]]) & 1) + ((hid >>> reg[idx[t + 2]]) & 1) >= 2) continue;
         const a = idx[t] * 3, bb = idx[t + 1] * 3, c = idx[t + 2] * 3;
         const e1 = [pos[bb] - pos[a], pos[bb + 1] - pos[a + 1], pos[bb + 2] - pos[a + 2]], e2 = [pos[c] - pos[a], pos[c + 1] - pos[a + 1], pos[c + 2] - pos[a + 2]];
         const pv = cross(d, e2), det = dot(e1, pv);
