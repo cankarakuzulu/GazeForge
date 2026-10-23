@@ -118,7 +118,13 @@ function mount(root, api) {
     if (!visible) api.setExtraMesh('stitch-body', null);
     else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
     const wear = visible ? last.wearables : [];
-    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name }));
+    const keys = [];
+    for (const w of wear) {
+      const base = w.asset || (w.groom ? `groom:${w.groom}` : w.name || '');
+      const k = keys.filter((x) => x === base || x.startsWith(`${base}#`)).length;
+      keys.push(k ? `${base}#${k}` : base);
+    }
+    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name, key: `wear:${keys[i]}` }));
     for (let i = wear.length; i < drawnWear; i++) api.setExtraMesh(`wear-${i}`, null);
     drawnWear = wear.length;
     if (!last || !(state.seam || !last.pass) || stale) api.setOverlay('stitch-seam', null);

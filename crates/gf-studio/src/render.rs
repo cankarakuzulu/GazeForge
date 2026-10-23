@@ -1180,8 +1180,16 @@ pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f6
     let lod = &head.lods[level];
     let pos = &head.positions;
     let g = |i: u32| [pos[i as usize * 3] as f64, pos[i as usize * 3 + 1] as f64, pos[i as usize * 3 + 2] as f64];
+    if st.head_hidden {
+        return None;
+    }
+    let chart = head.chart.as_ref().filter(|c| c.len() == head.n * 3 && st.hidden_regions != 0);
+    let hidden = |v: u32| chart.is_some_and(|c| (st.hidden_regions >> (c[v as usize * 3 + 2] as u32).min(31)) & 1 == 1);
     let mut best: Option<Hit> = None;
     for (index, t) in lod.indices.chunks_exact(3).enumerate() {
+        if chart.is_some() && t.iter().filter(|&&v| hidden(v)).count() >= 2 {
+            continue;
+        }
         let (a, b, c) = (g(t[0]), g(t[1]), g(t[2]));
         let (e1, e2) = (sub(b, a), sub(c, a));
         let pv = cross(d, e2);
@@ -1209,6 +1217,44 @@ pub fn pick_triangle(st: &ViewerState, head: &Head, rect: &Rect, px: f64, py: f6
             continue;
         }
         best = Some(Hit { distance: dist, point: hit, triangle: [t[0], t[1], t[2]], bary: [1.0 - uu - vv, uu, vv], index, lod: level });
+    }
+    best
+}
+
+pub fn ray_distance(st: &ViewerState, rect: &Rect, px: f64, py: f64, pos: &[f32], idx: &[u32]) -> Option<f64> {
+    let nx = (px / rect.w as f64) * 2.0 - 1.0;
+    let ny = 1.0 - (py / rect.h as f64) * 2.0;
+    let (o, d) = st.cams[rect.cam].ray(nx, ny, rect.w as f64 / rect.h as f64);
+    let planes = viewer::planes(&st.opts, &st.bounds);
+    let (lo, hi) = viewer::box_world(&st.opts, &st.bounds);
+    let cut = |p: V3| planes.iter().any(|q| dot(q.n, p) > q.d) || (st.opts.clip_box.on && (0..3).all(|k| p[k] > lo[k] && p[k] < hi[k]));
+    let n = pos.len() / 3;
+    let g = |i: u32| [pos[i as usize * 3] as f64, pos[i as usize * 3 + 1] as f64, pos[i as usize * 3 + 2] as f64];
+    let mut best: Option<f64> = None;
+    for t in idx.chunks_exact(3) {
+        if t.iter().any(|&v| v as usize >= n) {
+            continue;
+        }
+        let (a, b, c) = (g(t[0]), g(t[1]), g(t[2]));
+        let (e1, e2) = (sub(b, a), sub(c, a));
+        let pv = cross(d, e2);
+        let det = dot(e1, pv);
+        if det.abs() < 1e-14 {
+            continue;
+        }
+        let inv = 1.0 / det;
+        let tv = sub(o, a);
+        let uu = dot(tv, pv) * inv;
+        let qv = cross(tv, e1);
+        let vv = dot(d, qv) * inv;
+        if !(0.0..=1.0).contains(&uu) || vv < 0.0 || uu + vv > 1.0 {
+            continue;
+        }
+        let dist = dot(e2, qv) * inv;
+        if dist <= 0.0 || best.is_some_and(|b| dist >= b) || cut(add(o, mul(d, dist))) {
+            continue;
+        }
+        best = Some(dist);
     }
     best
 }

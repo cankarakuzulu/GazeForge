@@ -438,7 +438,7 @@
  "designer.plane_n": "Plane {n}",
  "designer.portable": "Portable file {out} ({bytes} bytes, {blobs} character blobs)",
  "designer.preview_hint": "Approximate preview: release the slider to settle",
- "designer.probe_not_head": "Probe: {mesh} is not the head",
+ "designer.probe_not_head": "The probe reads the head only; the click hit {mesh}",
  "designer.probe_off": "Probe mode off",
  "designer.probe_on": "Probe mode on: click a surface point",
  "designer.project_info": "{name}: saved {modified}, created {created}; store {store}",

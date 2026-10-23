@@ -447,7 +447,7 @@ impl Studio<'_> {
             if o.clip[0].on {
                 ui.allocate_ui(egui::vec2(CLIP_SLIDER_WIDTH, 26.0), |ui| {
                     ui.spacing_mut().slider_width = CLIP_SLIDER_WIDTH - 110.0;
-                    ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).text(tr("studio.clip_offset")).fixed_decimals(3));
+                    ui.add(egui::Slider::new(&mut o.clip[0].offset, -0.15..=0.15).clamping(egui::SliderClamping::Edits).text(tr("studio.clip_offset")).fixed_decimals(3));
                 });
             }
             group_gap(ui);

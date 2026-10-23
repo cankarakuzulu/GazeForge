@@ -440,6 +440,7 @@ export class Viewer {
     this.canvas = gl.canvas;
     this.labels = labels;
     this.meshes = new Map();
+    this.keyVis = new Map();
     this.overlays = new Map();
     this.cams = [
       new Camera({ name: "perspective" }),
@@ -646,6 +647,7 @@ export class Viewer {
 
   setExtra(id, spec, kind = "extra") {
     const old = this.meshes.get(id);
+    if (old && old.kind !== "head") this.keyVis.set(old.key, old.visible);
     if (old && old.kind !== "head") { this.drop(old.chart); this.drop(old.pos); this.drop(old.nrm); for (const l of old.lods) { this.drop(l.idx); this.drop(l.verts); this.drop(l.uv); this.drop(l.flags); } this.meshes.delete(id); }
     if (!spec) return;
     const pos = spec.positions instanceof Float32Array ? spec.positions : Float32Array.from(spec.positions);
@@ -657,7 +659,9 @@ export class Viewer {
       corner = new Float32Array(idx.length * 2);
       for (let i = 0; i < idx.length; i++) { corner[2 * i] = spec.uvs[2 * idx[i]]; corner[2 * i + 1] = spec.uvs[2 * idx[i] + 1]; }
     }
-    const m = { id, label: spec.label || id, kind, n, visible: old ? old.visible : true, color: parseColor(spec.color, [0.72, 0.70, 0.68]),
+    const key = spec.key || id;
+    const live = [...this.meshes.values()].find((x) => x.key === key);
+    const m = { id, key, label: spec.label || id, kind, n, visible: live ? live.visible : this.keyVis.get(key) ?? true, color: parseColor(spec.color, [0.72, 0.70, 0.68]),
                 pos: this.tex("f3", n, pos), nrm: this.tex("f3", n, nrm), ref: null, region: null, lods: [this.makeLod(idx, corner)], cpuPos: pos, nrmCPU: nrm, wind: windingSign(pos, idx),
                 parts: spec.parts && spec.look ? spec.parts : null, look: spec.parts && spec.look ? spec.look : null };
     this.meshes.set(id, m);

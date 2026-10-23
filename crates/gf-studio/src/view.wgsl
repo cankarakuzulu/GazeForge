@@ -367,6 +367,11 @@ fn vs_point(@builtin(vertex_index) vi: u32) -> PointOut {
   var o: PointOut;
   let pi = vi / 6u;
   let corner = vi - pi * 6u;
+  let hid = u32(u.grid.w);
+  if (hid != 0u && ((hid >> region(verts[pi])) & 1u) == 1u) {
+    o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    return o;
+  }
   let p = p3(verts[pi]);
   o.vp = p;
   var off = vec2<f32>(-1.0, -1.0);

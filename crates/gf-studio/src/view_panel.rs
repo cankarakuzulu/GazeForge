@@ -18,11 +18,11 @@ pub fn preset_of(o: &crate::viewer::Opts) -> Option<&'static str> {
 }
 
 fn slider(ui: &mut egui::Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, step: f64) -> bool {
-    ui.add(egui::Slider::new(v, range).step_by(step).text(label)).changed()
+    ui.add(egui::Slider::new(v, range).step_by(step).clamping(egui::SliderClamping::Edits).text(label)).changed()
 }
 
 fn mm_slider(ui: &mut egui::Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, step: f64) -> bool {
-    ui.add(egui::Slider::new(v, range).step_by(step).custom_formatter(|x, _| format!("{:.1} mm", x * 1000.0)).text(label)).changed()
+    ui.add(egui::Slider::new(v, range).step_by(step).clamping(egui::SliderClamping::Edits).custom_formatter(|x, _| format!("{:.1} mm", x * 1000.0)).text(label)).changed()
 }
 
 #[derive(Clone, PartialEq)]
@@ -39,7 +39,7 @@ impl crate::world::World {
         if self.session.as_ref().is_some_and(|s| s.head.eyes.as_ref().is_some_and(|e| !e.indices.is_empty())) {
             out.push((Item::Eyes, tr("mesh.eyes").to_string(), self.state.opts.eyes));
         }
-        out.extend(self.extras.iter().map(|e| (Item::Extra(e.id.clone()), e.id.clone(), e.visible)));
+        out.extend(self.extras.iter().map(|e| (Item::Extra(e.id.clone()), self.extra_label(&e.id), e.visible)));
         out.extend(self.overlays.iter().map(|o| (Item::Overlay(o.id.clone()), trf("designer.overlay_item", &[("id", &o.id)]), !self.hidden_overlays.contains(&o.id))));
         out
     }
@@ -49,6 +49,12 @@ impl crate::world::World {
             Item::Head => self.state.head_hidden = !on,
             Item::Eyes => self.state.opts.eyes = on,
             Item::Extra(id) => {
+                let name = self.extra_name(id);
+                if on {
+                    self.hidden_extras.remove(&name);
+                } else {
+                    self.hidden_extras.insert(name);
+                }
                 for e in self.extras.iter_mut().filter(|e| e.id == *id) {
                     e.visible = on;
                 }

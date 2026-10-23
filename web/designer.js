@@ -854,13 +854,14 @@ function screenshot(which) {
 
 function visItems() {
   const items = [];
-  for (const m of V.meshes.values()) items.push({ kind: "mesh", id: m.id, label: m.label || m.id, on: m.visible });
+  for (const m of V.meshes.values()) items.push({ kind: "mesh", id: m.id, key: m.key || m.id, label: m.label || m.id, on: m.visible });
   for (const o of V.overlays.values()) items.push({ kind: "overlay", id: o.id, label: tr("designer.overlay_item", { id: o.id }), on: o.visible });
   return items;
 }
-function visState() { return visItems().map((x) => [x.kind, x.id, x.on]); }
+function visState() { return visItems().map((x) => [x.kind, x.key || x.id, x.on]); }
+function meshByKey(key) { return V.meshes.get(key) || [...V.meshes.values()].find((m) => m.key === key); }
 function applyVis(state) {
-  for (const [kind, id, on] of state) { const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id); if (t) t.visible = on; }
+  for (const [kind, id, on] of state) { const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id); if (t) t.visible = on; else if (kind === "mesh") V.keyVis.set(id, on); }
   renderVisibility();
   request(false);
 }
@@ -879,7 +880,7 @@ function isolate(kind, id) {
   visEdit(tr("designer.undo.isolate", { what: id }), () => { for (const m of V.meshes.values()) m.visible = kind === "mesh" && m.id === id; for (const o of V.overlays.values()) o.visible = kind === "overlay" && o.id === id; });
 }
 function showAll() {
-  visEdit(tr("designer.undo.show_all"), () => { for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
+  visEdit(tr("designer.undo.show_all"), () => { V.keyVis.clear(); for (const m of V.meshes.values()) m.visible = true; for (const o of V.overlays.values()) o.visible = true; });
   if (V.opts.hiddenRegions) setRegionMask(0, tr("designer.undo.show_regions"));
 }
 function renderVisibility() {
@@ -1363,7 +1364,7 @@ function showCard(p) {
 async function probeAt(clientX, clientY) {
   await ensureGrid();
   const hit = V.pick(clientX, clientY);
-  if (!hit || hit.mesh !== "head") { toast(hit ? tr("designer.probe_not_head", { mesh: hit.mesh }) : tr("designer.no_surface")); return null; }
+  if (!hit || hit.mesh !== "head") { toast(hit ? tr("designer.probe_not_head", { mesh: V.meshes.get(hit.mesh)?.label || hit.mesh }) : tr("designer.no_surface")); return null; }
   const p = describeAt(hit.lod, hit.triangle, hit.bary, hit.point);
   p.lod0 = toLod0(hit);
   D.probe = p;
@@ -1617,8 +1618,8 @@ function applyViewerState(s) {
   });
   if (Number.isInteger(s.active)) V.active = Math.max(0, Math.min(s.active, LAYOUTS[V.layout].length - 1));
   if (Array.isArray(s.visibility)) for (const [kind, id, on] of s.visibility) {
-    const t = kind === "mesh" ? V.meshes.get(id) : V.overlays.get(id);
-    if (t) t.visible = !!on; else D.pendingVis.set(`${kind}:${id}`, !!on);
+    const t = kind === "mesh" ? meshByKey(id) : V.overlays.get(id);
+    if (t) t.visible = !!on; else if (kind === "mesh") V.keyVis.set(id, !!on); else D.pendingVis.set(`${kind}:${id}`, !!on);
   }
   $("preset").value = D.preset;
   $("ref").value = D.refSource;

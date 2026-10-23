@@ -281,7 +281,10 @@ pub fn ruler(m: &Matrices, target: V3, s: &Shot, bounds: &crate::viewer::Bounds,
         let minor = if px_per_mm >= 6.0 { 1 } else if px_per_mm * 2.0 >= 6.0 { 2 } else if px_per_mm * 5.0 >= 6.0 && major == 10 { 5 } else { 0 };
         let every = |gap: f64| [10, 20, 50, 100, 200, 500].into_iter().find(|&st| st % major == 0 && st as f64 * px_per_mm >= gap).unwrap_or(1000);
         let (step_v, step_h) = (every(44.0), every(18.0));
-        let (sa, ua) = (axis_of(m.s), axis_of(m.u));
+        let (sa, ua) = match (axis_of(m.s), axis_of(m.u)) {
+            (Some(a), Some(b)) => (Some(a), Some(b)),
+            _ => (None, None),
+        };
         let mut lines = |axis: Option<(usize, f64)>, dir: V3, other: V3, half: f64, other_half: f64, vertical: bool| {
             let Some((k, sign)) = axis else { return };
             let (lo, hi) = (target[k] - half, target[k] + half);
@@ -400,7 +403,8 @@ impl crate::studio::Studio<'_> {
         use eframe::egui;
         let st = &self.world.state;
         let (Some(g), Some(ax), Some(s)) = (&self.world.grid, &self.world.grid_axis, &self.world.session) else { return };
-        if !st.opts.face_grid || !st.opts.grid_labels {
+        if !st.opts.face_grid || !st.opts.grid_labels || st.head_hidden {
+            self.s.grid_labels = None;
             return;
         }
         let rects = crate::viewer::rects(st.layout, w, h);
@@ -415,8 +419,8 @@ impl crate::studio::Studio<'_> {
             rects.iter().map(|r| (r.x, r.y, r.w, r.h, r.cam)).collect::<Vec<_>>(),
             rects.iter().map(|r| { let c = &st.cams[r.cam].cur; (c.yaw, c.pitch, c.dist, c.target, c.fov, st.cams[r.cam].ortho, st.vp[r.slot].lod) }).collect::<Vec<_>>(),
             s.head.revision,
-            st.opts.clip.iter().map(|c| (c.on, c.offset)).collect::<Vec<_>>(),
-            (st.opts.clip_box.on, st.opts.eyes, st.opts.eyes_grid.as_str(), st.opts.normal_grid),
+            (crate::viewer::planes(&st.opts, &st.bounds).iter().map(|q| (q.n, q.d)).collect::<Vec<_>>(), st.opts.clip_box.lo, st.opts.clip_box.hi),
+            (st.opts.clip_box.on, st.opts.eyes, st.opts.eyes_grid.as_str(), st.opts.normal_grid, st.hidden_regions, st.head_hidden),
             self.world.extras.iter().filter(|e| e.visible).map(|e| e.key).sum::<u64>(),
             ppp,
             overlays.iter().map(|b| (b.x0, b.y0, b.x1, b.y1)).collect::<Vec<_>>()
@@ -478,7 +482,7 @@ impl crate::studio::Studio<'_> {
                     .flatten()
                     .map(|(x, y, t)| Boxed { x0: x, x1: x + t.chars().count() as f64 * 6.2 + 8.0, y0: y, y1: y + 14.0 })
                     .filter(|b| !obstacles.iter().any(|q| b.hits(q)));
-                let how = Placing { obstacles: &obstacles, normal_grid: st.opts.normal_grid, ruler: ruler_box };
+                let how = Placing { obstacles: &obstacles, normal_grid: st.opts.normal_grid, ruler: ruler_box, hidden_regions: st.hidden_regions };
                 all.push(place(g, ax, &Head { pos: &s.head.positions, nrm: &s.head.normals }, &shot, &z, &cut, &how));
             }
             self.s.grid_labels = Some((key, all));
@@ -509,6 +513,7 @@ pub struct Placing<'a> {
     pub obstacles: &'a [Boxed],
     pub normal_grid: bool,
     pub ruler: Option<Boxed>,
+    pub hidden_regions: u32,
 }
 
 pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn Fn(V3) -> bool, how: &Placing) -> Vec<Label> {
@@ -517,6 +522,7 @@ pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn
     let blocked = |b: &Boxed| obstacles.iter().any(|q| b.hits(q));
     let on_ruler = |b: &Boxed| how.ruler.is_some_and(|q| b.hits(&q));
     let normal_grid = how.normal_grid;
+    let region_hidden = |v: usize| how.hidden_regions != 0 && g.regions.get(v).is_some_and(|&r| (how.hidden_regions >> (r as u32).min(31)) & 1 == 1);
     let letters = &g.letters;
     let cols = letters.len().max(1) as i64;
     let ch = &g.uv;
@@ -524,7 +530,7 @@ pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn
     let mut seen: Vec<(usize, f64, f64)> = Vec::new();
     let (mut y_top, mut y_bot) = (f64::INFINITY, f64::NEG_INFINITY);
     for v in 0..n {
-        if ax.vertex[v] {
+        if ax.vertex[v] || region_hidden(v) {
             continue;
         }
         let p = at(head.pos, v);
@@ -638,7 +644,7 @@ pub fn place(g: &FaceGrid, ax: &Axis, head: &Head, s: &Shot, z: &ZBuf, cut: &dyn
     let mut cand: Vec<(f64, f64, f64, String)> = Vec::new();
     for (label, v) in &g.anchors {
         let v = *v;
-        if v >= n || ax.vertex[v] {
+        if v >= n || ax.vertex[v] || region_hidden(v) {
             continue;
         }
         let p = at(head.pos, v);

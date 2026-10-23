@@ -62,6 +62,15 @@ fn panel_label(before: &Value, after: &Value) -> String {
     {
         return l;
     }
+    if path[0] == "view" && path.get(1).is_some_and(|p| p == "box") {
+        let on = |v: &Value| v["view"]["box"]["on"] == true;
+        return tr(match (on(before), on(after)) {
+            (false, true) => "designer.undo.box_hide",
+            (true, false) => "designer.undo.box_show",
+            _ => "designer.undo.box_move",
+        })
+        .to_string();
+    }
     let panel = tr_or(&format!("panel.{}", path[0]), &crate::wizard::humanize(&path[0])).to_string();
     let Some(leaf) = path.iter().skip(1).rev().find(|p| p.parse::<usize>().is_err()) else { return panel };
     let wear = |k: &str| match k {
@@ -151,7 +160,8 @@ impl World {
                "timeline": {"speed": t.speed, "loop": t.looping, "apply_head": t.apply_head},
                "pins": self.pins_state(),
                "view": {"head_hidden": self.state.head_hidden, "eyes": self.state.opts.eyes, "regions": self.state.hidden_regions,
-                        "hidden": self.extras.iter().filter(|e| !e.visible).map(|e| e.id.clone()).collect::<Vec<_>>(), "overlays": self.hidden_overlays},
+                        "hidden": self.hidden_extras, "overlays": self.hidden_overlays,
+                        "box": {"on": self.state.opts.clip_box.on, "lo": self.state.opts.clip_box.lo, "hi": self.state.opts.clip_box.hi}},
                "notes": self.project.notes, "body": self.session.as_ref().map_or(Value::Null, |s| s.character.body.clone())})
     }
 
@@ -190,11 +200,20 @@ impl World {
         self.state.head_hidden = view["head_hidden"] == true;
         self.state.opts.eyes = view["eyes"] != false;
         self.state.hidden_regions = view["regions"].as_u64().unwrap_or(0) as u32;
-        let hidden: Vec<&str> = view["hidden"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-        for e in &mut self.extras {
-            e.visible = !hidden.contains(&e.id.as_str());
+        self.hidden_extras = view["hidden"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        let names: Vec<String> = self.extras.iter().map(|e| self.extra_name(&e.id)).collect();
+        for (e, name) in self.extras.iter_mut().zip(&names) {
+            e.visible = !self.hidden_extras.contains(name);
         }
         self.hidden_overlays = view["overlays"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        let b = &view["box"];
+        if b.is_object() {
+            let three = |v: &Value, d: [f64; 3]| [0, 1, 2].map(|k| v[k].as_f64().unwrap_or(d[k]));
+            let cb = &mut self.state.opts.clip_box;
+            cb.on = b["on"] == true;
+            cb.lo = three(&b["lo"], cb.lo);
+            cb.hi = three(&b["hi"], cb.hi);
+        }
         self.project.notes = v["notes"].as_str().unwrap_or_default().to_string();
         let body = v["body"].clone();
         if self.session.as_ref().is_some_and(|s| s.character.body != body) {

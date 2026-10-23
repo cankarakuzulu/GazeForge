@@ -20,6 +20,7 @@ const WEAR: [[f32; 3]; 6] = [[0.25, 0.36, 0.62], [0.55, 0.30, 0.22], [0.30, 0.52
 
 pub struct WearMesh {
     pub name: String,
+    pub key: String,
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
@@ -83,6 +84,15 @@ fn floats(v: &Value, what: &str) -> Result<Vec<f32>, String> {
     Ok(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
+fn wear_key(w: &Value, before: &[WearMesh]) -> String {
+    let base = w["asset"].as_str().map(str::to_string).or_else(|| w["groom"].as_str().map(|g| format!("groom:{g}"))).unwrap_or_else(|| w["name"].as_str().unwrap_or_default().to_string());
+    let tagged = format!("{base}#");
+    match before.iter().filter(|m| m.key == base || m.key.starts_with(&tagged)).count() {
+        0 => base,
+        k => format!("{base}#{k}"),
+    }
+}
+
 fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
     let m = &r["mesh"];
     let idx = gf_api::designer::from_base64(m["indices"].as_str().ok_or("character.stitch returned no indices")?)?;
@@ -93,6 +103,7 @@ fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
         let idx = gf_api::designer::from_base64(w["indices"].as_str().ok_or("a stitched wearable has no indices")?)?;
         wearables.push(WearMesh {
             name: w["name"].as_str().unwrap_or("").to_string(),
+            key: wear_key(w, &wearables),
             positions: floats(&w["positions"], "wearable positions")?,
             normals: floats(&w["normals"], "wearable normals")?,
             indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
@@ -290,6 +301,7 @@ impl World {
             None => (None, None, None),
         };
         self.set_extra("stitch-body", body);
+        self.wear_slots = self.stitch.last.as_ref().map(|m| m.wearables.iter().map(|w| (w.key.clone(), w.name.clone())).collect()).unwrap_or_default();
         let wear: Vec<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])> = match &self.stitch.last {
             Some(m) if visible => m.wearables.iter().enumerate().map(|(i, w)| (w.positions.clone(), w.normals.clone(), w.indices.clone(), w.color.unwrap_or(WEAR[i % WEAR.len()]))).collect(),
             _ => Vec::new(),

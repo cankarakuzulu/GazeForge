@@ -100,6 +100,8 @@ pub struct World {
     pub pins: Vec<Value>,
     pub pins_next: u64,
     pub hidden_overlays: std::collections::BTreeSet<String>,
+    pub hidden_extras: std::collections::BTreeSet<String>,
+    pub wear_slots: Vec<(String, String)>,
     pub probe_mode: bool,
     pub hover: Option<(crate::viewer::V3, usize, String)>,
     pub grid_error: Option<String>,
@@ -176,6 +178,8 @@ impl Default for World {
             pins: Vec::new(),
             pins_next: 1,
             hidden_overlays: Default::default(),
+            hidden_extras: Default::default(),
+            wear_slots: Vec::new(),
             probe_mode: false,
             hover: None,
             grid_error: None,
@@ -272,17 +276,17 @@ impl World {
         self.timeline_poll();
         self.project_poll();
         self.project_autosave("timer");
-        self.grid_sync();
-        self.state.head_box = self.session.as_ref().filter(|_| self.measure_box).map(|s| {
-            let b = Bounds::of(&s.head.positions);
-            (b.lo, b.hi)
-        });
         if self.preview_dirty {
             self.update_preview();
         }
         if self.pose_dirty {
             self.present_pose();
         }
+        self.grid_sync();
+        self.state.head_box = self.session.as_ref().filter(|_| self.measure_box).map(|s| {
+            let b = Bounds::of(&s.head.positions);
+            (b.lo, b.hi)
+        });
     }
 
     pub fn set_pose(&mut self, id: &str, positions: Option<Vec<f32>>) -> Result<(), String> {
@@ -306,8 +310,25 @@ impl World {
         self.extras.retain(|e| e.id != id);
         if let Some((positions, normals, indices, colour)) = mesh {
             self.extra_key += 1;
-            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, visible: true, key: self.extra_key });
+            let visible = !self.hidden_extras.contains(&self.extra_name(id));
+            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, visible, key: self.extra_key });
         }
+    }
+
+    pub fn extra_name(&self, id: &str) -> String {
+        self.wear_slot(id).map_or_else(|| id.to_string(), |(key, _)| format!("wear:{key}"))
+    }
+
+    pub fn extra_label(&self, id: &str) -> String {
+        match (id, self.wear_slot(id)) {
+            (_, Some((_, name))) if !name.is_empty() => name.clone(),
+            ("stitch-body", _) => tr("stitch.mesh_ok").to_string(),
+            _ => id.to_string(),
+        }
+    }
+
+    fn wear_slot(&self, id: &str) -> Option<&(String, String)> {
+        id.strip_prefix("wear-").and_then(|i| i.parse::<usize>().ok()).and_then(|i| self.wear_slots.get(i))
     }
 
     pub fn set_overlay(&mut self, id: &str, lines: Option<(Vec<[f64; 3]>, [f64; 3])>) {
@@ -474,6 +495,17 @@ impl World {
                         self.reference_wanted = false;
                         self.start_positions = self.session.as_ref().map(|s| s.head.positions.clone());
                         self.neutral_ref = None;
+                        self.hidden_extras.clear();
+                        self.hidden_overlays.clear();
+                        self.probe = None;
+                        self.probe_waiting = None;
+                        self.hover = None;
+                        self.grid_error = None;
+                        self.state.head_hidden = false;
+                        self.state.hidden_regions = 0;
+                        for e in &mut self.extras {
+                            e.visible = true;
+                        }
                         self.hud.settle_latency.clear();
                         self.note(trf("studio.note.loaded", &[("ms", &format!("{load_ms:.0}"))]));
                         self.load_result = Some(Ok(summary));

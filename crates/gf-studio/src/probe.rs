@@ -168,6 +168,18 @@ impl crate::world::World {
         Ok(env["result"].clone())
     }
 
+    pub fn occluder(&self, r: &crate::viewer::Rect, px: f64, py: f64, head_at: f64) -> Option<String> {
+        let st = &self.state;
+        let near = |pos: &[f32], idx: &[u32]| crate::render::ray_distance(st, r, px, py, pos, idx).is_some_and(|d| d < head_at - 1e-6);
+        let eyes_shown = st.opts.eyes && !(st.opts.face_grid && st.opts.eyes_grid == "hide");
+        if let Some(e) = self.session.as_ref().and_then(|s| s.head.eyes.as_ref()).filter(|e| eyes_shown && !e.indices.is_empty())
+            && near(&e.positions, &e.indices)
+        {
+            return Some(tr("mesh.eyes").to_string());
+        }
+        self.extras.iter().filter(|e| e.visible).find(|e| near(&e.positions, &e.indices)).map(|e| self.extra_label(&e.id))
+    }
+
     pub fn char_tag(&self) -> String {
         let Some(s) = &self.session else { return char_tag("", None) };
         char_tag(&s.character.name, s.settled.as_ref().map(|x| x.revision.as_str()))
@@ -260,9 +272,11 @@ impl crate::studio::Studio<'_> {
             self.world.grid_wanted = true;
             let (r, px, py) = at(p);
             let hit = self.world.session.as_ref().and_then(|s| crate::render::pick_triangle(&self.world.state, &s.head, &r, px, py, None));
-            self.s.status = match hit {
-                None => tr("designer.no_surface").to_string(),
-                Some(h) => match self.world.probe_hit(&h) {
+            let blocked = hit.as_ref().and_then(|h| self.world.occluder(&r, px, py, h.distance));
+            self.s.status = match (hit, blocked) {
+                (None, _) => tr("designer.no_surface").to_string(),
+                (Some(_), Some(mesh)) => trf("designer.probe_not_head", &[("mesh", &mesh)]),
+                (Some(h), None) => match self.world.probe_hit(&h) {
                     Ok(Some(_)) => String::new(),
                     Ok(None) => tr("studio.grid_loading").to_string(),
                     Err(e) => trf("designer.err.probe", &[("error", &e)]),
@@ -275,6 +289,7 @@ impl crate::studio::Studio<'_> {
             return;
         };
         if self.s.hover_at.is_some_and(|t| t.elapsed().as_millis() < 50) {
+            resp.ctx.request_repaint_after(std::time::Duration::from_millis(60));
             return;
         }
         self.s.hover_at = Some(std::time::Instant::now());
@@ -282,6 +297,7 @@ impl crate::studio::Studio<'_> {
         let tag = self.world.char_tag();
         self.world.hover = match (&self.world.session, &self.world.grid) {
             (Some(s), Some(g)) => crate::render::pick_triangle(&self.world.state, &s.head, &r, px, py, None)
+                .filter(|h| self.world.occluder(&r, px, py, h.distance).is_none())
                 .and_then(|h| describe(g, &s.head, h.lod, h.index, h.bary, Some(h.point), &tag))
                 .map(|q| (q.point, r.slot, if q.vcell == q.cell { q.cell } else { format!("{} (v in {})", q.cell, q.vcell) })),
             _ => None,
