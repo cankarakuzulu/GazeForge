@@ -510,6 +510,7 @@ function mount(root, api) {
         build();
         note.textContent = tr('body.sliders_failed', { error: e && e.message ? e.message : e });
         content.style.display = 'none';
+        key = null;
         return;
       }
     }

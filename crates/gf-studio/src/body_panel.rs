@@ -37,6 +37,7 @@ pub struct BodyUi {
     pub filter: String,
     live: BTreeMap<String, f64>,
     groom_colour: Option<(&'static str, [u8; 3])>,
+    retry_at: Option<std::time::Instant>,
 }
 
 const GROOM_SHOWN: &[(&str, f64, f64, usize)] = &[
@@ -80,7 +81,7 @@ impl World {
         let Some(s) = &self.session else { return };
         let Some(targets) = s.character.body["targets"].as_str() else { return };
         let key = format!("{}|{targets}|{}", s.store, s.catalog);
-        if self.body_ui.key == key {
+        if self.body_ui.key == key && self.body_ui.retry_at.is_none_or(|t| std::time::Instant::now() < t) {
             return;
         }
         self.body_ui.key = key;
@@ -89,8 +90,10 @@ impl World {
             self.body_ui.pairs.clear();
             self.body_ui.compounds.clear();
             self.body_ui.error = Some(env["error"]["message"].as_str().unwrap_or("").to_string());
+            self.body_ui.retry_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
             return;
         }
+        self.body_ui.retry_at = None;
         let r = &env["result"];
         let text = |v: &Value| v.as_str().map(str::to_string);
         self.body_ui.pairs = r["pairs"]
