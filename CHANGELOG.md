@@ -8,6 +8,9 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Displacement on the body and clothes.** The displacement view measures the body and each worn item against
+  the starting character or a snapshot, as it does the head; against the neutral base they stay grey until the default
+  body and clothes are settled.
 - **Translatable task text.** Every task's title, summary, steps, help and field labels have locale entries (221), so
   both clients can show them in another language; a test keeps them in step with the tasks.
 - **Wearable categories.** Every wearable has a category (hair, facial hair, hats, eyewear, tops, bottoms, outfits,
