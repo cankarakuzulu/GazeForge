@@ -1427,7 +1427,7 @@ function setPose(id, positions) {
 function makeApi(panelId) {
   return {
     call: (command, input) => api(command, input ?? {}),
-    option: (k) => opt(k) ?? null,
+    option: (k) => (params.has(k) ? params.get(k) : null),
     setOption: (k, v) => {
       if (!PROJECT_OPTIONS.includes(k)) throw new Error(`setOption: ${k} is not a project option`);
       if (v) params.set(k, v); else params.delete(k);
@@ -1639,7 +1639,7 @@ function currentOptions() {
 }
 
 function projectSig() {
-  return JSON.stringify({ c: characterInput(), p: panelStates(), n: $("p-notes").value });
+  return JSON.stringify({ c: characterInput(), p: panelStates(), n: $("p-notes").value, o: currentOptions() });
 }
 
 function scheduleDirty() {
@@ -1808,7 +1808,7 @@ async function newProject() {
 }
 
 async function autosave(reason = "settle") {
-  if (!D.ready || P.saving || P.autosaving || P.slotShared) return;
+  if (!D.ready || P.saving || P.autosaving || P.slotShared || P.recoveryOffer?.name === slotName()) return;
   updateDirty();
   const name = slotName();
   if (!P.dirty) {
@@ -1900,7 +1900,7 @@ async function startCard() {
   const open = () => {
     const s = $("sc-store").value.trim(), m = $("sc-macro").value.trim();
     if (!s) { $("sc-store").focus(); return; }
-    location.search = new URLSearchParams(m ? { store: s, macro: m } : { store: s }).toString();
+    leave(projectUrl(null, { store: s, macro: m }));
   };
   $("sc-open").addEventListener("click", open);
   for (const id of ["sc-store", "sc-macro"]) $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
@@ -1913,7 +1913,7 @@ async function startCard() {
       for (const p of projects) {
         const b = document.createElement("button");
         b.textContent = tr("designer.project_row", { name: p.name, modified: localTime(p.modified), count: p.characters });
-        b.addEventListener("click", () => { location.search = new URLSearchParams({ project: p.name }).toString(); });
+        b.addEventListener("click", () => leave(projectUrl(p.name)));
         box.appendChild(b);
       }
     }
@@ -1928,6 +1928,10 @@ async function holdSlot(name) {
   if (P.slotLock?.name === name) return true;
   P.slotLock?.release();
   P.slotLock = null;
+  if (P.slotWait && P.slotWait.name !== name) {
+    P.slotWait.ctl.abort();
+    P.slotWait = null;
+  }
   if (!navigator.locks) return true;
   const release = await new Promise((resolve) => {
     navigator.locks.request(`gf-slot:${name}`, { ifAvailable: true }, (lock) => (lock ? new Promise((done) => resolve(done)) : resolve(null)));
@@ -1937,9 +1941,28 @@ async function holdSlot(name) {
   return true;
 }
 
+function waitSlot(name) {
+  if (!navigator.locks || P.slotWait?.name === name) return;
+  const ctl = new AbortController();
+  P.slotWait = { name, ctl };
+  navigator.locks.request(`gf-slot:${name}`, { signal: ctl.signal }, () => {
+    if (P.slotWait?.ctl !== ctl || name !== slotName()) return;
+    return new Promise((release) => {
+      P.slotWait = null;
+      P.slotLock = { name, release };
+      P.slotShared = false;
+      $("p-status").textContent = tr("designer.slot_free", { name });
+      offerRecovery();
+    });
+  }).catch(() => {});
+}
+
 async function claimSlot() {
   P.slotShared = !(await holdSlot(slotName()));
-  if (P.slotShared) $("p-status").textContent = tr("designer.slot_shared", { name: slotName() });
+  if (P.slotShared) {
+    $("p-status").textContent = tr("designer.slot_shared", { name: slotName() });
+    waitSlot(slotName());
+  }
   return !P.slotShared;
 }
 
@@ -1971,11 +1994,18 @@ function buildProjectControls() {
     if (!(await confirmDiscard(tr("designer.frag.switching")))) return;
     leave(projectUrl(P.name, { character: li.dataset.i }));
   });
-  $("p-restore").addEventListener("click", () => { $("p-recover").classList.add("hidden"); leave(projectUrl(slotName(), { recovery: 1, ...(P.name ? {} : { store }) })); });
+  $("p-restore").addEventListener("click", () => {
+    const name = P.recoveryOffer?.name || slotName();
+    $("p-recover").classList.add("hidden");
+    leave(projectUrl(name, { recovery: 1, ...(name === "untitled" ? { store } : {}) }));
+  });
   $("p-discard").addEventListener("click", async () => {
+    const name = P.recoveryOffer?.name || slotName();
     $("p-recover").classList.add("hidden");
     request(false);
-    try { await api("project.discard", { name: slotName(), ...rootArg() }); toast(tr("designer.autosave_discarded")); } catch (e) { toast(e.message); }
+    try { await api("project.discard", { name, ...rootArg() }); toast(tr("designer.autosave_discarded")); } catch (e) { toast(e.message); }
+    P.recoveryOffer = null;
+    scheduleDirty();
   });
   window.addEventListener("beforeunload", (e) => {
     updateDirty();

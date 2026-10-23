@@ -133,7 +133,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   function render() {
     const glb = (W.state?.steps || []).map((s) => s?.result?.out).filter((o) => typeof o === "string" && o.endsWith(".glb")).pop();
-    if (glb) W.lastGlb = glb;
+    if (glb && W.def.id === "export") W.lastGlb = glb;
     const steps = W.def.steps;
     box.querySelector(".wz-steps").innerHTML = steps.map((s, i) =>
       `<button class="wz-step ${i === W.at ? "now" : ""} st-${esc(stepState(i).state)}" data-i="${i}">${i + 1}. ${esc(tr(`wizard.${W.def.id}.${s.id}.title`, null, s.title))}<small>${esc(tr(`wizard.state.${stepState(i).state}`, null, stepState(i).state))}${s.optional ? ` · ${tr("wizard.optional")}` : ""}</small></button>`).join("");
