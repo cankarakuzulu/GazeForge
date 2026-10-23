@@ -634,8 +634,10 @@ export class Viewer {
     if (!m.wind) m.wind = windingSign(positions, m.lods[0].idxCPU);
   }
 
-  setReference(positions) {
-    const m = this.meshes.get("head");
+  setReference(positions, id = "head") {
+    const m = this.meshes.get(id);
+    if (!m) return;
+    if (positions && positions.length !== m.n * 3) positions = null;
     m.refCPU = positions || null;
     if (!positions) { this.drop(m.ref); m.ref = null; return; }
     if (!m.ref) m.ref = this.tex("f3", m.n);

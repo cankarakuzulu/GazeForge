@@ -57,7 +57,7 @@ const D = {
   stats: { frames: [], used: [], intervals: [], settles: [], errors: [], flips: [] }, measure: params.get("measure") === "1",
   dirty: false, pendingSettle: 0, lastSent: null, hooks: { beforeFrame: null },
   history: { done: [], undone: [], limit: 300 }, poses: new Map(), listeners: [], panelDefs: [], panels: [], optWriters: [],
-  link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
+  link: true, refSource: "start", extraStart: new Map(), extraSnap: new Map(), lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
   panelHooks: new Map(),
   grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [], eyeLooks: new Map(), eyeBaseKey: null,
   project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false, slotShared: false, slotLock: null },
@@ -872,8 +872,19 @@ async function ensureReference() {
       ref = D.neutral;
     }
     V.setReference(ref);
+    if (D.refSource === "snapshot") D.extraSnap = new Map([...V.meshes.values()].filter(extraMeasured).map((m) => [m.key, m.cpuPos.slice()]));
+    for (const m of V.meshes.values()) if (extraMeasured(m)) extraReference(m.id);
     request(false);
   } catch (e) { toast(tr("designer.reference_failed", { error: e.message })); }
+}
+
+const extraMeasured = (m) => m.kind === "extra" && m.cpuPos;
+function extraReference(id) {
+  const m = V.meshes.get(id);
+  if (!m || !extraMeasured(m)) return;
+  if (!D.extraStart.has(m.key)) D.extraStart.set(m.key, m.cpuPos.slice());
+  const ref = D.refSource === "start" ? D.extraStart.get(m.key) : D.refSource === "snapshot" ? D.extraSnap.get(m.key) : null;
+  V.setReference(ref || null, id);
 }
 
 function screenshot(which) {
@@ -1506,7 +1517,7 @@ function makeApi(panelId) {
     character: () => JSON.parse(JSON.stringify(settleInput())),
     onCharacterChange: (cb) => { if (typeof cb === "function") D.listeners.push(cb); },
     setPose,
-    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); renderVisibility(); request(false); },
+    setExtraMesh: (id, spec) => { V.setExtra(String(id), spec || null); extraReference(String(id)); renderVisibility(); request(false); },
     poseExtraMesh: (id, rotation, centre) => { const ok = V.poseExtra(String(id), rotation || null, centre || null); request(false); return ok; },
     setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); renderVisibility(); request(false); },
     pushUndo,

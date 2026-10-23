@@ -24,6 +24,7 @@ pub struct Extra {
     pub indices: Vec<u32>,
     pub colour: [f32; 3],
     pub uvs: Vec<f32>,
+    pub reference: Vec<f32>,
     pub visible: bool,
     pub key: u64,
 }
@@ -103,6 +104,8 @@ pub struct World {
     pub hidden_overlays: std::collections::BTreeSet<String>,
     pub hidden_extras: std::collections::BTreeSet<String>,
     pub wear_slots: Vec<(String, String)>,
+    extra_start: std::collections::HashMap<String, Vec<f32>>,
+    extra_snap: std::collections::HashMap<String, Vec<f32>>,
     pub probe_mode: bool,
     pub hover: Option<(crate::viewer::V3, usize, String)>,
     pub grid_error: Option<String>,
@@ -181,6 +184,8 @@ impl Default for World {
             hidden_overlays: Default::default(),
             hidden_extras: Default::default(),
             wear_slots: Vec::new(),
+            extra_start: Default::default(),
+            extra_snap: Default::default(),
             probe_mode: false,
             hover: None,
             grid_error: None,
@@ -312,8 +317,24 @@ impl World {
         if let Some((positions, normals, indices, colour)) = mesh {
             self.extra_key += 1;
             let visible = !self.hidden_extras.contains(&self.extra_name(id));
-            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, uvs: Vec::new(), visible, key: self.extra_key });
+            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, uvs: Vec::new(), reference: Vec::new(), visible, key: self.extra_key });
+            self.extra_reference(id);
         }
+    }
+
+    fn extra_reference(&mut self, id: &str) {
+        let name = self.extra_name(id);
+        let Some(i) = self.extras.iter().position(|e| e.id == id) else { return };
+        if !self.extra_start.contains_key(&name) {
+            self.extra_start.insert(name.clone(), self.extras[i].positions.clone());
+        }
+        let r = match self.ref_source {
+            "start" => self.extra_start.get(&name),
+            "snapshot" => self.extra_snap.get(&name),
+            _ => None,
+        };
+        let e = &mut self.extras[i];
+        e.reference = r.filter(|r| r.len() == e.positions.len()).cloned().unwrap_or_default();
     }
 
     pub fn set_extra_uvs(&mut self, id: &str, uvs: Vec<f32>) {
@@ -503,6 +524,8 @@ impl World {
                         self.start_positions = self.session.as_ref().map(|s| s.head.positions.clone());
                         self.neutral_ref = None;
                         self.hidden_extras.clear();
+                        self.extra_start.clear();
+                        self.extra_snap.clear();
                         self.hidden_overlays.clear();
                         self.probe = None;
                         self.probe_waiting = None;
@@ -780,6 +803,18 @@ impl World {
             s.head.reference_rev += 1;
         }
         self.want_reference();
+        if self.ref_source == "snapshot" {
+            self.extra_snap = self.extras.iter().map(|e| (self.extra_name(&e.id), e.positions.clone())).collect();
+        }
+        let ids: Vec<String> = self.extras.iter().map(|e| e.id.clone()).collect();
+        for id in ids {
+            self.extra_reference(&id);
+            self.extra_key += 1;
+            let key = self.extra_key;
+            if let Some(e) = self.extras.iter_mut().find(|e| e.id == id) {
+                e.key = key;
+            }
+        }
     }
 
     pub fn shape_event(&mut self, ev: ShapeEvent) {
