@@ -465,6 +465,35 @@ pub fn list(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
     Ok(json!({"wizards": wizards}))
 }
 
+pub fn ui_texts() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for w in definitions() {
+        let id = w["id"].as_str().unwrap_or_default().to_string();
+        let mut put = |k: String, v: &Value| {
+            if let Some(s) = v.as_str().filter(|s| !s.is_empty()) {
+                out.push((k, s.to_string()));
+            }
+        };
+        put(format!("wizard.{id}.title"), &w["title"]);
+        put(format!("wizard.{id}.summary"), &w["summary"]);
+        put(format!("wizard.group.{}", w["group"].as_str().unwrap_or_default()), &w["group"]);
+        for s in w["steps"].as_array().into_iter().flatten() {
+            let sid = s["id"].as_str().unwrap_or_default();
+            put(format!("wizard.{id}.{sid}.title"), &s["title"]);
+            let help = if s["help"].is_string() { s["help"].clone() } else { s["command"].as_str().and_then(find).map_or(Value::Null, |d| json!(d.summary)) };
+            put(format!("wizard.{id}.{sid}.help"), &help);
+            for f in s["fields"].as_array().into_iter().flatten() {
+                if let Some(n) = f["name"].as_str() {
+                    put(format!("wizard.{id}.{sid}.{n}"), &f["label"]);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn definition(id: &str) -> Result<Value, ApiError> {
     definitions().into_iter().find(|w| w["id"] == id).ok_or_else(|| ApiError::not_found(format!("no wizard named {id:?}")).hint("wizards.list names every wizard"))
 }
@@ -846,6 +875,18 @@ pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_task_text_has_its_locale_entry() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let en: Value = serde_json::from_str(&std::fs::read_to_string(format!("{root}/web/locales/en.json")).unwrap()).unwrap();
+        let missing: Map<String, Value> = ui_texts().into_iter().filter(|(k, v)| en[k.as_str()] != json!(v)).map(|(k, v)| (k, json!(v))).collect();
+        if !missing.is_empty() {
+            let out = format!("{root}/target/wizard_texts.json");
+            std::fs::write(&out, serde_json::to_string_pretty(&Value::Object(missing.clone())).unwrap()).unwrap();
+        }
+        assert!(missing.is_empty(), "{} task texts are missing or stale in web/locales/en.json; they were written to target/wizard_texts.json: run py -3 tools/i18n/wizard_text.py", missing.len());
+    }
 
     fn refs(b: &Value) -> Vec<String> {
         match b {
