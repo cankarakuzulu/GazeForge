@@ -306,6 +306,8 @@ open, with its last measurement, rather than left out.
   waits while a recovery is on offer (the browser strip and the studio's Project section say so, with Restore and
   Discard). In the studio, after autosaving one project, opening another and leaving it unchanged deleted the
   second project's recovery; opening a project now starts its autosave state afresh.
+- **A failed body slider list stayed failed.** The Body shape panels kept the error until the store, targets or
+  catalog changed (the browser then showed an empty panel under the old note); they now try again.
 - **A tab that found its project open in another tab never autosaved it again.** It now takes the recovery slot
   when the other tab closes, says so, and autosaves from then on.
 - **Review fixes to the day's UX changes.** A Face shapes folder change marks the project unsaved in both clients;
