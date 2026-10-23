@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A refused Save As lost the typed name.** In the browser, when the server refuses the name ("untitled" is kept for
+  the recovery slot, or a character it does not allow), the dialog opens again with the name still typed and the reason
+  in place of the naming rule.
 - **The browser's Project tab read like a log.** Its info line shows the name, saved and created times and the store;
   the base pack hash and blob count moved to its tooltip. A character row shows its name and "N revision(s)", with
   its id and revision hash in the tooltip.

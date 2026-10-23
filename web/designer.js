@@ -1744,6 +1744,7 @@ async function confirmDiscard(what) {
 async function saveProject(asName) {
   const name = asName || P.name;
   if (!name) return saveProjectAs();
+  P.saveError = null;
   if (D.start.macros && !D.macros?.available) { toast(tr("designer.needs_macro")); return false; }
   const was = P.name;
   P.saving = true;
@@ -1769,6 +1770,7 @@ async function saveProject(asName) {
     toast(tr("designer.saved_name", { name }));
     return true;
   } catch (e) {
+    P.saveError = e.plain || e.message;
     $("p-status").textContent = tr("designer.save_failed", { error: e.message });
     toast(tr("designer.save_failed", { error: e.message }));
     return false;
@@ -1776,9 +1778,14 @@ async function saveProject(asName) {
 }
 
 async function saveProjectAs() {
-  const name = await dialog({ title: tr("designer.save_as_title"), note: tr("designer.name_rule"), name: P.name || D.start.name || "" , ok: tr("designer.save") });
-  if (!name) return false;
-  return saveProject(name);
+  let name = P.name || D.start.name || "", note = tr("designer.name_rule");
+  for (;;) {
+    name = await dialog({ title: tr("designer.save_as_title"), note, name, ok: tr("designer.save") });
+    if (!name) return false;
+    if (await saveProject(name)) return true;
+    if (!P.saveError) return false;
+    note = tr("designer.save_failed", { error: P.saveError });
+  }
 }
 
 async function openProject(name) {
