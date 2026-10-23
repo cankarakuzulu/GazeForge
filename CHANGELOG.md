@@ -301,6 +301,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Jobs were listed by command name.** Both Jobs lists show a label ("Export a glb", "Make hair cards", "Import a
+  game base") with the command in the tooltip; a studio test fails when a job command has no `job.cmd.` label.
 - **The face rig's shapes folder could only be set from outside.** Both Face rig panels have a Face shapes field (the
   studio's with a folder button) for the folder of the face shapes' .npz files; it is saved with the project like
   the URL's `face_morphs`. Without it, `rig.face` on a store whose catalog lacks the shapes says "the face rig needs 51

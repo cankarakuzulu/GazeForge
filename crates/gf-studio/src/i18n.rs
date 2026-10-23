@@ -67,6 +67,12 @@ mod tests {
     }
 
     #[test]
+    fn every_job_command_has_a_label() {
+        let missing: Vec<&str> = gf_api::registry().iter().filter(|c| c.kind == gf_api::Kind::Job && table().get(format!("job.cmd.{}", c.name).as_str()).is_none()).map(|c| c.name).collect();
+        assert!(missing.is_empty(), "add job.cmd.<name> to web/locales/en.json for {missing:?}");
+    }
+
+    #[test]
     fn a_target_id_reads_as_words() {
         assert_eq!(readable("l-cheek-trans-down"), "Left cheek move down");
         assert_eq!(readable("nose-scale-horiz-incr"), "Nose scale horizontal more");

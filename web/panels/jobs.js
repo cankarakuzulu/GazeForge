@@ -18,7 +18,7 @@ window.GF.registerPanel({
         const p = j.progress, frac = p && p.total ? Math.round((100 * p.done) / p.total) : 0;
         const live = j.state === "running" || j.state === "queued";
         return `<div class="job st-${esc(j.state)}" title="${esc(j.id)}">
-          <div class="job-head"><b>${esc(j.command)}</b><span class="job-state">${esc(tr(`job.state.${j.state}`, null, j.state))}${j.ok === false ? ` ${tr("jobs.failed")}` : ""}</span>
+          <div class="job-head"><b title="${esc(j.command)}">${esc(tr(`job.cmd.${j.command}`, null, j.command))}</b><span class="job-state">${esc(tr(`job.state.${j.state}`, null, j.state))}${j.ok === false ? ` ${tr("jobs.failed")}` : ""}</span>
             ${live ? `<button class="small job-cancel" data-id="${esc(j.id)}">${tr("jobs.cancel")}</button>` : ""}</div>
           <div class="note">${when(j.submitted_ms)} ${took(j)}${j.error ? ` · ${esc(j.error)}` : ""}</div>
           ${live && p ? `<div class="wz-progress"><div class="bar"><i style="width:${frac}%"></i></div><span class="msg">${esc(p.stage)} ${p.done}/${p.total}</span></div>` : ""}

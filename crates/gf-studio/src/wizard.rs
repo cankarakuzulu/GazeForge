@@ -481,7 +481,8 @@ impl Wizards {
         let live = jobs.iter().any(|j| matches!(j["state"].as_str(), Some("running") | Some("queued")));
         egui::Grid::new("wz_jobs_grid").num_columns(4).striped(true).show(ui, |ui| {
             for j in &jobs {
-                ui.label(shown(&j["command"]));
+                let command = shown(&j["command"]);
+                ui.label(tr_or(&format!("job.cmd.{command}"), &command)).on_hover_text(&command);
                 ui.label(tr_or(&format!("job.state.{}", shown(&j["state"])), &shown(&j["state"])));
                 let p = &j["progress"];
                 match (p["done"].as_f64(), p["total"].as_f64()) {
