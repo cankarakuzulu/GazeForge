@@ -115,8 +115,8 @@ pub struct Journal {
     last: Option<Value>,
     changed_at: Option<Instant>,
     pub pointer_down: bool,
-    pub store_done: Vec<(String, String, String, String)>,
-    store_undone: Vec<(String, String, String, String)>,
+    pub store_done: Vec<(String, String, String, String, String)>,
+    store_undone: Vec<(String, String, String, String, String)>,
 }
 
 impl Journal {
@@ -283,17 +283,17 @@ impl World {
         self.journal = Journal { pointer_down, shape_seen: self.shape.as_ref().map_or(0, |s| s.history.pushes), ..Journal::default() };
     }
 
-    fn store_step(&mut self, redo: bool) -> Option<String> {
-        let step = if redo { self.journal.store_undone.pop()? } else { self.journal.store_done.pop()? };
-        let (store, asset, before, after) = step.clone();
+    fn store_step(&mut self, redo: bool) -> Result<Option<String>, String> {
+        let Some(step) = (if redo { self.journal.store_undone.pop() } else { self.journal.store_done.pop() }) else { return Ok(None) };
+        let (store, asset, before, after, shown) = step.clone();
         let target = if redo { after } else { before };
-        if self.wear_category_set(&store, &asset, &target).is_err() {
-            return None;
+        if let Err(e) = self.wear_category_set(&store, &asset, &target) {
+            if redo { self.journal.store_undone.push(step) } else { self.journal.store_done.push(step) }
+            return Err(e);
         }
-        let now = self.body_ui.store_wear.iter().find(|w| w.reference == asset).map_or(target, |w| w.category.clone());
-        let label = trf("body.undo.category", &[("name", &self.wear_category_label(&asset)), ("category", &tr(&format!("wearable.category.{now}")))]);
+        let label = trf("body.undo.category", &[("name", &self.wear_category_label(&asset)), ("category", &tr(&format!("wearable.category.{shown}")))]);
         if redo { self.journal.store_done.push(step) } else { self.journal.store_undone.push(step) }
-        Some(label)
+        Ok(Some(label))
     }
 
     fn panel_step(&mut self, redo: bool) -> Option<String> {
@@ -317,7 +317,13 @@ impl World {
                 Domain::Shape => self.shape_step(redo),
                 Domain::Skin => self.skin_step(redo),
                 Domain::Panels => self.panel_step(redo),
-                Domain::Store => self.store_step(redo),
+                Domain::Store => match self.store_step(redo) {
+                    Ok(label) => label,
+                    Err(e) => {
+                        if redo { self.journal.undone.push(d) } else { self.journal.done.push(d) }
+                        return Some(trf("body.edit_failed", &[("error", &e)]));
+                    }
+                },
             };
             if let Some(label) = label {
                 if redo { self.journal.done.push(d) } else { self.journal.undone.push(d) }

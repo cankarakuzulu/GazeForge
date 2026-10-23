@@ -448,18 +448,36 @@ function mount(root, api) {
     fillAdd();
   }
 
-  function categorize(asset, to) {
-    const w = storeWear.find((x) => x.wearable === asset);
-    if (!w || w.category === to) return;
-    const from = w.category_source === 'store' ? w.category : '';
-    const set = async (c) => {
+  let catQueue = Promise.resolve();
+  function catCall(asset, c) {
+    const run = async () => {
       const r = await api.call('wearable.categorize', { store: api.character().store, wearable: asset, category: c });
-      w.category = r.category;
-      w.category_source = r.category_source;
+      const w = storeWear.find((x) => x.wearable === asset);
+      if (w) { w.category = r.category; w.category_source = r.category_source; }
       syncWear(api.body.get());
+      return r;
     };
-    set(to).then(() => api.pushUndo({ label: tr('body.undo.category', { name: wearName(asset), category: catName(to) }), undo: () => set(from), redo: () => set(to) }))
-      .catch((e) => { note.textContent = tr('body.edit_failed', { error: e.message }); syncWear(api.body.get()); });
+    const p = catQueue.then(run);
+    catQueue = p.catch(() => {});
+    return p;
+  }
+
+  async function catFailed(e) {
+    note.textContent = tr('body.edit_failed', { error: e.message });
+    try {
+      const listed = await api.call('wearable.list', { store: api.character().store });
+      storeWear = (listed && listed.wearables) || storeWear;
+    } catch {}
+    syncWear(api.body.get());
+  }
+
+  function categorize(asset, to) {
+    catCall(asset, to).then((r) => {
+      const from = r.before ?? '';
+      if (from === to) return;
+      const label = tr('body.undo.category', { name: wearName(asset), category: catName(r.category) });
+      api.pushUndo({ label, undo: () => { catCall(asset, from).catch(catFailed); }, redo: () => { catCall(asset, to).catch(catFailed); } });
+    }).catch(catFailed);
   }
 
   function fillAdd() {

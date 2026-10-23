@@ -196,17 +196,22 @@ impl World {
 
     pub fn wear_categorize(&mut self, asset: &str, category: &str) -> Result<(), String> {
         let store = self.session.as_ref().map(|s| s.store.clone()).ok_or("nothing is loaded")?;
-        let (before, current) = self.body_ui.store_wear.iter().find(|w| w.reference == asset).map(|w| (if w.kept { w.category.clone() } else { String::new() }, w.category.clone())).ok_or_else(|| format!("{asset} is not in the store's wearables"))?;
-        if current == category {
+        let w = self.body_ui.store_wear.iter().find(|w| w.reference == asset).ok_or_else(|| format!("{asset} is not in the store's wearables"))?;
+        if (category.is_empty() && !w.kept) || (w.kept && w.category == category) {
             return Ok(());
         }
-        self.wear_category_set(&store, asset, category)?;
-        self.journal.store_done.push((store, asset.to_string(), before, category.to_string()));
+        let r = self.wear_category_set(&store, asset, category)?;
+        let before = r["before"].as_str().unwrap_or_default().to_string();
+        if before == category {
+            return Ok(());
+        }
+        let shown = r["category"].as_str().unwrap_or(category).to_string();
+        self.journal.store_done.push((store, asset.to_string(), before, category.to_string(), shown));
         self.journal_push(crate::history::Domain::Store);
         Ok(())
     }
 
-    pub fn wear_category_set(&mut self, store: &str, asset: &str, category: &str) -> Result<(), String> {
+    pub fn wear_category_set(&mut self, store: &str, asset: &str, category: &str) -> Result<Value, String> {
         let env = gf_api::call(&gf_api::Ctx::from_env(), "wearable.categorize", &json!({"store": store, "wearable": asset, "category": category}));
         if env["ok"] != true {
             return Err(env["error"]["message"].as_str().unwrap_or("wearable.categorize failed").to_string());
@@ -215,7 +220,7 @@ impl World {
             w.category = env["result"]["category"].as_str().unwrap_or(category).to_string();
             w.kept = env["result"]["category_source"] == "store";
         }
-        Ok(())
+        Ok(env["result"].clone())
     }
 
     pub fn wear_category_label(&self, asset: &str) -> String {
