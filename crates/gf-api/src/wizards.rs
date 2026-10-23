@@ -20,7 +20,8 @@ fn eyes() -> Value {
         "steps": [
             {"id": "generate", "title": "Eyes", "command": "eyes.generate",
              "help": "The model sets the eyeball's proportions (an id from the eye inventory, such as brown-medium; empty uses the default shape). The radius is 5 to 20 mm (12 by default), or MakeHuman's helper radius. The store needs its eye rig (the Eye rig step of Set up a store).",
-             "fields": [hidden("store", "$run.store"), hidden("catalog", "$run.catalog"),
+             "fields": [{"name": "store", "label": "Store folder", "widget": "folder", "bind": "$run.store", "common": true},
+                        {"name": "catalog", "label": "Target catalog (sha256:...)", "bind": "$run.catalog", "common": true},
                         {"name": "model", "label": "Eye model", "common": true},
                         {"name": "radius_mm", "label": "Eyeball radius (mm)", "common": true},
                         {"name": "helper_radius", "label": "Use MakeHuman's helper radius"},

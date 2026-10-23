@@ -211,6 +211,7 @@ impl Offscreen {
                             return Err("nothing is loaded".into());
                         }
                         w.open = true;
+                        w.sync_epoch(world.epoch);
                         w.start(text("id").ok_or("wizard start needs id")?, crate::wizard::run_values(world), world.settle_input(), text("project").unwrap_or("untitled"))?;
                     }
                     "set" | "run" => {

@@ -860,6 +860,7 @@ impl crate::studio::Studio<'_> {
             }
             if groom_cards {
                 let slot = self.world.project.slot();
+                self.s.wizards.sync_epoch(self.world.epoch);
                 match self.s.wizards.start("groom_cards", crate::wizard::run_values(self.world), self.world.settle_input(), &slot) {
                     Ok(()) => self.s.wizards.open = true,
                     Err(e) => self.world.body_ui.edit_error = Some(e),

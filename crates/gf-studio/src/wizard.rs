@@ -36,6 +36,7 @@ pub struct Wizards {
     pending: Option<Receiver<Result<Value, String>>>,
     last_glb: Option<String>,
     glb_epoch: u64,
+    glb_live: bool,
     browse: Browse,
 }
 
@@ -129,7 +130,7 @@ impl Wizards {
     }
 
     fn remember_glb(&mut self) {
-        let Some(st) = &self.state else { return };
+        let Some(st) = self.state.as_ref().filter(|_| self.glb_live) else { return };
         if self.def.as_ref().is_none_or(|d| d["id"] != "export") {
             return;
         }
@@ -162,6 +163,7 @@ impl Wizards {
         prepared.insert("export".into(), json!({"out": dir.join("export.glb").display().to_string()}));
         self.def = Some(def);
         self.state = Some(state);
+        self.glb_live = true;
         self.prepared = prepared;
         self.at = 0;
         self.shown_for = None;
@@ -176,6 +178,7 @@ impl Wizards {
         self.at = steps.iter().position(|s| s["state"] != "done").unwrap_or(steps.len().saturating_sub(1));
         self.def = Some(def);
         self.state = Some(state);
+        self.glb_live = true;
         self.prepared = Map::new();
         self.shown_for = None;
         self.error = None;
@@ -375,6 +378,14 @@ impl Wizards {
         }
     }
 
+    pub fn sync_epoch(&mut self, epoch: u64) {
+        if self.glb_epoch != epoch {
+            self.glb_epoch = epoch;
+            self.last_glb = None;
+            self.glb_live = false;
+        }
+    }
+
     pub fn show(&mut self, ui_ctx: &egui::Context, world: &crate::world::World, project: &str) {
         if !self.open {
             return;
@@ -384,10 +395,7 @@ impl Wizards {
             Ok(false) => {}
             Err(e) => self.error = Some(e),
         }
-        if self.glb_epoch != world.epoch {
-            self.glb_epoch = world.epoch;
-            self.last_glb = None;
-        }
+        self.sync_epoch(world.epoch);
         self.remember_glb();
         let mut open = self.open;
         let title = self.def.as_ref().map_or_else(|| tr("ui.wz-title").to_string(), |d| tr_or(&format!("wizard.{}.title", d["id"].as_str().unwrap_or("")), d["title"].as_str().unwrap_or("")).to_string());

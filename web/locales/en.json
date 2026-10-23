@@ -659,6 +659,7 @@
  "pins.added_lod": " (placed on LOD{level}: stored at the closest LOD0 surface point, {mm} mm away)",
  "pins.delete": "Delete",
  "pins.export": "Export pins",
+ "pins.export_unplaced": "Not exported: these pins are not on this base's finest level: {list}",
  "pins.exported": "Exported {n} pins",
  "pins.go": "Go",
  "pins.none": "No pins",

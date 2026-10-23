@@ -79,6 +79,10 @@ impl crate::world::World {
     pub fn pins_export(&self) -> Result<Value, String> {
         let g = self.grid.as_ref().ok_or_else(|| tr("studio.grid_loading").to_string())?;
         let d = &g.definition;
+        let lost: Vec<String> = self.pins.iter().filter(|p| self.pin_describe(p).is_none()).map(|p| p["n"].to_string()).collect();
+        if !lost.is_empty() {
+            return Err(trf("pins.export_unplaced", &[("list", &lost.join(", "))]));
+        }
         let pins = self
             .pins
             .iter()
