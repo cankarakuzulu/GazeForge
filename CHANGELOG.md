@@ -14,6 +14,9 @@ open, with its last measurement, rather than left out.
   `gazeforge.pins/1`, saved with the project in the browser's pins state, each edit an undo step) and draws the
   millimetre grid (Alt+R). At the same viewport size and camera the addresses, go-to targets and labels match the
   browser's; a project's pins open in either client.
+- **View and lighting in the studio.** A section with the browser's View and Scene options: wire, points and heat-map
+  ranges, field of view, lighting presets and four lights, exposure, the hide box, three clip planes and the face-grid
+  options. The browser's per-mesh visibility list, region hiding and displacement reference choice are not in the studio.
 - **Measurements in the studio.** A Measurements section (after Timeline) shows the six landmark measures with their
   change from the base, a head bounding box overlay with its size, and the triangles per level, as the browser's panel
   does; the measures now have names in both clients (they showed ids such as `nose_width`). Script op `measure`.
