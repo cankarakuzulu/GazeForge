@@ -6,6 +6,7 @@ use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 
+use crate::browse::Pick;
 use crate::cube::{self, Cube, Element};
 use crate::godot;
 use crate::i18n::{tr, tr_or, trf};
@@ -50,6 +51,7 @@ pub struct UiState {
     pub project: crate::project::ProjectUi,
     pub load_ask: Option<LoadAsk>,
     pub eye_note_hidden: bool,
+    pub browse: crate::browse::Browse,
 }
 
 #[derive(Clone)]
@@ -100,6 +102,7 @@ impl UiState {
             project: Default::default(),
             load_ask: None,
             eye_note_hidden: false,
+            browse: Default::default(),
         })
     }
 }
@@ -503,15 +506,23 @@ impl Studio<'_> {
         let loaded = self.world.session.is_some();
         egui::CollapsingHeader::new(egui::RichText::new(tr("store.title")).strong()).id_salt("store").default_open(!loaded).show(ui, |ui| {
             egui::Grid::new("store_fields").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                for (label, value, hint) in [
-                    ("store", &mut self.s.store, tr("studio.field.store_hint")),
-                    ("spec", &mut self.s.spec, tr("studio.field.spec_hint")),
-                    ("macro", &mut self.s.macro_file, tr("studio.field.macro_hint")),
-                    ("eyes", &mut self.s.eyes, tr("studio.field.eyes_hint")),
-                    ("game", &mut self.s.game, tr("studio.field.game_hint")),
+                let json = || Pick::Open(".json".into());
+                for (label, value, hint, pick) in [
+                    ("store", &mut self.s.store, tr("studio.field.store_hint"), Some(Pick::Folder)),
+                    ("spec", &mut self.s.spec, tr("studio.field.spec_hint"), Some(Pick::Open(".gfchar.json".into()))),
+                    ("macro", &mut self.s.macro_file, tr("studio.field.macro_hint"), Some(json())),
+                    ("eyes", &mut self.s.eyes, tr("studio.field.eyes_hint"), Some(json())),
+                    ("game", &mut self.s.game, tr("studio.field.game_hint"), None),
                 ] {
                     ui.label(tr(&format!("studio.field.{label}")));
-                    ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(f32::INFINITY));
+                    match pick {
+                        Some(pick) => {
+                            crate::browse::field(ui, &mut self.s.browse, label, value, hint, pick);
+                        }
+                        None => {
+                            ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(f32::INFINITY));
+                        }
+                    }
                     ui.end_row();
                 }
             });
@@ -563,8 +574,13 @@ impl Studio<'_> {
                     self.s.status = self.world.undo(true).unwrap_or_default();
                 }
                 ui.add_space(6.0);
-                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text(tr("studio.save_hint")).desired_width(ui.available_width() - 34.0))
+                if let Some(p) = self.s.browse.take("save") {
+                    self.s.save_path = p;
+                }
+                ui.add(egui::TextEdit::singleline(&mut self.s.save_path).hint_text(tr("studio.save_hint")).desired_width(ui.available_width() - 64.0))
                     .on_hover_text(trf("studio.save_where", &[("dir", &gf_api::project::data_dir("characters").display())]));
+                let near = if self.s.save_path.trim().is_empty() { gf_api::project::data_dir("characters").display().to_string() } else { self.s.save_path.clone() };
+                self.s.browse.button(ui, "save", Pick::Save(".gfchar.json".into()), &near);
                 let save_tip = self.tip(tr("action.save_spec"), "save_spec");
                 if icons::button(ui, "save", false, &save_tip).clicked() {
                     self.save();

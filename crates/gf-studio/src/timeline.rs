@@ -5,6 +5,7 @@ use eframe::egui;
 use serde_json::{Value, json};
 
 use crate::face_rig::{Rig, SHAPES};
+use crate::browse::{self, Pick};
 use crate::i18n::{tr, trf};
 use crate::world::World;
 
@@ -395,7 +396,7 @@ impl crate::studio::Studio<'_> {
             });
             let mut load = false;
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.world.timeline.file).hint_text(tr("timeline.file_title")).desired_width(200.0));
+                ui.allocate_ui(egui::vec2(240.0, ui.available_height()), |ui| browse::field(ui, &mut self.s.browse, "timeline.file", &mut self.world.timeline.file, tr("timeline.file_title"), Pick::Open(".clip.json".into())));
                 load = ui.button(tr("timeline.load_clip")).clicked();
             });
             if load {
@@ -410,8 +411,8 @@ impl crate::studio::Studio<'_> {
             }
             egui::CollapsingHeader::new(tr("timeline.capture")).id_salt("timeline_capture").show(ui, |ui| {
                 let tl = &mut self.world.timeline;
-                ui.add(egui::TextEdit::singleline(&mut tl.source).hint_text(tr("timeline.src_placeholder")).desired_width(f32::INFINITY));
-                ui.add(egui::TextEdit::singleline(&mut tl.glb).hint_text(tr("timeline.glb_placeholder")).desired_width(f32::INFINITY));
+                browse::field(ui, &mut self.s.browse, "timeline.source", &mut tl.source, tr("timeline.src_placeholder"), Pick::Open(String::new()));
+                browse::field(ui, &mut self.s.browse, "timeline.glb", &mut tl.glb, tr("timeline.glb_placeholder"), Pick::Open(".glb".into()));
                 ui.add(egui::TextEdit::singleline(&mut tl.out).hint_text(tr("timeline.out_placeholder")).desired_width(f32::INFINITY));
                 let busy = tl.capture.is_some();
                 ui.horizontal(|ui| {

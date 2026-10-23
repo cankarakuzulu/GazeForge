@@ -3,6 +3,7 @@ use eframe::egui;
 use gf_core::skin_layers::{STYLES, SkinSpec};
 use gf_core::skin_texture as st;
 
+use crate::browse::{self, Pick};
 use crate::i18n::{tr, trf};
 use crate::skin::{Tool, new_layer};
 use crate::studio::Studio;
@@ -43,7 +44,7 @@ impl Studio<'_> {
         ui.label(egui::RichText::new(tr("skin.intro")).weak());
         ui.horizontal(|ui| {
             ui.label(tr("skin.landmarks"));
-            ui.add(egui::TextEdit::singleline(&mut self.world.skin.landmarks_path).hint_text(tr("skin.landmarks_hint")));
+            browse::field(ui, &mut self.s.browse, "skin.landmarks", &mut self.world.skin.landmarks_path, tr("skin.landmarks_hint"), Pick::Open(".json".into()));
         });
         self.skin_look_combo(ui);
         if ui.button(tr("skin.create")).clicked() {
@@ -234,7 +235,7 @@ impl Studio<'_> {
             }
             Tool::Stamp => {
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.world.skin.stamp_path).hint_text(tr("skin.stamp.path_hint")));
+                    browse::field(ui, &mut self.s.browse, "skin.stamp", &mut self.world.skin.stamp_path, tr("skin.stamp.path_hint"), Pick::Open(".png".into()));
                     if ui.button(tr("skin.stamp.load")).clicked() {
                         self.s.status = match self.world.skin_load_stamp() {
                             Ok(()) => tr("skin.stamp.loaded").into(),

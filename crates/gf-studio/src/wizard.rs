@@ -7,6 +7,7 @@ use eframe::egui;
 use gf_api::Ctx;
 use serde_json::{Map, Value, json};
 
+use crate::browse::{self, Browse, Pick};
 use crate::i18n::{tr, tr_or, trf};
 
 const POLL: Duration = Duration::from_millis(500);
@@ -34,6 +35,7 @@ pub struct Wizards {
     runs: Option<Vec<Value>>,
     pending: Option<Receiver<Result<Value, String>>>,
     last_glb: Option<String>,
+    browse: Browse,
 }
 
 fn progress_text(p: &Value, secs: u64) -> String {
@@ -733,7 +735,23 @@ impl Wizards {
         } else if schema["type"] == "boolean" {
             ui.checkbox(self.flags.entry(name.to_string()).or_default(), "");
         } else {
-            ui.add(egui::TextEdit::singleline(self.text.entry(name.to_string()).or_default()).desired_width(380.0));
+            let field = self.step_def(self.at)["fields"].as_array().and_then(|a| a.iter().find(|f| f["name"] == name));
+            let ext = field.and_then(|f| f["ext"].as_str()).unwrap_or_default().to_string();
+            let pick = match field.and_then(|f| f["widget"].as_str()) {
+                Some("file_open") => Some(Pick::Open(ext)),
+                Some("file_save") => Some(Pick::Save(ext)),
+                Some("folder") => Some(Pick::Folder),
+                _ => None,
+            };
+            let value = self.text.entry(name.to_string()).or_default();
+            match pick {
+                Some(pick) => {
+                    ui.allocate_ui(egui::vec2(410.0, ui.available_height()), |ui| browse::field(ui, &mut self.browse, &format!("wizard.{name}"), value, "", pick));
+                }
+                None => {
+                    ui.add(egui::TextEdit::singleline(value).desired_width(380.0));
+                }
+            }
         }
         ui.end_row();
     }

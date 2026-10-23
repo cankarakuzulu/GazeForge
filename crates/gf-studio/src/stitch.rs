@@ -2,6 +2,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use serde_json::{Value, json};
 
+use crate::browse::{self, Pick};
 use crate::i18n::{tr, trf};
 use crate::world::World;
 
@@ -136,10 +137,10 @@ impl crate::studio::Studio<'_> {
             let st = &mut self.world.stitch;
             egui::Grid::new("stitch_paths").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                 ui.label(tr("stitch.store"));
-                ui.add(egui::TextEdit::singleline(&mut st.store).hint_text(tr("stitch.store_placeholder")).desired_width(f32::INFINITY));
+                browse::field(ui, &mut self.s.browse, "stitch.store", &mut st.store, tr("stitch.store_placeholder"), Pick::Folder);
                 ui.end_row();
                 ui.label(tr("stitch.body_pack"));
-                ui.add(egui::TextEdit::singleline(&mut st.body).hint_text(tr("stitch.body_placeholder")).desired_width(f32::INFINITY));
+                browse::field(ui, &mut self.s.browse, "stitch.body", &mut st.body, tr("stitch.body_placeholder"), Pick::Folder);
                 ui.end_row();
             });
             let spec_body = self.world.session.as_ref().is_some_and(|s| !s.character.body.is_null());

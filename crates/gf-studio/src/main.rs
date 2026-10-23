@@ -1,5 +1,6 @@
 mod app;
 mod body_panel;
+mod browse;
 mod cube;
 mod face_rig;
 mod godot;

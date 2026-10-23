@@ -301,6 +301,12 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Every path in the studio had to be typed.** The Store section (store, spec, macro, eyes), the save field, Body
+  (store, body pack), Skin (landmarks, stamp), Topology (dense base), Timeline (clip, capture source, glb) and every task
+  field that names a file or folder now have a folder button that opens the system's file dialog (rfd), starting
+  beside the path already in the field; picking fills the field, cancelling leaves it alone. The dialog runs off the
+  interface thread (on macOS on it, as the system requires). A unit test drives the plumbing with a stand-in dialog;
+  the system dialog itself was not opened in testing.
 - **Two browser tabs on one project shared its recovery slot.** The second tab offered the first one's live autosave,
   both autosaved over each other, and the second tab's first Save deleted the first tab's "untitled" recovery. A tab
   now holds its slot with a Web Lock: a second tab on the same project says so in the status line, neither autosaves

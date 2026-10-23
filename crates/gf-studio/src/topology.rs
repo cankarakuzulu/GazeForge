@@ -6,6 +6,7 @@ use gf_api::Ctx;
 use gf_geom::topology::min_angle;
 use serde_json::{Value, json};
 
+use crate::browse::{self, Pick};
 use crate::i18n::{tr, tr_or, trf};
 use crate::icons;
 use crate::session::{Head, Lod, run_settle, vertex_normals};
@@ -399,7 +400,8 @@ impl Studio<'_> {
             });
             ui.horizontal(|ui| {
                 ui.label(tr("topology.shapes")).on_hover_text(tr("topology.shapes_title"));
-                ui.add_enabled(!self.world.topo.running(), egui::TextEdit::singleline(&mut self.world.topo.shapes_dir).hint_text(tr("topology.shapes_placeholder")).desired_width(180.0));
+                let running = self.world.topo.running();
+                ui.add_enabled_ui(!running, |ui| browse::field(ui, &mut self.s.browse, "topology.shapes", &mut self.world.topo.shapes_dir, tr("topology.shapes_placeholder"), Pick::Folder));
             });
             let t = &self.world.topo;
             if let Some(r) = &t.record
