@@ -325,8 +325,9 @@ open, with its last measurement, rather than left out.
   was open, 0 autosaves after an edit; after Save As "tabb" it holds "tabb" and autosaves; A's untitled recovery is
   still listed; after A closed, B took the slot and offered the work. The deletion before the fix is read from the
   code, not reproduced.)
-- **The studio's wireframe stopped at the neck.** It now draws on the body, clothes and hair as well (the browser
-  already did). X-ray, points, back faces, seams and the analysis modes still draw on the head only.
+- **The studio's wireframe and back-face highlight stopped at the neck.** Both now draw on the body, clothes and hair
+  as well (the browser already did): with the hat character, hair cards seen from behind light up (479 px in a front
+  render, 0 before). X-ray, points, seams and the analysis modes still draw on the head only.
 - **Most of the browser's controls had no accessible name.** Every target, macro and face-rig slider, the joint and
   wearable pickers, the category select, the clip scrubber and the project dialog's name field now carry one (an
   `aria-label` from the visible text, or the dialog's heading): unnamed controls on the designer page with a dressed
