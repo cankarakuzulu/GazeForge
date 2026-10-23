@@ -25,10 +25,137 @@ fn mm_slider(ui: &mut egui::Ui, label: &str, v: &mut f64, range: std::ops::Range
     ui.add(egui::Slider::new(v, range).step_by(step).custom_formatter(|x, _| format!("{:.1} mm", x * 1000.0)).text(label)).changed()
 }
 
+#[derive(Clone, PartialEq)]
+enum Item {
+    Head,
+    Eyes,
+    Extra(String),
+    Overlay(String),
+}
+
+impl crate::world::World {
+    fn items(&self) -> Vec<(Item, String, bool)> {
+        let mut out = vec![(Item::Head, tr("mesh.head").to_string(), !self.state.head_hidden)];
+        if self.session.as_ref().is_some_and(|s| s.head.eyes.as_ref().is_some_and(|e| !e.indices.is_empty())) {
+            out.push((Item::Eyes, tr("mesh.eyes").to_string(), self.state.opts.eyes));
+        }
+        out.extend(self.extras.iter().map(|e| (Item::Extra(e.id.clone()), e.id.clone(), e.visible)));
+        out.extend(self.overlays.iter().map(|o| (Item::Overlay(o.id.clone()), trf("designer.overlay_item", &[("id", &o.id)]), !self.hidden_overlays.contains(&o.id))));
+        out
+    }
+
+    fn set_visible(&mut self, item: &Item, on: bool) {
+        match item {
+            Item::Head => self.state.head_hidden = !on,
+            Item::Eyes => self.state.opts.eyes = on,
+            Item::Extra(id) => {
+                for e in self.extras.iter_mut().filter(|e| e.id == *id) {
+                    e.visible = on;
+                }
+            }
+            Item::Overlay(id) => {
+                if on {
+                    self.hidden_overlays.remove(id);
+                } else {
+                    self.hidden_overlays.insert(id.clone());
+                }
+            }
+        }
+    }
+
+    pub fn isolate(&mut self, keep: &str) {
+        for (item, _, _) in self.items() {
+            let id = match &item {
+                Item::Head => "head",
+                Item::Eyes => "eyes",
+                Item::Extra(id) | Item::Overlay(id) => id.as_str(),
+            };
+            let on = id == keep;
+            self.set_visible(&item, on);
+        }
+    }
+
+    pub fn show_all(&mut self) {
+        for (item, _, _) in self.items() {
+            self.set_visible(&item, true);
+        }
+        self.state.hidden_regions = 0;
+    }
+
+    pub fn set_visible_id(&mut self, id: &str, on: bool) -> bool {
+        let Some((item, _, _)) = self.items().into_iter().find(|(item, _, _)| match item {
+            Item::Head => id == "head",
+            Item::Eyes => id == "eyes",
+            Item::Extra(x) | Item::Overlay(x) => x == id,
+        }) else {
+            return false;
+        };
+        self.set_visible(&item, on);
+        true
+    }
+}
+
 impl crate::studio::Studio<'_> {
+    fn visibility_ui(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new(tr("ui.visibility")).id_salt("view_visibility").default_open(false).show(ui, |ui| {
+            let mut change: Option<(Item, bool)> = None;
+            let mut isolate: Option<String> = None;
+            for (item, label, on) in self.world.items() {
+                ui.horizontal(|ui| {
+                    let mut v = on;
+                    if ui.checkbox(&mut v, &label).changed() {
+                        change = Some((item.clone(), v));
+                    }
+                    if ui.small_button(tr("designer.isolate")).clicked() {
+                        isolate = Some(match &item {
+                            Item::Head => "head".to_string(),
+                            Item::Eyes => "eyes".to_string(),
+                            Item::Extra(id) | Item::Overlay(id) => id.clone(),
+                        });
+                    }
+                });
+            }
+            if ui.button(tr("ui.show-all")).on_hover_text(tr("ui.show-all.title")).clicked() {
+                self.world.show_all();
+            }
+            if let Some((item, on)) = change {
+                self.world.set_visible(&item, on);
+            }
+            if let Some(id) = isolate {
+                self.world.isolate(&id);
+            }
+        });
+        egui::CollapsingHeader::new(tr("ui.regions")).id_salt("view_regions").default_open(false).show(ui, |ui| {
+            self.world.grid_wanted = true;
+            ui.label(egui::RichText::new(tr("ui.each_vertex_belongs_to_the_category_of_t")).weak());
+            let Some(g) = self.world.grid.clone() else {
+                ui.label(egui::RichText::new(tr("studio.grid_loading")).weak());
+                return;
+            };
+            let mut counts = vec![0usize; g.region_names.len()];
+            for &r in &g.regions {
+                if let Some(c) = counts.get_mut(r as usize) {
+                    *c += 1;
+                }
+            }
+            for (i, name) in g.region_names.iter().enumerate().take(24) {
+                let mut shown = (self.world.state.hidden_regions >> i) & 1 == 0;
+                let label = format!("{}  ({})", crate::i18n::tr_or(&format!("category.{name}"), name), counts[i]);
+                if ui.checkbox(&mut shown, label).changed() {
+                    if shown {
+                        self.world.state.hidden_regions &= !(1 << i);
+                    } else {
+                        self.world.state.hidden_regions |= 1 << i;
+                    }
+                }
+            }
+        });
+    }
+
     pub fn view_panel(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new(tr("studio.view_section")).id_salt("view_section").default_open(false).show(ui, |ui| {
             ui.spacing_mut().slider_width = 90.0;
+            self.visibility_ui(ui);
             let st = &mut self.world.state;
             egui::CollapsingHeader::new(tr("ui.render")).id_salt("view_render").default_open(false).show(ui, |ui| {
                 let o = &mut st.opts;

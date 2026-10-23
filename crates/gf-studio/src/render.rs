@@ -450,7 +450,7 @@ impl Renderer {
             }
         }
         self.extras = kept;
-        self.overlays = world.overlays.iter().map(|o| (o.segments.clone(), o.colour)).collect();
+        self.overlays = world.overlays.iter().filter(|o| !world.hidden_overlays.contains(&o.id)).map(|o| (o.segments.clone(), o.colour)).collect();
         self.sync_skin(device, queue, &mut world.skin);
     }
 
@@ -517,7 +517,7 @@ impl Renderer {
             buf("extra uvs", f32_bytes(&vec![0.0; tri * 6])),
             buf("extra flags", u32_bytes(&crate::session::edge_flags(&e.indices, &[]).0)),
             buf("extra verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
-            buf("extra chart", f32_bytes(&[0.0, 0.0])),
+            buf("extra chart", f32_bytes(&[0.0, 0.0, 0.0])),
         ];
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("extra"),
@@ -531,7 +531,7 @@ impl Renderer {
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let buf = |label: &str, bytes: Vec<u8>| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage });
         let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
-        let zeros = vec![0.0f32; verts.max(1) * 2];
+        let zeros = vec![0.0f32; verts.max(1) * 3];
         let corner: Vec<f32> = if e.uvs.len() == verts * 2 { e.indices.iter().flat_map(|&i| [e.uvs[i as usize * 2], e.uvs[i as usize * 2 + 1]]).collect() } else { vec![0.0; tri * 6] };
         let entries = [
             buf("eye indices", u32_bytes(&e.indices)),
@@ -541,14 +541,14 @@ impl Renderer {
             buf("eye uvs", f32_bytes(&corner)),
             buf("eye flags", u32_bytes(&vec![0; tri])),
             buf("eye verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
-            buf("eye chart", f32_bytes(if e.chart.len() == verts * 2 { &e.chart } else { &zeros })),
+            buf("eye chart", f32_bytes(if e.chart.len() == verts * 3 { &e.chart } else { &zeros })),
         ];
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("eyes"),
             layout: &self.g1,
             entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
         });
-        let chart_of = e.chart_of.filter(|_| e.chart.len() == verts * 2);
+        let chart_of = e.chart_of.filter(|_| e.chart.len() == verts * 3);
         let [_, pos, nrm, _, _, _, _, chart] = entries;
         let parts = e.parts.iter().map(|p| (p.first as u32, p.count as u32, p.name.clone())).collect();
         GpuEyes { tri: tri as u32, bind, pos, nrm, chart, chart_of, key: e.key, model: e.model.clone(), parts }
@@ -586,8 +586,8 @@ impl Renderer {
             let pos = buf("positions", f32_bytes(&head.positions));
             let nrm = buf("normals", f32_bytes(&head.normals));
             let refp = buf("reference", f32_bytes(head.reference.as_deref().unwrap_or(&vec![0.0; head.n * 3])));
-            let chart_ok = head.chart.as_ref().filter(|c| c.len() == head.n * 2);
-            let chart = buf("chart", f32_bytes(chart_ok.map_or(&vec![0.0; head.n.max(1) * 2], |c| c.as_ref())));
+            let chart_ok = head.chart.as_ref().filter(|c| c.len() == head.n * 3);
+            let chart = buf("chart", f32_bytes(chart_ok.map_or(&vec![0.0; head.n.max(1) * 3], |c| c.as_ref())));
             let chart_of = chart_ok.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
             let lods = head
                 .lods
@@ -633,7 +633,7 @@ impl Renderer {
             queue.write_buffer(&g.refp, 0, &f32_bytes(r));
             g.has_ref = true;
         }
-        let chart = head.chart.as_ref().filter(|c| c.len() == g.n * 2);
+        let chart = head.chart.as_ref().filter(|c| c.len() == g.n * 3);
         let chart_of = chart.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
         if chart_of != g.chart_of {
             if let Some(c) = chart {
@@ -644,7 +644,7 @@ impl Renderer {
         if let (Some(ge), Some(e)) = (g.eyes.as_mut(), &head.eyes)
             && e.chart_of.is_some()
             && ge.chart_of != e.chart_of
-            && e.chart.len() == e.positions.len() / 3 * 2
+            && e.chart.len() == e.positions.len()
         {
             queue.write_buffer(&ge.chart, 0, &f32_bytes(&e.chart));
             ge.chart_of = e.chart_of;
@@ -776,11 +776,13 @@ impl Renderer {
             let (wind, has_ref) = self.head.as_ref().map_or((1.0, false), |g| (g.wind, g.has_ref));
             let mut base = Self::base_uniforms(st, slot, &m, wind, has_ref, r, height);
             let grid_on = st.opts.face_grid && self.head.as_ref().is_some_and(|g| g.chart_of != 0);
-            base[160..164].copy_from_slice(&[if grid_on { 1.0 } else { 0.0 }, gf_geom::face_chart::COLUMN_DEG as f32, gf_geom::face_chart::ROW_MM as f32, 0.0]);
+            let mask = if self.head.as_ref().is_some_and(|g| g.chart_of != 0) { st.hidden_regions & 0x00ff_ffff } else { 0 };
+            base[160..164].copy_from_slice(&[if grid_on { 1.0 } else { 0.0 }, gf_geom::face_chart::COLUMN_DEG as f32, gf_geom::face_chart::ROW_MM as f32, mask as f32]);
             base[164..168].copy_from_slice(&if st.opts.dark { [0.30, 0.95, 0.85, 1.0] } else { [0.02, 0.36, 0.55, 1.0] });
             let base = base;
             let lod = self.head.as_ref().map_or(0, |g| slot.lod.min(g.lods.len().saturating_sub(1)));
             let has_head = self.head.is_some();
+            let show_head = has_head && !st.head_hidden;
             let o = &st.opts;
             let mut passes = Vec::new();
             let line = |data: &[V3], col: V3, pipe: LinePipe, cap: Option<usize>, uni: &mut Vec<f32>, lines: &mut Vec<f32>| -> Draw {
@@ -811,7 +813,7 @@ impl Renderer {
                 }
             }
             let base_chunk = chunk(base, &mut uni);
-            if has_head {
+            if show_head {
                 let skin_on = o.skin && self.skin.is_some();
                 let head_chunk = if skin_on {
                     let mut u = base;
@@ -829,6 +831,7 @@ impl Renderer {
             {
                 let mut u = base;
                 u[160] = if grid_on && o.eyes_grid == "grid" && e.chart_of.is_some() { 1.0 } else { 0.0 };
+                u[163] = 0.0;
                 u[72..75].copy_from_slice(&[0.93f32, 0.93, 0.95].map(|x| x.powf(2.2)));
                 u[88] = 0.0;
                 u[92] = 0.0;
@@ -855,6 +858,7 @@ impl Renderer {
             for (k, x) in self.extras.iter().enumerate() {
                 let mut u = base;
                 u[160] = 0.0;
+                u[163] = 0.0;
                 u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
                 if matches!(slot.mode, 9 | 11) {
                     u[88] = 0.0;
@@ -864,7 +868,7 @@ impl Renderer {
             }
             passes.push(first);
             let planes = viewer::planes(o, &st.bounds);
-            if o.caps && !planes.is_empty() && has_head {
+            if o.caps && !planes.is_empty() && show_head {
                 for (j, q) in planes.iter().enumerate() {
                     let t1 = norm(if q.n[2].abs() < 0.9 { cross(q.n, [0.0, 0.0, 1.0]) } else { cross(q.n, [1.0, 0.0, 0.0]) });
                     let t2 = cross(q.n, t1);
@@ -880,8 +884,11 @@ impl Renderer {
             if has_head && o.wire && o.xray {
                 let mut u = base;
                 u[95] = 1.0;
+                if show_head {
+                    last.draws.push(Draw::Mesh(MeshPipe::Xray, chunk(u, &mut uni), lod, false));
+                }
+                u[163] = 0.0;
                 let c = chunk(u, &mut uni);
-                last.draws.push(Draw::Mesh(MeshPipe::Xray, c, lod, false));
                 for k in 0..self.extras.len() {
                     last.draws.push(Draw::Extra(MeshPipe::Xray, c, k));
                 }
@@ -890,8 +897,11 @@ impl Renderer {
                 let mut u = base;
                 u[148..151].copy_from_slice(&[0.95, 0.35, 0.10]);
                 u[107] = (o.point_size * self.dpr) as f32;
+                if show_head {
+                    last.draws.push(Draw::Points(chunk(u, &mut uni), lod));
+                }
+                u[163] = 0.0;
                 let c = chunk(u, &mut uni);
-                last.draws.push(Draw::Points(c, lod));
                 for k in 0..self.extras.len() {
                     last.draws.push(Draw::ExtraPoints(c, k));
                 }
@@ -918,7 +928,7 @@ impl Renderer {
                 let (lo, hi) = viewer::box_world(o, &st.bounds);
                 last.draws.push(line(&box_edges(lo, hi), [0.9, 0.3, 0.6], LinePipe::Lines, None, &mut uni, &mut lines));
             }
-            if let (Some((lo, hi)), true) = (st.head_box, has_head) {
+            if let (Some((lo, hi)), true) = (st.head_box, show_head) {
                 last.draws.push(line(&box_edges(lo, hi), [0.88, 0.63, 0.19], LinePipe::Lines, None, &mut uni, &mut lines));
             }
             if st.pivot_flash > 0.0 && r.slot == st.active {

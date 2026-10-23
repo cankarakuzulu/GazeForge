@@ -99,7 +99,7 @@ impl crate::world::World {
         if let Some(g) = &self.grid
             && s.head.chart.is_none()
         {
-            s.head.chart = Some(g.uv.clone());
+            s.head.chart = Some(g.gpu_chart());
         }
         if let Some(rx) = &self.grid_job
             && let Ok((key, out)) = rx.try_recv()
@@ -108,7 +108,7 @@ impl crate::world::World {
             if key == self.grid_key {
                 match out {
                     Ok(g) => {
-                        s.head.chart = Some(g.uv.clone());
+                        s.head.chart = Some(g.gpu_chart());
                         self.grid_axis = Some(Arc::new(crate::grid_labels::axis(&g, &s.head.lods[0].indices, s.head.n)));
                         self.grid = Some(Arc::new(g));
                     }
@@ -139,9 +139,13 @@ impl crate::world::World {
 }
 
 impl FaceGrid {
+    pub fn gpu_chart(&self) -> Arc<Vec<f32>> {
+        Arc::new((0..self.uv.len() / 2).flat_map(|v| [self.uv[2 * v], self.uv[2 * v + 1], self.regions.get(v).copied().unwrap_or(0) as f32]).collect())
+    }
+
     pub fn eye_chart(&self, positions: &[f32]) -> Vec<f32> {
         let (c, f, top) = ([self.centre_mm[0] / 1000.0, self.centre_mm[1] / 1000.0], self.front, self.top_mm / 1000.0);
-        let mut out = Vec::with_capacity(positions.len() / 3 * 2);
+        let mut out = Vec::with_capacity(positions.len());
         for p in positions.chunks_exact(3) {
             let (rx, ry) = (p[0] as f64 - c[0], p[1] as f64 - c[1]);
             let mut u = (f[0] * ry - f[1] * rx).atan2(f[0] * rx + f[1] * ry).to_degrees();
@@ -150,6 +154,7 @@ impl FaceGrid {
             }
             out.push(u as f32);
             out.push(((top - p[2] as f64) * 1000.0) as f32);
+            out.push(0.0);
         }
         out
     }
@@ -189,8 +194,9 @@ mod tests {
         let g = grid();
         let uv = g.eye_chart(&[0.0, -0.05, 0.08, 0.05, 0.0, 0.07, 0.0, 0.05, 0.1]);
         assert!((uv[0] - 0.0).abs() < 1e-4 && (uv[1] - 20.0).abs() < 1e-3, "{uv:?}");
-        assert!((uv[2].abs() - 90.0).abs() < 1e-3 && (uv[3] - 30.0).abs() < 1e-3, "{uv:?}");
-        assert!((uv[4] - 180.0).abs() < 1e-3 && uv[5].abs() < 1e-3, "{uv:?}");
+        assert!((uv[3].abs() - 90.0).abs() < 1e-3 && (uv[4] - 30.0).abs() < 1e-3, "{uv:?}");
+        assert!((uv[6] - 180.0).abs() < 1e-3 && uv[7].abs() < 1e-3, "{uv:?}");
+        assert_eq!((uv.len(), uv[2], uv[5], uv[8]), (9, 0.0, 0.0, 0.0), "three floats per vertex, region 0 on eyes");
         assert_eq!(g.cell_name((12 << 24) | (7 << 4) | 5), "M7.5");
     }
 }

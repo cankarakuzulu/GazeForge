@@ -38,6 +38,8 @@ struct U {
 @group(1) @binding(5) var<storage, read> eflag: array<u32>;
 @group(1) @binding(6) var<storage, read> verts: array<u32>;
 @group(1) @binding(7) var<storage, read> chart: array<f32>;
+
+fn region(i: u32) -> u32 { return min(u32(chart[i * 3u + 2u]), 31u); }
 @group(2) @binding(0) var mat_tex: texture_2d<f32>;
 @group(2) @binding(1) var mat_samp: sampler;
 
@@ -175,6 +177,14 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
   let i0 = idx[t * 3u];
   let i1 = idx[t * 3u + 1u];
   let i2 = idx[t * 3u + 2u];
+  let hid = u32(u.grid.w);
+  if (hid != 0u) {
+    let h = ((hid >> region(i0)) & 1u) + ((hid >> region(i1)) & 1u) + ((hid >> region(i2)) & 1u);
+    if (h >= 2u) {
+      o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+      return o;
+    }
+  }
   let q0 = p3(i0);
   let q1 = p3(i1);
   let q2 = p3(i2);
@@ -234,8 +244,8 @@ fn vs_mesh(@builtin(vertex_index) c: u32) -> MeshOut {
   if (u.o3.w > 0.5) { o.eflags = eflag[t]; }
   o.ch = vec2<f32>(0.0);
   if (u.grid.x > 0.5) {
-    let c0 = vec2<f32>(chart[i0 * 2u], chart[i0 * 2u + 1u]);
-    var cm = vec2<f32>(chart[me * 2u], chart[me * 2u + 1u]);
+    let c0 = vec2<f32>(chart[i0 * 3u], chart[i0 * 3u + 1u]);
+    var cm = vec2<f32>(chart[me * 3u], chart[me * 3u + 1u]);
     cm.x = cm.x - 360.0 * floor((cm.x - c0.x + 180.0) / 360.0);
     o.ch = cm;
   }

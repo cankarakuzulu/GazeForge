@@ -775,8 +775,8 @@ impl Offscreen {
                 }
                 w.tick();
                 json!({"on": w.state.opts.face_grid, "error": w.grid_error, "anchors": w.grid.as_ref().map(|g| g.anchors.len()),
-                       "chart": w.session.as_ref().and_then(|s| s.head.chart.as_ref()).map(|c| c.len() / 2),
-                       "eye_chart": w.session.as_ref().and_then(|s| s.head.eyes.as_ref()).map(|e| e.chart.len() / 2)})
+                       "chart": w.session.as_ref().and_then(|s| s.head.chart.as_ref()).map(|c| c.len() / 3),
+                       "eye_chart": w.session.as_ref().and_then(|s| s.head.eyes.as_ref()).map(|e| e.chart.len() / 3)})
             }
             "probe" => {
                 w.grid_wanted = true;
@@ -824,6 +824,24 @@ impl Offscreen {
                 };
                 w.tick();
                 json!({"result": out, "state": w.pins_state(), "markers": w.pin_markers().len()})
+            }
+            "visibility" => {
+                match text("do").unwrap_or("list") {
+                    "hide" | "show" => {
+                        let id = text("id").ok_or("visibility hide/show needs id")?;
+                        if !w.set_visible_id(id, text("do") == Some("show")) {
+                            return Err(format!("nothing called {id} to show or hide"));
+                        }
+                    }
+                    "isolate" => w.isolate(text("id").ok_or("visibility isolate needs id")?),
+                    "show_all" => w.show_all(),
+                    "regions" => w.state.hidden_regions = num("mask").unwrap_or(0.0) as u32,
+                    "list" => {}
+                    other => return Err(format!("visibility do is hide, show, isolate, show_all, regions or list, got {other}")),
+                }
+                w.tick();
+                json!({"head_hidden": w.state.head_hidden, "eyes": w.state.opts.eyes, "regions": w.state.hidden_regions,
+                       "extras": w.extras.iter().map(|e| json!([e.id, e.visible])).collect::<Vec<_>>(), "hidden_overlays": w.hidden_overlays})
             }
             "probe_last" => {
                 let p = w.probe.as_ref();

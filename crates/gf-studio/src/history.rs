@@ -150,6 +150,8 @@ impl World {
                "stitch": {"values": s.values, "seam": s.seam, "auto": s.auto, "store": s.store, "body": s.body},
                "timeline": {"speed": t.speed, "loop": t.looping, "apply_head": t.apply_head},
                "pins": self.pins_state(),
+               "view": {"head_hidden": self.state.head_hidden, "eyes": self.state.opts.eyes, "regions": self.state.hidden_regions,
+                        "hidden": self.extras.iter().filter(|e| !e.visible).map(|e| e.id.clone()).collect::<Vec<_>>(), "overlays": self.hidden_overlays},
                "notes": self.project.notes, "body": self.session.as_ref().map_or(Value::Null, |s| s.character.body.clone())})
     }
 
@@ -184,6 +186,15 @@ impl World {
         self.timeline.looping = t["loop"] != false;
         self.timeline.apply_head = t["apply_head"] != false;
         (self.pins, self.pins_next) = crate::pins::read(&v["pins"]);
+        let view = &v["view"];
+        self.state.head_hidden = view["head_hidden"] == true;
+        self.state.opts.eyes = view["eyes"] != false;
+        self.state.hidden_regions = view["regions"].as_u64().unwrap_or(0) as u32;
+        let hidden: Vec<&str> = view["hidden"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        for e in &mut self.extras {
+            e.visible = !hidden.contains(&e.id.as_str());
+        }
+        self.hidden_overlays = view["overlays"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         self.project.notes = v["notes"].as_str().unwrap_or_default().to_string();
         let body = v["body"].clone();
         if self.session.as_ref().is_some_and(|s| s.character.body != body) {
