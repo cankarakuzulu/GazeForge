@@ -301,6 +301,17 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Studio usability, from a UX review.** A character with a body opened as a bare head, and every edit after a
+  stitch hid the body, clothes and hair until Stitch was pressed again in the collapsed Body panel. The studio now
+  stitches on load, re-stitches after each change by default, and keeps showing the last body, clothes and hair
+  while it does ("Stitching the body, clothes and hair" in the viewport and status bar). The left panel scrolls
+  (its sections no longer fall off the window's bottom; undo/redo, Save and the head sliders stay below). The
+  "Export a character" task failed for any character with macros (it never passed the macro file); it now does,
+  in both clients. Bake physics fills in the last exported glb. One failed Body shape edit no longer locks the whole
+  panel under "Could not list the body sliders"; it shows "That change did not apply" with Dismiss. Turning grown
+  hair off and on again brings its settings back instead of a starter groom. The Tasks list scrolls, shows each
+  group once and no doubled title, and a task cannot be started while another step runs. The seam outline and the
+  timing overlay are off by default (the seam still shows when a stitch fails).
 - **A scaled head grew its hair by the unscaled face.** With `--body PACK --head-scale`, a groom (its landmarks,
   hairline, face keep-out and scalp), the hat test and the scalp cap read the head before scaling while the hair grew
   on the scaled one: at 1.08 the hairline stayed at 4.81 cm above the brows and the scalp counted 7,222 triangles

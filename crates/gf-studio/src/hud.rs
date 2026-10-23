@@ -68,7 +68,7 @@ pub struct Hud {
 impl Default for Hud {
     fn default() -> Hud {
         Hud {
-            on: true,
+            on: false,
             frame_interval: Ring::new(240),
             frame_cpu: Ring::new(240),
             frame_gpu: Ring::new(240),

@@ -19,6 +19,8 @@ use crate::world::World;
 
 const RIGHT_GROUP_WIDTH: f32 = 5.0 * 28.0 + 4.0 * 2.0;
 const CLIP_SLIDER_WIDTH: f32 = 230.0;
+const SIDE_FOOTER_PX: f32 = 300.0;
+const SIDE_PANELS_MIN_PX: f32 = 160.0;
 
 pub struct UiState {
     pub keymap: Keymap,
@@ -406,6 +408,16 @@ impl Studio<'_> {
 
     fn side(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
+        let reserve = if self.world.shape.is_some() { SIDE_FOOTER_PX } else { 0.0 };
+        egui::ScrollArea::vertical()
+            .id_salt("side_panels")
+            .max_height((ui.available_height() - reserve).max(SIDE_PANELS_MIN_PX))
+            .auto_shrink([false, true])
+            .show(ui, |ui| self.side_panels(ui));
+        self.side_footer(ui);
+    }
+
+    fn side_panels(&mut self, ui: &mut egui::Ui) {
         let loaded = self.world.session.is_some();
         egui::CollapsingHeader::new(egui::RichText::new(tr("store.title")).strong()).id_salt("store").default_open(!loaded).show(ui, |ui| {
             egui::Grid::new("store_fields").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
@@ -444,6 +456,9 @@ impl Studio<'_> {
         self.body_panel(ui);
         self.stitch_panel(ui);
         self.timeline_panel(ui);
+    }
+
+    fn side_footer(&mut self, ui: &mut egui::Ui) {
         if let Some(s) = &self.world.session {
             ui.separator();
             ui.horizontal(|ui| {
@@ -667,9 +682,10 @@ impl Studio<'_> {
         self.face_rig_paint(&painter, rect, ppp, w, h);
         self.skin_overlay(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
-        if self.world.hud.on {
-            let mut lines = self.world.hud.lines();
-            if let Some(b) = self.world.busy_text() {
+        let busy = self.world.busy_text();
+        if self.world.hud.on || busy.is_some() {
+            let mut lines = if self.world.hud.on { self.world.hud.lines() } else { Vec::new() };
+            if let Some(b) = busy {
                 lines.push(b);
             }
             let font = egui::FontId::monospace(12.0);

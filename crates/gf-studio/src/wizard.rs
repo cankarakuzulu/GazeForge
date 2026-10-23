@@ -32,6 +32,7 @@ pub struct Wizards {
     store_cache: Option<(String, Value)>,
     runs: Option<Vec<Value>>,
     pending: Option<Receiver<Result<Value, String>>>,
+    last_glb: Option<String>,
 }
 
 fn load_png(path: &str) -> Option<egui::ColorImage> {
@@ -97,7 +98,21 @@ impl Wizards {
         json!({"open": self.open, "wizard": self.def.as_ref().map(|d| d["id"].clone()), "at": self.at, "error": self.error, "run": self.state})
     }
 
-    pub fn start(&mut self, id: &str, values: Value, character: Option<Value>, project: &str) -> Result<(), String> {
+    fn remember_glb(&mut self) {
+        let Some(st) = &self.state else { return };
+        let found = st["steps"].as_array().into_iter().flatten().filter_map(|s| s["result"]["out"].as_str()).rfind(|o| o.ends_with(".glb"));
+        if let Some(o) = found {
+            self.last_glb = Some(o.to_string());
+        }
+    }
+
+    pub fn start(&mut self, id: &str, mut values: Value, character: Option<Value>, project: &str) -> Result<(), String> {
+        if self.pending.is_some() {
+            return Err(tr("wizard.already_running").into());
+        }
+        if let Some(glb) = &self.last_glb {
+            values["glb"] = json!(glb);
+        }
         let store = values["store"].as_str().unwrap_or_default().to_string();
         let def = call("wizards.get", json!({"id": id}))?;
         let mut state = call("wizards.start", json!({"wizard": id, "project": project, "values": values}))?;
@@ -332,20 +347,23 @@ impl Wizards {
             Ok(false) => {}
             Err(e) => self.error = Some(e),
         }
+        self.remember_glb();
         let mut open = self.open;
         let title = self.def.as_ref().map_or_else(|| tr("ui.wz-title").to_string(), |d| tr_or(&format!("wizard.{}.title", d["id"].as_str().unwrap_or("")), d["title"].as_str().unwrap_or("")).to_string());
         egui::Window::new(tr("ui.wz-title")).id(egui::Id::new("wizards")).title_bar(true).open(&mut open).resizable(true).default_width(720.0).default_height(560.0).show(ui_ctx, |ui| {
-            ui.horizontal(|ui| {
-                if self.def.is_some() && self.pending.is_none() && ui.button(tr("wizard.all")).clicked() {
-                    self.def = None;
-                    self.state = None;
-                    self.runs = None;
-                }
-                ui.strong(&title);
-            });
-            ui.separator();
+            if self.def.is_some() {
+                ui.horizontal(|ui| {
+                    if self.pending.is_none() && ui.button(tr("wizard.all")).clicked() {
+                        self.def = None;
+                        self.state = None;
+                        self.runs = None;
+                    }
+                    ui.strong(&title);
+                });
+                ui.separator();
+            }
             if self.def.is_none() {
-                self.list_ui(ui, world, project);
+                egui::ScrollArea::vertical().id_salt("wizard_list").auto_shrink([false, false]).show(ui, |ui| self.list_ui(ui, world, project));
             } else {
                 self.run_ui(ui);
             }
@@ -367,10 +385,14 @@ impl Wizards {
             }
         }
         let mut chosen = None;
+        let mut heading = None;
         for w in self.list.clone().unwrap_or_default() {
             let wid = w["id"].as_str().unwrap_or_default();
-            let group = w["group"].as_str().unwrap_or_default();
-            ui.label(egui::RichText::new(tr_or(&format!("wizard.group.{group}"), group)).weak());
+            let group = w["group"].as_str().unwrap_or_default().to_string();
+            if heading.as_ref() != Some(&group) {
+                ui.label(egui::RichText::new(tr_or(&format!("wizard.group.{group}"), &group)).strong());
+                heading = Some(group);
+            }
             let r = ui.add(egui::Button::new(egui::RichText::new(tr_or(&format!("wizard.{wid}.title"), w["title"].as_str().unwrap_or_default())).strong()).min_size(egui::vec2(ui.available_width(), 28.0)));
             ui.label(egui::RichText::new(tr_or(&format!("wizard.{wid}.summary"), w["summary"].as_str().unwrap_or_default())).weak());
             if r.clicked() {

@@ -63,8 +63,8 @@ impl Default for Stitch {
             targets_ref: String::new(),
             values: CONTROLS.map(|c| c.4),
             show: true,
-            seam: true,
-            auto: false,
+            seam: false,
+            auto: true,
             status: tr("stitch.not_stitched").into(),
             pass: None,
             last: None,
@@ -275,12 +275,12 @@ impl World {
     }
 
     pub fn stitch_draw(&mut self) {
-        let visible = self.stitch.show && !self.stitch.stale;
+        let visible = self.stitch.show;
         let (body, seam, head) = match &self.stitch.last {
             Some(m) => (
                 visible.then(|| (m.positions.clone(), m.normals.clone(), m.indices.clone(), if m.pass { BODY } else { FAIL })),
-                (self.stitch.seam && !self.stitch.stale).then(|| (m.lines.clone(), if m.pass { [1.0, 0.35, 0.2] } else { [1.0, 0.0, 0.0] })),
-                if visible { m.head.clone() } else { None },
+                ((self.stitch.seam || !m.pass) && !self.stitch.stale).then(|| (m.lines.clone(), if m.pass { [1.0, 0.35, 0.2] } else { [1.0, 0.0, 0.0] })),
+                if visible && !self.stitch.stale { m.head.clone() } else { None },
             ),
             None => (None, None, None),
         };

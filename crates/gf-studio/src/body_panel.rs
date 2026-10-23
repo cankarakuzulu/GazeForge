@@ -30,6 +30,8 @@ pub struct BodyUi {
     pub wear_key: String,
     pub store_wear: Vec<StoreWear>,
     pub error: Option<String>,
+    pub edit_error: Option<String>,
+    pub last_groom: Option<Value>,
     pub filter: String,
     live: BTreeMap<String, f64>,
     groom_colour: Option<(&'static str, [u8; 3])>,
@@ -99,6 +101,7 @@ impl World {
         self.body_ui.genitals = r["genitals"].as_array().into_iter().flatten().filter_map(text).collect();
         self.body_ui.physics = r["physics"].as_array().into_iter().flatten().filter_map(text).collect();
         self.body_ui.error = None;
+        self.body_ui.edit_error = None;
     }
 
     pub fn body_edit(&mut self, edit: impl FnOnce(&mut Map<String, Value>)) -> bool {
@@ -351,11 +354,15 @@ impl World {
     }
 
     pub fn body_groom(&mut self, on: bool) -> bool {
+        if !on && let Some(g) = self.session.as_ref().and_then(|s| s.character.body.get("groom").cloned()) {
+            self.body_ui.last_groom = Some(g);
+        }
+        let back = self.body_ui.last_groom.clone();
         self.body_edit(|b| {
             if !on {
                 b.remove("groom");
             } else if !b.contains_key("groom") {
-                b.insert("groom".into(), gf_core::groom::starter());
+                b.insert("groom".into(), back.unwrap_or_else(gf_core::groom::starter));
             }
         })
     }
@@ -417,6 +424,14 @@ impl crate::studio::Studio<'_> {
             if let Some(e) = &self.world.body_ui.error {
                 ui.colored_label(ui.visuals().error_fg_color, trf("body.sliders_failed", &[("error", e)]));
                 return;
+            }
+            if let Some(e) = self.world.body_ui.edit_error.clone() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(ui.visuals().error_fg_color, trf("body.edit_failed", &[("error", &e)]));
+                    if ui.small_button(tr("body.dismiss")).clicked() {
+                        self.world.body_ui.edit_error = None;
+                    }
+                });
             }
             let body = self.world.session.as_ref().map_or(Value::Null, |s| s.character.body.clone());
             let ui_state = &mut self.world.body_ui;
@@ -733,22 +748,22 @@ impl crate::studio::Studio<'_> {
             if let Some((asset, kind)) = physics_commit
                 && let Err(e) = self.world.body_wear_physics(&asset, &kind)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, layer)) = layer_commit
                 && let Err(e) = self.world.body_wear_layer(&asset, layer)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, metres)) = opening_commit
                 && let Err(e) = self.world.body_wear_opening(&asset, metres)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, power)) = coarse_commit
                 && let Err(e) = self.world.body_wear_coarse(&asset, power)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, on)) = cap_commit {
                 self.world.body_wear_cap(&asset, on);
@@ -759,7 +774,7 @@ impl crate::studio::Studio<'_> {
             if let Some((asset, mode)) = hair_commit
                 && let Err(e) = self.world.body_wear_hair(&asset, &mode)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some((asset, hide)) = wear_commit {
                 let worn_now = worn.iter().any(|w| w.0 == asset);
@@ -784,18 +799,18 @@ impl crate::studio::Studio<'_> {
             if let Some((key, value)) = groom_commit
                 && let Err(e) = self.world.body_groom_set(&key, value)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if let Some(name) = groom_style
                 && let Err(e) = self.world.body_groom_style(&name)
             {
-                self.world.body_ui.error = Some(e);
+                self.world.body_ui.edit_error = Some(e);
             }
             if groom_cards {
                 let slot = self.world.project.slot();
                 match self.s.wizards.start("groom_cards", crate::wizard::run_values(self.world), self.world.settle_input(), &slot) {
                     Ok(()) => self.s.wizards.open = true,
-                    Err(e) => self.world.body_ui.error = Some(e),
+                    Err(e) => self.world.body_ui.edit_error = Some(e),
                 }
             }
             if reset {

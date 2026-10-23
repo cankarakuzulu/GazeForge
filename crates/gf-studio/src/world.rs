@@ -214,6 +214,9 @@ impl World {
         if !self.slope_wanted.is_empty() {
             return Some(tr("studio.busy.macro").into());
         }
+        if self.stitch.job.is_some() {
+            return Some(tr("studio.busy.stitching").into());
+        }
         if let Some(f) = self.last_preview["slope_fallback"].as_array().filter(|a| !a.is_empty()) {
             let names: Vec<&str> = f.iter().filter_map(Value::as_str).collect();
             return Some(trf("studio.busy.macro_slope", &[("names", &names.join(", "))]));
@@ -415,6 +418,7 @@ impl World {
                         let old = std::mem::take(&mut self.timeline);
                         self.timeline = Timeline { file: old.file, source: old.source, glb: old.glb, out: old.out, speed: old.speed, looping: old.looping, apply_head: old.apply_head, ..Timeline::default() };
                         self.eye_pose = None;
+                        self.body_ui.last_groom = None;
                         self.stitch = Stitch { store: std::mem::take(&mut self.stitch.store), body: std::mem::take(&mut self.stitch.body), values: self.stitch.values, auto: self.stitch.auto, ..Stitch::default() };
                         self.settle_wanted = None;
                         self.slope_wanted.clear();
@@ -429,6 +433,9 @@ impl World {
                         self.hud.settle_latency.clear();
                         self.note(trf("studio.note.loaded", &[("ms", &format!("{load_ms:.0}"))]));
                         self.load_result = Some(Ok(summary));
+                        if self.session.as_ref().is_some_and(|s| !s.character.body.is_null()) {
+                            self.stitch_go();
+                        }
                         if self.state.vp.iter().any(|v| v.mode == DISPLACEMENT) {
                             self.want_reference();
                         }

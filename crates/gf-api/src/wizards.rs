@@ -123,7 +123,7 @@ fn create() -> Value {
 fn body() -> Value {
     json!({
         "id": "body", "title": "Import a body", "group": "Body", "developer": false,
-        "summary": "A body mesh made into a body pack the head stitches onto (the Stitch panel and export --body use it), and the MakeHuman targets that shape it with the character's macros and the Body shape panel.",
+        "summary": "A body mesh made into a body pack the head stitches onto (the Body panel and an export with a body use it), and the MakeHuman targets that shape it with the character's macros and the Body shape panel.",
         "steps": [
             {"id": "import", "title": "Body", "command": "body.import",
              "help": "A MakeHuman body (exact) or any body mesh; the neck is cut where the head meets it. A MakeHuman body is refined by Catmull-Clark (subdivision levels) and each body level of detail is decimated from it: list one vertex count per head level of detail.",
@@ -240,7 +240,7 @@ fn bake_physics() -> Value {
             {"id": "bake", "title": "Bake", "command": "wearable.bake",
              "help": "The glb must come from Export with a body skeleton and a wearable worn with spring bones. Clip: sway (four seconds of head turns, a lean and a sideways sway) or the name of an animation already in the file. Bones writes rotation keys for the chain joints; vertex writes one morph target per frame, which is larger. The report gives how far the hair settles from its modelled shape and how far it swings.",
              "fields": [
-                 {"name": "glb", "label": "Exported glb", "widget": "file_open", "ext": ".glb", "bind": "$run.out", "common": true},
+                 {"name": "glb", "label": "Exported glb", "widget": "file_open", "ext": ".glb", "bind": "$run.glb", "common": true},
                  {"name": "out", "label": "Baked glb", "widget": "file_save", "ext": ".glb", "common": true},
                  {"name": "bake", "label": "Clip", "bind": "=sway", "common": true},
                  {"name": "bake_format", "label": "Bake as", "common": true},
@@ -393,6 +393,7 @@ fn export() -> Value {
              "fields": [
                  {"name": "store", "bind": "$character.input.store", "hidden": true},
                  {"name": "spec", "bind": "$character.input.spec", "hidden": true},
+                 {"name": "macro", "bind": "$run.macro", "hidden": true},
                  {"name": "out", "label": "Glb file", "widget": "file_save", "ext": ".glb", "bind": "$run.out", "common": true},
                  {"name": "lod0_out", "label": "Also an obj of the finest level (file stem)", "widget": "file_save", "ext": "", "common": true},
                  {"name": "morphs", "label": "Morph targets", "widget": "targets"},
