@@ -985,8 +985,9 @@ impl Offscreen {
                 }
                 w.tick();
                 let m = w.stitch.last.as_ref();
-                json!({"status": w.stitch.status, "pass": w.stitch.pass, "stale": w.stitch.stale, "vertices": m.map(|m| m.positions.len() / 3), "triangles": m.map(|m| m.indices.len() / 3),
-                       "seam_segments": m.map(|m| m.lines.len() / 2), "wearables": m.map(|m| m.wearables.iter().map(|x| json!({"name": x.name, "vertices": x.positions.len() / 3})).collect::<Vec<_>>()), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
+                json!({"status": w.stitch.status, "pass": w.stitch.pass, "stale": w.stitch.stale, "vertices": m.map(|m| m.positions.len() / 3), "triangles": m.map(|m| m.indices.len() / 3), "uv_triangles": m.map(|m| m.uvs.len() / 6),
+                       "seam_segments": m.map(|m| m.lines.len() / 2),
+                       "wearables": m.map(|m| m.wearables.iter().map(|x| json!({"name": x.name, "vertices": x.positions.len() / 3, "triangles": x.indices.len() / 3, "uv_triangles": x.uvs.len() / 6})).collect::<Vec<_>>()), "head_pose": w.poses.iter().any(|p| p.0 == "stitch-head"), "extras": w.extras.iter().map(|e| e.id.clone()).collect::<Vec<_>>()})
             }
             "keymap" => {
                 let map = crate::keymap::Keymap::load(text("file").map(Path::new));

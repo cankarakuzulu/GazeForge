@@ -23,6 +23,7 @@ pub struct Extra {
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     pub colour: [f32; 3],
+    pub uvs: Vec<f32>,
     pub visible: bool,
     pub key: u64,
 }
@@ -311,7 +312,13 @@ impl World {
         if let Some((positions, normals, indices, colour)) = mesh {
             self.extra_key += 1;
             let visible = !self.hidden_extras.contains(&self.extra_name(id));
-            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, visible, key: self.extra_key });
+            self.extras.push(Extra { id: id.to_string(), positions, normals, indices, colour, uvs: Vec::new(), visible, key: self.extra_key });
+        }
+    }
+
+    pub fn set_extra_uvs(&mut self, id: &str, uvs: Vec<f32>) {
+        if let Some(e) = self.extras.iter_mut().find(|e| e.id == id && uvs.len() == e.indices.len() * 2) {
+            e.uvs = uvs;
         }
     }
 

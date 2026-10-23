@@ -658,8 +658,8 @@ export class Viewer {
     const idx = spec.indices instanceof Uint32Array ? spec.indices : Uint32Array.from(spec.indices);
     const n = pos.length / 3;
     const nrm = spec.normals ? (spec.normals instanceof Float32Array ? spec.normals : Float32Array.from(spec.normals)) : vertexNormals(pos, idx, n);
-    let corner = null;
-    if (spec.uvs && spec.uvs.length === n * 2) {
+    let corner = spec.cornerUvs && spec.cornerUvs.length === idx.length * 2 ? Float32Array.from(spec.cornerUvs) : null;
+    if (!corner && spec.uvs && spec.uvs.length === n * 2) {
       corner = new Float32Array(idx.length * 2);
       for (let i = 0; i < idx.length; i++) { corner[2 * i] = spec.uvs[2 * idx[i]]; corner[2 * i + 1] = spec.uvs[2 * idx[i] + 1]; }
     }

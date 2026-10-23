@@ -116,7 +116,7 @@ function mount(root, api) {
   function draw() {
     const visible = last && state.show;
     if (!visible) api.setExtraMesh('stitch-body', null);
-    else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
+    else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, cornerUvs: last.uvs, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
     const wear = visible ? last.wearables : [];
     const keys = [];
     for (const w of wear) {
@@ -124,7 +124,7 @@ function mount(root, api) {
       const k = keys.filter((x) => x === base || x.startsWith(`${base}#`)).length;
       keys.push(k ? `${base}#${k}` : base);
     }
-    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name, key: `wear:${keys[i]}` }));
+    wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, cornerUvs: w.uvs, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name, key: `wear:${keys[i]}` }));
     for (let i = wear.length; i < drawnWear; i++) api.setExtraMesh(`wear-${i}`, null);
     drawnWear = wear.length;
     if (!last || !(state.seam || !last.pass) || stale) api.setOverlay('stitch-seam', null);
@@ -156,11 +156,15 @@ function mount(root, api) {
       lines: new Float32Array(bytes(m.seam_lines)),
       head: m.head_positions ? new Float32Array(bytes(m.head_positions)) : null,
       headScale: m.head_scale ?? 1,
+      uvs: m.triangle_uvs ? new Float32Array(bytes(m.triangle_uvs)) : null,
       wearables: (m.wearables || []).map((w) => ({
         name: w.name,
+        asset: w.asset || null,
+        groom: w.groom || null,
         positions: new Float32Array(bytes(w.positions)),
         normals: new Float32Array(bytes(w.normals)),
         indices: new Uint32Array(bytes(w.indices)),
+        uvs: w.triangle_uvs ? new Float32Array(bytes(w.triangle_uvs)) : null,
         color: Array.isArray(w.color) ? w.color : null,
       })),
       values: { ...state.values },

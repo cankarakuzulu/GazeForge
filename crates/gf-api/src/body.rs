@@ -344,7 +344,7 @@ pub fn stitch_input() -> Value {
         "body": {"type": "string", "minLength": 1, "description": "a body pack directory written by body.import; without it the spec's body is used, shaped by its macros"},
         "lod": {"type": "integer", "description": "0 (this command stitches the finest LOD; export-glb --body stitches every LOD)"},
         "out_obj": {"type": "string", "description": "write the head and the stitched body as one OBJ"},
-        "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
+        "return_mesh": {"type": "boolean", "description": "return the stitched body (base64 f32 positions and normals, u32 indices, triangle_uvs: 6 f32 per triangle, its texture corners, also on each worn mesh but strand ribbons), the seam as overlay lines and the head positions it was stitched to (head_scale applied, game LOD0 order)"},
         "enforce": {"type": "boolean", "description": "fail with gate_failed when a gate fails (default true)"},
         "strands_preview": {"type": "integer", "minimum": 1, "maximum": 50000, "description": "with return_mesh: how many strands a worn item with strands on, or the body.groom, is drawn with at most (default 4000; ribbons 1.2 mm wide at the root, in its average hair colour or the groom's colour, in place of its cards)"},
         "plant": {"enum": ["gap", "crack", "crease", "flip", "penetrate"], "description": "gate self-test: plant this defect after stitching; the gates must fail"}
@@ -374,6 +374,10 @@ fn b64(bytes: &[u8]) -> String {
 
 fn f32s(points: &[Point]) -> String {
     b64(&points.iter().flat_map(|p| p.iter().flat_map(|x| (*x as f32).to_le_bytes())).collect::<Vec<u8>>())
+}
+
+fn uv_f32s(uvs: &[[gf_geom::Uv; 3]]) -> String {
+    b64(&uvs.iter().flatten().flatten().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
 }
 
 fn spec_input(input: &Value, root: &str) -> Result<Spec, ApiError> {
@@ -799,6 +803,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
         let (_, mut normals) = b::two_sided_normals(&head, &base.triangles, &st);
         let mut positions = st.positions.clone();
         let mut triangles = st.triangles.clone();
+        let mut triangle_uvs = st.uvs.clone();
         let mut hat_covers: Vec<HatCover> = Vec::new();
         let mut cover_head: Option<f64> = None;
         let mut worn = match (&shaped_report, spec.body.as_ref()) {
@@ -873,12 +878,17 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
                     }
                     let n = crate::tasks::wearable::vertex_normals(p, tris);
                     let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+                    let (ut, uvs): (Vec<[u32; 3]>, Vec<[gf_geom::Uv; 3]>) = {
+                        let (t, u) = crate::tasks::mesh::garment_triangles(item, p);
+                        t.into_iter().zip(u).filter(|(t, _)| !t.iter().all(|&v| cut[v as usize])).unzip()
+                    };
                     meshes.push(json!({"asset": w.asset, "name": item.manifest.name, "hide_body": w.hide_body, "transparent": item.manifest.transparent,
-                                       "positions": f32s(p), "normals": f32s(&n), "indices": b64(&idx), "vertices": p.len(), "triangles": tris.len()}));
+                                       "positions": f32s(p), "normals": f32s(&n), "indices": b64(&idx), "vertices": p.len(), "triangles": tris.len(),
+                                       "triangle_uvs": (ut == *tris).then(|| uv_f32s(&uvs))}));
                 }
                 if !covered.is_empty() {
                     let hidden = crate::tasks::wearable::hidden_body(&pack, 0, &st, &covered).map_err(ApiError::invalid)?;
-                    triangles.retain(|t| !t.iter().all(|&v| hidden[v as usize]));
+                    (triangles, triangle_uvs) = triangles.into_iter().zip(triangle_uvs).filter(|(t, _)| !t.iter().all(|&v| hidden[v as usize])).unzip();
                 }
                 meshes
             }
@@ -919,6 +929,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             let g = crate::tasks::mesh::genital_mesh(&pack, &controls, level, &st.positions, &normals).map_err(ApiError::invalid)?;
             let offset = positions.len() as u32;
             triangles.extend(g.triangles.iter().map(|t| t.map(|i| i + offset)));
+            triangle_uvs.extend(&g.uvs);
             positions.extend(&g.positions);
             normals.extend(&g.normals);
             result["body"]["genitals"] = json!({"vertices": g.positions.len(), "triangles": g.triangles.len(), "subdivision_level": level,
@@ -931,7 +942,7 @@ pub fn stitch(_: &Ctx, input: &Value) -> Result<Value, ApiError> {
             lines.push(seam[(m + 1) % seam.len()].position);
         }
         result["mesh"] = json!({"frame": "dense frame: metres, z up", "positions": f32s(&positions), "normals": f32s(&normals),
-                                "indices": b64(&indices), "seam_lines": f32s(&lines), "head_positions": f32s(&head),
+                                "indices": b64(&indices), "triangle_uvs": (triangle_uvs.len() == triangles.len()).then(|| uv_f32s(&triangle_uvs)), "seam_lines": f32s(&lines), "head_positions": f32s(&head),
                                 "head_scale": controls.head_scale, "wearables": worn});
     }
     if !failed.is_empty() && input.get("enforce").and_then(Value::as_bool).unwrap_or(true) {

@@ -24,6 +24,7 @@ pub struct WearMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<f32>,
     pub color: Option<[f32; 3]>,
 }
 
@@ -31,6 +32,7 @@ pub struct StitchMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<f32>,
     pub lines: Vec<[f64; 3]>,
     pub head: Option<Vec<f32>>,
     pub wearables: Vec<WearMesh>,
@@ -84,6 +86,10 @@ fn floats(v: &Value, what: &str) -> Result<Vec<f32>, String> {
     Ok(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
+fn corner_uvs(v: &Value) -> Vec<f32> {
+    if v.is_string() { floats(v, "triangle uvs").unwrap_or_default() } else { Vec::new() }
+}
+
 fn wear_key(w: &Value, before: &[WearMesh]) -> String {
     let base = w["asset"].as_str().map(str::to_string).or_else(|| w["groom"].as_str().map(|g| format!("groom:{g}"))).unwrap_or_else(|| w["name"].as_str().unwrap_or_default().to_string());
     let tagged = format!("{base}#");
@@ -107,6 +113,7 @@ fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
             positions: floats(&w["positions"], "wearable positions")?,
             normals: floats(&w["normals"], "wearable normals")?,
             indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+            uvs: corner_uvs(&w["triangle_uvs"]),
             color: w["color"].as_array().filter(|c| c.len() == 3).map(|c| [0, 1, 2].map(|k| c[k].as_f64().unwrap_or(0.5) as f32)),
         });
     }
@@ -114,6 +121,7 @@ fn mesh(r: &Value, pass: bool) -> Result<StitchMesh, String> {
         positions: floats(&m["positions"], "positions")?,
         normals: floats(&m["normals"], "normals")?,
         indices: idx.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+        uvs: corner_uvs(&m["triangle_uvs"]),
         lines,
         head: if scale != 1.0 { Some(floats(&m["head_positions"], "head positions")?) } else { None },
         wearables,
@@ -301,14 +309,18 @@ impl World {
             None => (None, None, None),
         };
         self.set_extra("stitch-body", body);
+        let body_uvs = self.stitch.last.as_ref().map(|m| m.uvs.clone()).unwrap_or_default();
+        self.set_extra_uvs("stitch-body", body_uvs);
         self.wear_slots = self.stitch.last.as_ref().map(|m| m.wearables.iter().map(|w| (w.key.clone(), w.name.clone())).collect()).unwrap_or_default();
         let wear: Vec<(Vec<f32>, Vec<f32>, Vec<u32>, [f32; 3])> = match &self.stitch.last {
             Some(m) if visible => m.wearables.iter().enumerate().map(|(i, w)| (w.positions.clone(), w.normals.clone(), w.indices.clone(), w.color.unwrap_or(WEAR[i % WEAR.len()]))).collect(),
             _ => Vec::new(),
         };
         let drawn = wear.len();
-        for (i, w) in wear.into_iter().enumerate() {
+        let wear_uvs: Vec<Vec<f32>> = self.stitch.last.as_ref().map(|m| m.wearables.iter().map(|w| w.uvs.clone()).collect()).unwrap_or_default();
+        for (i, (w, uvs)) in wear.into_iter().zip(wear_uvs).enumerate() {
             self.set_extra(&format!("wear-{i}"), Some(w));
+            self.set_extra_uvs(&format!("wear-{i}"), uvs);
         }
         for i in drawn..self.stitch.drawn_wear {
             self.set_extra(&format!("wear-{i}"), None);

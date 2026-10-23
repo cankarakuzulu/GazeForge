@@ -131,6 +131,7 @@ struct GpuExtra {
     verts: u32,
     bind: wgpu::BindGroup,
     colour: [f32; 3],
+    has_uv: bool,
 }
 
 struct GpuLook {
@@ -510,13 +511,14 @@ impl Renderer {
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let buf = |label: &str, bytes: Vec<u8>| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage });
         let (tri, verts) = (e.indices.len() / 3, e.positions.len() / 3);
+        let has_uv = e.uvs.len() == tri * 6;
         let entries = [
             buf("extra indices", u32_bytes(&e.indices)),
             buf("extra positions", f32_bytes(&e.positions)),
             buf("extra normals", f32_bytes(&e.normals)),
             buf("extra reference", f32_bytes(&e.positions)),
-            buf("extra uvs", f32_bytes(&vec![0.0; tri * 6])),
-            buf("extra flags", u32_bytes(&crate::session::edge_flags(&e.indices, &[]).0)),
+            buf("extra uvs", if has_uv { f32_bytes(&e.uvs) } else { f32_bytes(&vec![0.0; tri * 6]) }),
+            buf("extra flags", u32_bytes(&crate::session::edge_flags(&e.indices, if has_uv { &e.uvs } else { &[] }).0)),
             buf("extra verts", u32_bytes(&(0..verts as u32).collect::<Vec<_>>())),
             buf("extra chart", f32_bytes(&[0.0, 0.0, 0.0])),
         ];
@@ -525,7 +527,7 @@ impl Renderer {
             layout: &self.g1,
             entries: &entries.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect::<Vec<_>>(),
         });
-        GpuExtra { key: e.key, tri: tri as u32, verts: verts as u32, bind, colour: e.colour }
+        GpuExtra { key: e.key, tri: tri as u32, verts: verts as u32, bind, colour: e.colour, has_uv }
     }
 
     fn make_eyes(&self, device: &wgpu::Device, e: &crate::session::EyeMesh) -> GpuEyes {
@@ -864,10 +866,10 @@ impl Renderer {
                 u[160] = 0.0;
                 u[163] = 0.0;
                 u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
-                if matches!(slot.mode, 9 | 11) {
+                if slot.mode == 9 || (slot.mode == 11 && !x.has_uv) {
                     u[88] = 0.0;
                 }
-                u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, if o.seams { 1.0 } else { 0.0 }]);
+                u[100..104].copy_from_slice(&[1.0, 0.0, if x.has_uv { 1.0 } else { 0.0 }, if o.seams { 1.0 } else { 0.0 }]);
                 first.draws.push(Draw::Extra(if o.points { MeshPipe::Biased } else { MeshPipe::Plain }, chunk(u, &mut uni), k));
             }
             passes.push(first);
