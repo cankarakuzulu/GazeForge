@@ -559,6 +559,7 @@ impl Studio<'_> {
         self.measure_panel(ui);
         self.pins_panel(ui);
         self.topology_panel(ui);
+        self.view_panel(ui);
         egui::CollapsingHeader::new(tr("studio.diagnostics")).id_salt("diag").default_open(false).show(ui, |ui| {
             ui.checkbox(&mut self.world.hud.on, tr("action.hud"));
             ui.label(trf("studio.shape_input", &[("name", &tr_or(&format!("studio.input.{}", self.s.input.name()), self.s.input.name()))]));

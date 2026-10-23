@@ -30,6 +30,7 @@ mod studio;
 mod timeline;
 mod topology;
 mod ui_script;
+mod view_panel;
 mod viewer;
 mod wizard;
 mod worker;
