@@ -351,6 +351,13 @@ open, with its last measurement, rather than left out.
 - **Browser projects.** An explicit empty `face_prefix` is saved with the project and kept when it is opened (it
   went back to `faceunits/`). The Body shape panel lists the store's wearables after a failed wearable list is
   retried (it showed an empty list).
+- **A second review of the day's fixes.** New starts both clients with default stitch settings and pins numbered from
+  1 (the browser's stitch panel carried the last project's settings), a New whose load fails leaves the open project as
+  it was, and the browser's New keeps an empty `face_prefix`. Show all also shows hidden garments that are not drawn at
+  the moment, and in the browser it can be undone for them. A project saved with the old slot ids opens with its hidden
+  garments hidden. The browser's pick skips hidden face regions. The studio's probe names a body or garment it hits
+  when no head is behind it, and a stitch that failed its gates is labelled as failed. A resumed Export run no longer
+  offers its glb to Bake. `body.genitals: "none"` no longer draws genitals in the stitch preview.
 - **Millimetre grid captions.** The longer captions ran off the right edge of the view in both clients; they are now
   placed by their width.
 - **Notices for the browser wasm.** `THIRD_PARTY.md` now also lists the Rust standard library, `dlmalloc` and
