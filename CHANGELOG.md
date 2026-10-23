@@ -301,6 +301,14 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Two browser tabs on one project shared its recovery slot.** The second tab offered the first one's live autosave,
+  both autosaved over each other, and the second tab's first Save deleted the first tab's "untitled" recovery. A tab
+  now holds its slot with a Web Lock: a second tab on the same project says so in the status line, neither autosaves
+  into it nor offers its recovery, and leaves it alone when it saves; Save As gives it its own name and slot. When the
+  first tab closes, the next one to load takes the slot and offers its work. (Two-tab CDP run: tab B refused while A
+  was open, 0 autosaves after an edit; after Save As "tabb" it holds "tabb" and autosaves; A's untitled recovery is
+  still listed; after A closed, B took the slot and offered the work. The deletion before the fix is read from the
+  code, not reproduced.)
 - **The studio's wireframe stopped at the neck.** It now draws on the body, clothes and hair as well (the browser
   already did). X-ray, points, back faces, seams and the analysis modes still draw on the head only.
 - **Most of the browser's controls had no accessible name.** Every target, macro and face-rig slider, the joint and

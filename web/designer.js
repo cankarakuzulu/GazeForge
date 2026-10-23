@@ -60,7 +60,7 @@ const D = {
   link: true, refSource: "start", lastTarget: -1, lastPick: null, tab: "shape", preset: "studio", theme: "dark",
   panelHooks: new Map(), pendingVis: new Map(),
   grid: null, gridPromise: null, probe: null, probeMode: false, probeListeners: [], pinListeners: [], eyeListeners: [], eyeLooks: new Map(), eyeBaseKey: null,
-  project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false },
+  project: { name: null, doc: null, active: 0, savedSig: null, dirty: false, autosaved: false, saving: false, leaving: false, autosaves: 0, recovered: false, slotShared: false, slotLock: null },
 };
 window.gfDesigner = D;
 let V = null;
@@ -1738,8 +1738,9 @@ async function saveProject(asName) {
   P.saving = true;
   try {
     const r = await api("project.save", projectInput(name));
-    if (!was && name !== "untitled") { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
+    if (!was && name !== "untitled" && !P.slotShared) { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
     P.name = name;
+    await claimSlot();
     P.doc = r.project;
     P.recovered = false;
     P.relinked = false;
@@ -1789,7 +1790,7 @@ async function newProject() {
 }
 
 async function autosave(reason = "settle") {
-  if (!D.ready || P.saving || P.autosaving) return;
+  if (!D.ready || P.saving || P.autosaving || P.slotShared) return;
   updateDirty();
   const name = slotName();
   if (!P.dirty) {
@@ -1870,8 +1871,27 @@ function localTime(iso) {
   return Number.isNaN(Date.parse(iso)) ? iso : new Date(iso).toLocaleString();
 }
 
+async function holdSlot(name) {
+  if (P.slotLock?.name === name) return true;
+  P.slotLock?.release();
+  P.slotLock = null;
+  if (!navigator.locks) return true;
+  const release = await new Promise((resolve) => {
+    navigator.locks.request(`gf-slot:${name}`, { ifAvailable: true }, (lock) => (lock ? new Promise((done) => resolve(done)) : resolve(null)));
+  });
+  if (!release) return false;
+  P.slotLock = { name, release };
+  return true;
+}
+
+async function claimSlot() {
+  P.slotShared = !(await holdSlot(slotName()));
+  if (P.slotShared) $("p-status").textContent = tr("designer.slot_shared", { name: slotName() });
+  return !P.slotShared;
+}
+
 async function offerRecovery() {
-  if (P.recovered) return;
+  if (!(await claimSlot()) || P.recovered) return;
   let slot = null;
   try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
   if (!slot) return;
