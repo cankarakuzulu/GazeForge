@@ -794,7 +794,9 @@ impl Renderer {
             for (k, x) in self.extras.iter().enumerate() {
                 let mut u = base;
                 u[72..75].copy_from_slice(&x.colour.map(|c| c.powf(2.2)));
-                u[88] = 0.0;
+                if matches!(slot.mode, 9 | 11) {
+                    u[88] = 0.0;
+                }
                 u[100..104].copy_from_slice(&[1.0, 0.0, 1.0, if o.seams { 1.0 } else { 0.0 }]);
                 first.draws.push(Draw::Extra(false, chunk(u, &mut uni), k));
             }
