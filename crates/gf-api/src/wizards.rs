@@ -10,7 +10,24 @@ pub const FORMAT: &str = "gazeforge.wizard-run/1";
 pub const SAVED_CHARACTER: &str = "character.gfchar.json";
 
 pub fn definitions() -> Vec<Value> {
-    vec![setup(), build_base(), lods(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), groom_cards(), attach_solid(), check(), lids(), macros()]
+    vec![setup(), build_base(), lods(), eyes(), create(), photos(), export(), bake_physics(), body(), wearable(), bind_garment(), groom_cards(), attach_solid(), check(), lids(), macros()]
+}
+
+fn eyes() -> Value {
+    json!({
+        "id": "eyes", "title": "Make an eyes file", "group": "Setup", "developer": false,
+        "summary": "An eyes file for the store's base head: a procedural eyeball in each socket, placed by the store's eye rig. Give it in the Store section's Eyes field, or to the Export and eyelid tasks.",
+        "steps": [
+            {"id": "generate", "title": "Eyes", "command": "eyes.generate",
+             "help": "The model sets the eyeball's proportions (an id from the eye inventory, such as brown-medium; empty uses the default shape). The radius is 5 to 20 mm (12 by default), or MakeHuman's helper radius. The store needs its eye rig (the Eye rig step of Set up a store).",
+             "fields": [hidden("store", "$run.store"), hidden("catalog", "$run.catalog"),
+                        {"name": "model", "label": "Eye model", "common": true},
+                        {"name": "radius_mm", "label": "Eyeball radius (mm)", "common": true},
+                        {"name": "helper_radius", "label": "Use MakeHuman's helper radius"},
+                        {"name": "out", "label": "Eyes file", "widget": "file_save", "ext": ".json", "bind": "$dir/eyes.json", "common": true}],
+             "shows": [{"kind": "report"}]},
+        ],
+    })
 }
 
 fn hidden(name: &str, bind: &str) -> Value {

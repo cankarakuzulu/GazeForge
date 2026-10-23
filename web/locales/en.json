@@ -917,7 +917,7 @@
  "studio.eyes.file_or_none": "Eyes file / none",
  "studio.eyes.radius_title": "Eyeball radius in mm",
  "studio.field.eyes": "Eyes",
- "studio.field.eyes_hint": "Optional eyes file",
+ "studio.field.eyes_hint": "Optional eyes file (Tasks: Make an eyes file)",
  "studio.field.game": "Game base",
  "studio.field.game_hint": "Optional game base sha256:...",
  "studio.field.macro": "Macro",

@@ -8,6 +8,14 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Measurements in the studio.** A Measurements section (after Timeline) shows the six landmark measures with their
+  change from the base, a head bounding box overlay with its size, and the triangles per level, as the browser's panel
+  does; the measures now have names in both clients (they showed ids such as `nose_width`). Script op `measure`.
+- **Make an eyes file task.** Eyes files were asked for (the studio's Store section, the Export and eyelid tasks) but
+  could only be made from the command line; a Setup task runs `eyes.generate` for the loaded store (model, radius).
+- **Notices for the browser wasm.** `THIRD_PARTY.md` lists the crates compiled into `web/gf_wasm.wasm` (serde,
+  serde_json, itoa, zmij, memchr) with their licences.
+
 - **Hair under hats: tuck or hide.** Hair cards came out through a hat's crown (196 vertices of a short hair through
   a fedora, up to 13 mm): alpha cards were never layered, and hat and hair share a layer depth. A worn item now has a
   `hair` setting (Hair under it, in both panels; `tuck` by default, or `hide`) for the alpha-card hair under it above
@@ -301,6 +309,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Scripted studio runs autosaved into the user's projects folder.** `gazeforge-studio --script` without
+  `GAZEFORGE_PROJECTS` now keeps projects and autosaves in `OUT/projects`.
 - **Autosave could overwrite or delete the work it kept.** In both clients, editing a project while its recovery was
   on offer autosaved over that recovery, so Restore gave back the new edit and the kept work was gone. Autosave now
   waits while a recovery is on offer (the browser strip and the studio's Project section say so, with Restore and
