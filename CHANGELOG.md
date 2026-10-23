@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The browser said nothing when its server stopped.** A request that cannot reach `gazeforge serve` now puts a
+  banner at the top ("Cannot reach the GazeForge server at 127.0.0.1:PORT…", with Retry); the next answer from the
+  server removes it. The help now says F frames everything shown.
 - **Finding a wearable meant scrolling the whole store.** "Add a wearable…" in both clients is sorted by name and has
   a filter box above it: "fedora" narrows the test store's 68 items to 2 and the list says so ("2 of 68").
 - **The studio's Frame and Home framed the head only.** With a body, clothes and hair shown they now frame all of

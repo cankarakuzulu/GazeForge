@@ -8,8 +8,31 @@ let store = params.get("store");
 const opt = (k) => params.get(k) || undefined;
 const $ = (id) => document.getElementById(id);
 
+function offline(on) {
+  let bar = document.getElementById("gf-offline");
+  if (!on) { bar?.remove(); return; }
+  if (bar) return;
+  bar = document.createElement("div");
+  bar.id = "gf-offline";
+  bar.setAttribute("role", "alert");
+  const text = document.createElement("span");
+  text.textContent = tr("designer.offline", { host: location.host });
+  const retry = document.createElement("button");
+  retry.textContent = tr("designer.offline_retry");
+  retry.addEventListener("click", () => fetch("/v1/commands").then(() => offline(false)).catch(() => {}));
+  bar.append(text, retry);
+  document.body.append(bar);
+}
+
 async function api(name, input) {
-  const r = await fetch(`/v1/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  let r;
+  try {
+    r = await fetch(`/v1/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  } catch (e) {
+    offline(true);
+    throw e;
+  }
+  offline(false);
   const env = await r.json();
   if (!env.ok) {
     const e = new Error(`${name}: ${env.error?.message || r.status}`);
