@@ -336,7 +336,8 @@ open, with its last measurement, rather than left out.
   the browser asks first when there are edits since the offer appeared, as the studio does. Reopening an untitled
   page could autosave over the kept untitled work before the offer appeared; autosave now waits for that check. A
   browser tab that is handed the recovery slot during a save no longer discards the other tab's untitled recovery,
-  and a tab that is handed the slot while it asks for it no longer waits on its own lock.
+  and a tab that is handed the slot while it asks for it no longer waits on its own lock. A tab that does not own the
+  slot no longer deletes the other tab's autosave when it saves (`project.save` takes `keep_recovery`).
 - **Hidden meshes and regions.** A hidden body or garment stays hidden when it is stitched again (in the studio
   that showed it again and added an undo step nobody made). Both clients keep a garment's hidden state by its asset,
   not by its place in the list, so unwearing one item no longer shows a hidden one or hides the next one worn. In the
