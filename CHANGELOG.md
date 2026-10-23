@@ -8,6 +8,12 @@ open, with its last measurement, rather than left out.
 
 ### Added
 
+- **Face grid, addresses, pins and the millimetre grid in the studio.** They were in the browser only. The studio draws
+  the face grid (Alt+U) with its edge and cell labels, probes a point (Alt+Shift+U or Alt+click) into the same `GF@`
+  address with copy and pin, goes to an address from its card, keeps pins in a Pins section (notes, go, delete, export
+  `gazeforge.pins/1`, saved with the project in the browser's pins state, each edit an undo step) and draws the
+  millimetre grid (Alt+R). At the same viewport size and camera the addresses, go-to targets and labels match the
+  browser's; a project's pins open in either client.
 - **Measurements in the studio.** A Measurements section (after Timeline) shows the six landmark measures with their
   change from the base, a head bounding box overlay with its size, and the triangles per level, as the browser's panel
   does; the measures now have names in both clients (they showed ids such as `nose_width`). Script op `measure`.
