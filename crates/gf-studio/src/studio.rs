@@ -21,6 +21,7 @@ const RIGHT_GROUP_WIDTH: f32 = 5.0 * 28.0 + 4.0 * 2.0;
 const CLIP_SLIDER_WIDTH: f32 = 230.0;
 const SIDE_FOOTER_PX: f32 = 300.0;
 const SIDE_PANELS_MIN_PX: f32 = 160.0;
+const DEFAULT_EYE: &str = "brown-medium";
 
 pub struct UiState {
     pub keymap: Keymap,
@@ -48,6 +49,7 @@ pub struct UiState {
     pub wizards: crate::wizard::Wizards,
     pub project: crate::project::ProjectUi,
     pub load_ask: Option<LoadAsk>,
+    pub eye_note_hidden: bool,
 }
 
 #[derive(Clone)]
@@ -97,6 +99,7 @@ impl UiState {
             wizards: Default::default(),
             project: Default::default(),
             load_ask: None,
+            eye_note_hidden: false,
         })
     }
 }
@@ -756,6 +759,7 @@ impl Studio<'_> {
         self.face_rig_paint(&painter, rect, ppp, w, h);
         self.skin_overlay(&painter, rect, ppp, w, h);
         self.cube_paint(ui, &painter);
+        self.eye_note(ui.ctx(), rect);
         let busy = self.world.busy_text();
         if self.world.hud.on || busy.is_some() {
             let mut lines = if self.world.hud.on { self.world.hud.lines() } else { Vec::new() };
@@ -773,6 +777,39 @@ impl Studio<'_> {
             ui.ctx().request_repaint();
         } else if self.godot.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(15));
+        }
+    }
+
+    fn eye_note(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        use gf_core::eyerig::{self as er, EyeAdjust, EyeballSpec};
+        if self.s.eye_note_hidden || self.world.session.as_ref().is_none_or(|s| s.eyes_file.is_some()) {
+            return;
+        }
+        let Some(shape) = self.world.shape.as_ref() else { return };
+        let Some(rig) = shape.eyerig.clone() else { return };
+        let live = shape.live.eyeballs.clone();
+        if live.as_ref().is_some_and(|e| e.model.is_some()) {
+            return;
+        }
+        let (mut add, mut hide) = (false, false);
+        egui::Area::new(egui::Id::new("eye_note")).order(egui::Order::Foreground).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(rect.center_bottom() - egui::vec2(0.0, 40.0)).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tr("eyes.note"));
+                    add = ui.button(tr("eyes.add")).on_hover_text(tr("eyes.add.title")).clicked();
+                    hide = icons::button(ui, "x", false, tr("eyes.note_hide.title")).clicked();
+                });
+            });
+        });
+        if hide {
+            self.s.eye_note_hidden = true;
+        }
+        if add {
+            let (left, right) = live.map_or((EyeAdjust::default(), EyeAdjust::default()), |e| (e.left, e.right));
+            let model = er::EyeModelChoice { id: DEFAULT_EYE.into(), radius_mm: gf_api::eyes::DEFAULT_RADIUS_MM };
+            let spec = EyeballSpec { follow: er::FOLLOW_HELPER.into(), rig: Some(rig), model: Some(model), left, right };
+            self.world.shape_event(crate::shape::ShapeEvent::Preview(vec![crate::shape::Edit::Eyes(Some(spec))]));
+            self.world.shape_event(crate::shape::ShapeEvent::Commit(trf("eyes.undo_model", &[("name", &tr_or(&format!("eyes.model.{DEFAULT_EYE}"), DEFAULT_EYE))])));
         }
     }
 

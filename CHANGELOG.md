@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A new character opened with empty eye sockets and nothing said why.** When the catalog has an eye rig and the
+  character has no eye model or eyes file, both clients show "No eyeballs in the sockets" under the head with Add eyes
+  (medium brown, following the sockets; one undo step, "Eye model Medium brown") and a button that hides the note. The
+  character's data is unchanged until Add eyes is pressed: a new character still has no eye model by default.
 - **The studio saved specs and screenshots wherever it was started from.** A spec saved under a name or a relative
   path now goes into a `characters` folder beside the projects folder (`%APPDATA%/GazeForge/characters` on Windows),
   and a screenshot into `screenshots` there; the save field's tooltip names the folder, and the field and the status

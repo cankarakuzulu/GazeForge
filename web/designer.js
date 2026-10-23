@@ -407,6 +407,23 @@ function setEyeballs(spec, origin) {
   notify("slider");
   scheduleDirty();
   scheduleSettle();
+  eyeNote();
+}
+
+const DEFAULT_EYE = "brown-medium";
+
+function eyeNote() {
+  let hidden = false;
+  try { hidden = localStorage.getItem("gf.eyeNoteHidden") === "1"; } catch {}
+  $("eye-note").classList.toggle("hidden", hidden || !D.eyerig || !!opt("eyes") || !!D.eyeballs?.model);
+}
+
+function addEyes() {
+  const before = D.eyeballs ? JSON.parse(JSON.stringify(D.eyeballs)) : null;
+  const blank = () => ({ offset_mm: [0, 0, 0], rotation_deg: [0, 0, 0], scale: 1 });
+  const after = { follow: "makehuman-helper/1", rig: D.eyerig, model: { id: DEFAULT_EYE, radius_mm: 12 }, left: before?.left || blank(), right: before?.right || blank() };
+  setEyeballs(after);
+  pushUndo({ label: tr("eyes.undo_model", { name: tr(`eyes.model.${DEFAULT_EYE}`) }), undo: () => setEyeballs(before), redo: () => setEyeballs(after) });
 }
 
 function needUV() { return V.opts.seams || V.vp.some((s) => s.mode === MODE_INDEX.uv); }
@@ -2011,6 +2028,9 @@ async function main() {
            grid: { ensureGrid, probeAt, goTo, describeAt, pointOf, toLod0, setProbeMode, headPos },
            project: { save: saveProject, saveAs: saveProjectAs, open: openProject, newProject, autosave, viewerState, applyViewerState, panelStates, projectSig, updateDirty, dialog } };
   D.ready = true;
+  $("eye-add").addEventListener("click", addEyes);
+  $("eye-hide").addEventListener("click", () => { try { localStorage.setItem("gf.eyeNoteHidden", "1"); } catch {} eyeNote(); });
+  eyeNote();
   P.savedSig = projectSig();
   updateDirty();
   D.listeners.push((s, info) => { if (info.kind === "settle") autosave("settle"); });
