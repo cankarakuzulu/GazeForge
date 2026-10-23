@@ -487,9 +487,12 @@ async function settle(full) {
   D.settleCount++;
   placeEyes(r.eyes);
   D.settling = false;
-  const kind = r.approximate ? tr("designer.status.draft", { placement: r.placement, rounds: r.draft.rounds, full: r.draft.full_rounds }) : r.placement;
-  setStatus(changed() ? "preview" : "settled", changed() ? tr("designer.status.preview") : tr("designer.status.settled", { kind, ms: rtt.toFixed(0) }));
-  $("info").textContent = tr("designer.info", { vertices: D.n, triangles: D.tri, targets: D.targets.length, renderer: V.renderer || "" });
+  const ms = rtt.toFixed(0);
+  const ready = r.approximate ? tr("designer.status.draft", { ms, rounds: r.draft.rounds, full: r.draft.full_rounds }) : tr("designer.status.settled", { ms });
+  setStatus(changed() ? "preview" : "settled", changed() ? tr("designer.status.preview") : ready);
+  $("status").title = tr("designer.status.placement", { placement: r.placement });
+  $("info").textContent = tr("designer.info", { vertices: D.n, triangles: D.tri, targets: D.targets.length });
+  $("info").title = V.renderer || "";
   request(true);
   notify("settle", { positions: pos, measurements: r.measurements, revision: r.revision, placement: r.placement });
   if (D.pendingSettle) { D.pendingSettle = 0; settle(); }

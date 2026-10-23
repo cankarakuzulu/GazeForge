@@ -558,7 +558,8 @@ impl Studio<'_> {
                 ui.label(egui::RichText::new(trf("studio.counts", &[("vertices", &s.head.n), ("targets", &s.targets)])).weak());
             });
             if let Some(st) = &s.settled {
-                ui.label(egui::RichText::new(trf("studio.settled", &[("placement", &st.placement), ("ms", &format!("{:.0}", st.ms))])).weak());
+                ui.label(egui::RichText::new(trf("studio.settled", &[("ms", &format!("{:.0}", st.ms))])).weak())
+                    .on_hover_text(trf("designer.status.placement", &[("placement", &st.placement)]));
             }
         }
         if self.world.shape.is_some() {

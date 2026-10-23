@@ -301,6 +301,9 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Status lines spoke engine.** "Settled f5/1 1210 ms" reads "Ready in 1210 ms" in both clients, with the
+  placement in its tooltip; a draft reads "Draft in … ms (approximate, …)". The browser header shows "20000 vertices ·
+  39636 triangles · 290 targets" and keeps the GL renderer string in its tooltip.
 - **The browser opened without a store was a dead end.** It now shows a start card: a store folder and an optional
   macro file (remembered from the last visit in this browser; Enter or Open loads them), Set up a store… (opens Tasks)
   and the saved projects, each opening on a click. The viewport no longer says "Approximate preview" on an empty

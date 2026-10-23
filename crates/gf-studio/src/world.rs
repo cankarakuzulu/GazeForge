@@ -488,7 +488,7 @@ impl World {
                     if let Some(l) = latency {
                         self.hud.settle_latency.push(l);
                     }
-                    self.note(trf("studio.settled", &[("placement", &out.placement), ("ms", &format!("{:.0}", latency.unwrap_or(out.ms)))]));
+                    self.note(trf("studio.settled", &[("ms", &format!("{:.0}", latency.unwrap_or(out.ms)))]));
                     if self.face.wanted {
                         self.face_load();
                     }
