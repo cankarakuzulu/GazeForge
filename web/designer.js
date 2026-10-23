@@ -36,7 +36,7 @@ async function api(name, input) {
   const env = await r.json();
   if (!env.ok) {
     const e = new Error(`${name}: ${env.error?.message || r.status}`);
-    Object.assign(e, { code: env.error?.code, details: env.error?.details, hint: env.error?.hint });
+    Object.assign(e, { code: env.error?.code, details: env.error?.details, hint: env.error?.hint, plain: env.error?.message });
     throw e;
   }
   return env.result;

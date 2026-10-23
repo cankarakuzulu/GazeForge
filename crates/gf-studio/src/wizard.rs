@@ -24,6 +24,7 @@ pub struct Wizards {
     flags: BTreeMap<String, bool>,
     error: Option<String>,
     progress: Option<Value>,
+    since: Option<(usize, Instant)>,
     polled: Option<Instant>,
     images: BTreeMap<String, Option<egui::TextureHandle>>,
     pub open_spec: Option<(String, String)>,
@@ -33,6 +34,23 @@ pub struct Wizards {
     runs: Option<Vec<Value>>,
     pending: Option<Receiver<Result<Value, String>>>,
     last_glb: Option<String>,
+}
+
+fn progress_text(p: &Value, secs: u64) -> String {
+    let stage = p["stage"].as_str().filter(|s| !s.is_empty());
+    let message = p["message"].as_str().filter(|s| !s.is_empty());
+    let counted = match (p["done"].as_f64(), p["total"].as_f64()) {
+        (Some(d), Some(t)) if t > 0.0 => Some(match stage {
+            Some(s) => trf("wizard.progress_of", &[("stage", &s), ("done", &d), ("total", &t)]),
+            None => trf("wizard.progress_count", &[("done", &d), ("total", &t)]),
+        }),
+        _ => None,
+    };
+    match (counted, stage) {
+        (Some(c), _) => message.map_or(c.clone(), |m| format!("{c} · {m}")),
+        (None, Some(s)) => trf("wizard.stage_for", &[("stage", &s), ("s", &secs)]),
+        (None, None) => trf("wizard.running_for", &[("s", &secs)]),
+    }
 }
 
 fn load_png(path: &str) -> Option<egui::ColorImage> {
@@ -259,6 +277,10 @@ impl Wizards {
         Ok(())
     }
 
+    pub fn show_error(&mut self, e: String) {
+        self.error = Some(e);
+    }
+
     pub fn run_step(&mut self) -> Result<(), String> {
         self.submit_step()?;
         let outcome = self.pending.take().expect("submitted").recv().map_err(|e| e.to_string())?;
@@ -371,13 +393,13 @@ impl Wizards {
                 });
                 ui.separator();
             }
+            if let Some(e) = &self.error {
+                ui.colored_label(ui.visuals().warn_fg_color, e);
+            }
             if self.def.is_none() {
                 egui::ScrollArea::vertical().id_salt("wizard_list").auto_shrink([false, false]).show(ui, |ui| self.list_ui(ui, world, project));
             } else {
                 self.run_ui(ui);
-            }
-            if let Some(e) = &self.error {
-                ui.colored_label(ui.visuals().warn_fg_color, e);
             }
         });
         self.open = open;
@@ -576,11 +598,15 @@ impl Wizards {
                     }
                     if st["state"] == "running" {
                         let p = self.progress.clone().unwrap_or(Value::Null);
-                        let frac = match (p["done"].as_f64(), p["total"].as_f64()) {
-                            (Some(d), Some(t)) if t > 0.0 => (d / t) as f32,
-                            _ => 0.0,
+                        if self.since.is_none_or(|(at, _)| at != self.at) {
+                            self.since = Some((self.at, Instant::now()));
+                        }
+                        let secs = self.since.map_or(0, |(_, t)| t.elapsed().as_secs());
+                        let text = progress_text(&p, secs);
+                        match (p["done"].as_f64(), p["total"].as_f64()) {
+                            (Some(d), Some(t)) if t > 0.0 => ui.add(egui::ProgressBar::new((d / t) as f32).text(text)),
+                            _ => ui.add(egui::ProgressBar::new(0.0).animate(true).text(text)),
                         };
-                        ui.add(egui::ProgressBar::new(frac).text(format!("{} {}/{} {}", shown(&p["stage"]), shown(&p["done"]), shown(&p["total"]), shown(&p["message"]))));
                     }
                     if !st["result"].is_null() {
                         self.shows_ui(ui, &s);

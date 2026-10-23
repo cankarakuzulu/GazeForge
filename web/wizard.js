@@ -65,7 +65,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   function fail(e) {
     W.busy = false;
-    box.querySelector(".wz-status").textContent = e.message || String(e);
+    box.querySelector(".wz-status").textContent = e.plain || e.message || String(e);
     box.querySelector(".wz-status").className = "wz-status bad";
   }
 
@@ -204,7 +204,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     const s = stepDef(i), st = stepState(i);
     if (st.error) return `<div class="wz-err"><b>${esc(st.error.code)}</b> ${esc(st.error.message)}${st.error.hint ? `<br><small>${esc(st.error.hint)}</small>` : ""}
       ${st.error.details && Object.keys(st.error.details).length ? `<details><summary>${tr("wizard.report")}</summary><pre>${esc(JSON.stringify(st.error.details, null, 1))}</pre></details>` : ""}</div>`;
-    if (!st.result) return st.state === "running" ? `<div class="wz-progress"><div class="bar"><i style="width:0%"></i></div><span class="msg">${tr("wizard.submitted")}</span></div>` : "";
+    if (!st.result) return st.state === "running" ? `<div class="wz-progress"><div class="bar busy"><i></i></div><span class="msg">${progressText(null, 0)}</span></div>` : "";
     const shows = (s.shows || []).map((sh) => {
       if (sh.kind === "images") {
         const list = (sh.from ? resolve(sh.from) : null) || [];
@@ -274,6 +274,14 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     } catch (e) { fail(e); }
   }
 
+  function progressText(p, s) {
+    if (p && p.total > 0) {
+      const counted = p.stage ? tr("wizard.progress_of", { stage: p.stage, done: p.done, total: p.total }) : tr("wizard.progress_count", { done: p.done, total: p.total });
+      return p.message ? `${counted} · ${p.message}` : counted;
+    }
+    return p && p.stage ? tr("wizard.stage_for", { stage: p.stage, s }) : tr("wizard.running_for", { s });
+  }
+
   function poll() {
     clearTimeout(W.polling);
     W.polling = setTimeout(async () => {
@@ -283,7 +291,13 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
         if (job) {
           const j = await api("jobs.status", { id: job });
           const p = j.progress, bar = box.querySelector(".wz-progress i"), msg = box.querySelector(".wz-progress .msg");
-          if (p && bar) { bar.style.width = `${p.total ? Math.round((100 * p.done) / p.total) : 0}%`; msg.textContent = `${p.stage} ${p.done}/${p.total} ${p.message || ""}`; }
+          if (!W.since || W.since.job !== job) W.since = { job, t: Date.now() };
+          if (bar) {
+            const counted = p && p.total > 0;
+            bar.parentElement.classList.toggle("busy", !counted);
+            bar.style.width = counted ? `${Math.round((100 * p.done) / p.total)}%` : "";
+            msg.textContent = progressText(p, Math.round((Date.now() - W.since.t) / 1000));
+          }
         }
         const s = await api("wizards.state", { run: W.state.run });
         const changed = JSON.stringify(s.steps.map((x) => x.state)) !== JSON.stringify(W.state.steps.map((x) => x.state));

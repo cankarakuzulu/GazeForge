@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::commands::{obj, shape, text};
 use crate::error::ApiError;
-use crate::{Ctx, Kind, check_input, find, jobs, project};
+use crate::{Ctx, Kind, find, jobs, project};
 
 pub const FORMAT: &str = "gazeforge.wizard-run/1";
 pub const SAVED_CHARACTER: &str = "character.gfchar.json";
@@ -736,6 +736,20 @@ fn fields_schema(step: &Value) -> Value {
     json!({"type": "object", "additionalProperties": false, "properties": props})
 }
 
+fn worded(problem: &str, step: &Value) -> String {
+    let p = problem.strip_prefix("input.").unwrap_or(problem);
+    let Some((path, what)) = p.split_once(": ") else { return problem.to_string() };
+    let name = path.split(['.', '[']).next().unwrap_or(path);
+    let field = step["fields"].as_array().into_iter().flatten().find(|f| f["name"] == name);
+    let label = field.and_then(|f| f["label"].as_str()).unwrap_or(name);
+    let what = if what == "is required" { "needed" } else { what };
+    if field.is_some_and(|f| f["hidden"] == Value::Bool(true)) {
+        format!("{label}: {what} (it comes from an earlier step)")
+    } else {
+        format!("{label}: {what}")
+    }
+}
+
 pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
     let dir = run_dir(ctx, input)?;
     let run = read_json(&dir.join("run.json")).ok_or_else(|| ApiError::internal("the run record does not read"))?;
@@ -757,20 +771,25 @@ pub fn step(ctx: &Ctx, input: &Value) -> Result<Value, ApiError> {
         }
     }
     let given = Value::Object(given);
-    let cmd = match def["command"].as_str() {
+    for f in def["fields"].as_array().into_iter().flatten().filter(|f| f["widget"] == "file_open") {
+        let name = f["name"].as_str().unwrap_or_default();
+        if let Some(p) = given[name].as_str().map(str::trim).filter(|p| !p.is_empty())
+            && !Path::new(p).is_file()
+        {
+            return Err(ApiError::invalid(format!("{}: there is no file at {p}", f["label"].as_str().unwrap_or(name))).details(json!({"field": name, "path": p})));
+        }
+    }
+    let (cmd, problems) = match def["command"].as_str() {
         Some(name) => {
             let cmd = find(name).ok_or_else(|| ApiError::internal(format!("wizard step {id} names an unknown command {name}")))?;
-            check_input(cmd, &given)?;
-            Some(cmd)
+            (Some(cmd), crate::schema::validate(&(cmd.input)(), &given))
         }
-        None => {
-            let problems = crate::schema::validate(&fields_schema(def), &given);
-            if !problems.is_empty() {
-                return Err(ApiError::invalid(format!("step {id} input: {}", problems.join("; "))).details(json!({"problems": problems})));
-            }
-            None
-        }
+        None => (None, crate::schema::validate(&fields_schema(def), &given)),
     };
+    if !problems.is_empty() {
+        let worded: Vec<String> = problems.iter().map(|p| worded(p, def)).collect();
+        return Err(ApiError::invalid(worded.join("; ")).details(json!({"problems": problems})));
+    }
     let here = dir.join("steps").join(id);
     if state["steps"][at]["state"] == "running"
         && let Some(job) = read_json(&here.join("job.json"))
@@ -912,20 +931,42 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_file_is_refused_at_the_step_that_asks_for_it_in_the_field_s_words() {
+        let root = std::env::temp_dir().join(format!("gf-wizard-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.clone() };
+        let missing = root.join("nowhere.gfchar.json").display().to_string();
+        let s = start(&ctx, &json!({"wizard": "export", "project": "demo", "values": {"store": "S", "spec": missing}})).unwrap();
+        let e = step(&ctx, &json!({"run": s["run"], "step": "character", "input": {}})).unwrap_err();
+        assert!(e.message.starts_with("Character spec: there is no file at "), "{}", e.message);
+        assert_eq!(e.details["field"], "spec");
+        let export = &definition("export").unwrap()["steps"][1];
+        assert_eq!(worded("input.out: is required", export), "Glb file: needed");
+        assert_eq!(worded("input.spec: is required", export), "spec: needed (it comes from an earlier step)");
+        assert_eq!(worded("input.nothing_here: is required", export), "nothing_here: needed");
+        assert_eq!(worded("not a field problem", export), "not a field problem");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_run_steps_through_bound_values_and_marks_later_steps_stale() {
         let root = std::env::temp_dir().join(format!("gf-wizard-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.clone() };
-        let s = start(&ctx, &json!({"wizard": "export", "project": "demo", "values": {"store": "S", "spec": "C.gfchar.json", "out": "o.glb"}})).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let (c, d) = (root.join("C.gfchar.json").display().to_string(), root.join("D.gfchar.json").display().to_string());
+        std::fs::write(&c, "{}").unwrap();
+        std::fs::write(&d, "{}").unwrap();
+        let s = start(&ctx, &json!({"wizard": "export", "project": "demo", "values": {"store": "S", "spec": c, "out": "o.glb"}})).unwrap();
         assert_eq!(s["run"], "demo/export-1");
         assert_eq!(s["steps"][0]["proposed"]["store"], "S");
         assert!(step(&ctx, &json!({"run": "demo/export-1", "step": "export", "input": {}})).unwrap_err().message.contains("needs step character"));
         let s = step(&ctx, &json!({"run": "demo/export-1", "step": "character", "input": {}})).unwrap();
         assert_eq!(s["steps"][0]["state"], "done");
-        assert_eq!(s["steps"][1]["proposed"]["spec"], "C.gfchar.json");
+        assert_eq!(s["steps"][1]["proposed"]["spec"], c.as_str());
         assert_eq!(s["steps"][1]["proposed"]["out"], "o.glb");
-        let s = step(&ctx, &json!({"run": "demo/export-1", "step": "character", "input": {"spec": "D.gfchar.json"}})).unwrap();
-        assert_eq!(s["steps"][1]["proposed"]["spec"], "D.gfchar.json");
+        let s = step(&ctx, &json!({"run": "demo/export-1", "step": "character", "input": {"spec": d}})).unwrap();
+        assert_eq!(s["steps"][1]["proposed"]["spec"], d.as_str());
         assert_eq!(s["steps"][2]["proposed"]["states"], "all");
         assert_eq!(start(&ctx, &json!({"wizard": "export", "project": "demo"})).unwrap()["run"], "demo/export-2");
         assert!(state(&ctx, &json!({"run": "../x"})).is_err());
@@ -965,15 +1006,18 @@ mod tests {
         let root = std::env::temp_dir().join(format!("gf-wizard-refuse-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ctx = Ctx { jobs_dir: root.join("jobs"), exe: PathBuf::from("x"), job_id: None, projects: root.clone() };
-        let s = start(&ctx, &json!({"wizard": "export", "project": "my demo", "values": {"store": "S", "spec": "C.gfchar.json"}})).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let c = root.join("C.gfchar.json").display().to_string();
+        std::fs::write(&c, "{}").unwrap();
+        let s = start(&ctx, &json!({"wizard": "export", "project": "my demo", "values": {"store": "S", "spec": c}})).unwrap();
         let run = s["run"].as_str().unwrap().to_string();
         assert_eq!(run, "my demo/export-1");
         step(&ctx, &json!({"run": run, "step": "character", "input": {}})).unwrap();
-        for bad in [json!({"spec": 5}), json!({"bogus": "x"})] {
+        for bad in [json!({"spec": 5}), json!({"bogus": "x"}), json!({"spec": root.join("gone.gfchar.json").display().to_string()})] {
             assert!(step(&ctx, &json!({"run": run, "step": "character", "input": bad})).is_err());
             let s = state(&ctx, &json!({"run": run})).unwrap();
             assert_eq!(s["steps"][0]["state"], "done");
-            assert_eq!(s["steps"][0]["input"]["spec"], "C.gfchar.json");
+            assert_eq!(s["steps"][0]["input"]["spec"], c.as_str());
         }
         write_json(&root.join("runs/my demo/export-1/steps/export/job.json"), &json!({"id": "missing", "jobs_dir": root.join("jobs").display().to_string()})).unwrap();
         let s = state(&ctx, &json!({"run": run})).unwrap();

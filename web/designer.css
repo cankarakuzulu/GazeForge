@@ -201,6 +201,8 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-
 .wz-progress { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .wz-progress .bar { flex: 1; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .wz-progress .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
+.wz-progress .bar.busy i { width: 30%; animation: wz-busy 1.4s ease-in-out infinite alternate; }
+@keyframes wz-busy { from { margin-left: 0; } to { margin-left: 70%; } }
 .wz-status { flex: 1; color: var(--muted); }
 .wz-status.st-done { color: var(--ok); }
 .wz-status.st-failed, .wz-status.st-stale, .wz-status.bad { color: var(--warn); }

@@ -209,7 +209,10 @@ impl Offscreen {
                             w.set_field(k, v);
                         }
                         if action == "run" {
-                            w.run_step()?;
+                            match w.run_step() {
+                                Err(e) if step.get("expect_error").and_then(Value::as_bool) == Some(true) => w.show_error(e),
+                                other => other?,
+                            }
                         }
                     }
                     "next" => w.go(1),

@@ -301,6 +301,16 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **A task took a missing file in one step and failed in the next, in schema words.** A step that asks for a file
+  (`file_open`) now refuses one that is not there when that step is submitted, naming the field ("Character spec:
+  there is no file at …"), so the error shows where the path can be fixed instead of in the next step, where the field
+  is hidden. Other refusals name the field too ("Glb file: needed", "…(it comes from an earlier step)") instead of
+  "export.glb input does not match its schema: input.out: is required". The studio drew task errors under the step
+  pane, out of sight; they now sit at the top of the Tasks window. The browser shows the message without the command
+  name in front.
+- **A running task step showed " / " or "Submitted" as its progress.** A step that reports a count shows "stage: 3 of
+  10"; one that does not shows "Running for 12 s (this step does not report its progress)" on a moving bar, in both
+  clients.
 - **The studio froze for about 1.7 s the first time Body shape opened.** It read the store's wearable list on the
   interface thread. The list is now read in the background ("Reading the store's wearables…"; worn items show their
   short id until their names arrive): the click that opens the panel took 1608 and 1730 ms, now 11 to 14 ms, and the
