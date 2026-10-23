@@ -551,6 +551,7 @@ function sliderRow(label, value, onInput, onChange, onDown) {
   row.className = "slider";
   row.innerHTML = `<span class="name" title="${label}">${label}</span><input type="range" min="0" max="1" step="0.001"><span class="value"></span>`;
   const input = row.querySelector("input"), out = row.querySelector(".value");
+  input.setAttribute("aria-label", label);
   input.value = value;
   out.textContent = Number(value).toFixed(3);
   input.addEventListener("input", () => { out.textContent = Number(input.value).toFixed(3); onInput(Number(input.value)); });

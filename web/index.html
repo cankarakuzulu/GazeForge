@@ -107,7 +107,7 @@
     <div id="tab-shape" class="tab on">
       <div class="tools">
         <input id="search" type="search" data-i18n-placeholder="ui.search.placeholder">
-        <select id="category"><option value="" data-i18n="ui.option.all_categories"></option></select>
+        <select id="category" data-i18n-title="ui.category.title"><option value="" data-i18n="ui.option.all_categories"></option></select>
         <button id="reset" data-i18n="ui.reset"></button>
       </div>
       <details id="macros" open><summary data-i18n="ui.macros_head_only"></summary><div id="macro-list"></div></details>
@@ -199,7 +199,7 @@
   <div class="card">
     <h2 id="p-dlg-title"></h2>
     <p id="p-dlg-note" class="note"></p>
-    <input id="p-dlg-name" type="text" class="wide">
+    <input id="p-dlg-name" type="text" class="wide" aria-labelledby="p-dlg-title">
     <ul id="p-dlg-list" class="plist"></ul>
     <div class="buttons"><button id="p-dlg-ok" data-i18n="ui.p-dlg-ok"></button><button id="p-dlg-cancel" data-i18n="ui.p-dlg-cancel"></button></div>
   </div>

@@ -73,7 +73,7 @@ function mount(root, api) {
     for (const n of SHAPES.filter((s) => re.test(s))) {
       const row = el("div", { class: "row" });
       const lab = el("label", { style: "display:inline-block;min-width:11em" }, n);
-      const r = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0" });
+      const r = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0", "aria-label": n });
       let from = null;
       r.addEventListener("input", () => { if (from === null) from = S.weights[n]; S.weights[n] = Number(r.value); update(); });
       r.addEventListener("change", () => {
@@ -90,12 +90,12 @@ function mount(root, api) {
   }
   const jointBox = el("details");
   jointBox.appendChild(el("summary", {}, tr("rig.joint_pose")));
-  const jointSel = el("select");
+  const jointSel = el("select", { "aria-label": tr("rig.joint_pose") });
   jointBox.appendChild(jointSel);
   const manualInputs = {};
   for (const [k, unit, lim] of MANUAL) {
     const row = el("div", { class: "row" });
-    const r = el("input", { type: "range", min: String(-lim), max: String(lim), step: unit === "deg" ? "0.5" : "0.1", value: "0" });
+    const r = el("input", { type: "range", min: String(-lim), max: String(lim), step: unit === "deg" ? "0.5" : "0.1", value: "0", "aria-label": tr(`rig.manual.${k}`) });
     let from = null;
     r.addEventListener("input", () => { if (from === null) from = manualValue(S.joint, k); setManual(S.joint, k, Number(r.value)); update(); });
     r.addEventListener("change", () => {

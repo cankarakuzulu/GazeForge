@@ -62,7 +62,7 @@ function mount(root, api) {
   const genitalsPick = el('select', { 'data-body': 'genitals' });
   const genitalsRow = el('label', { class: 'gf-stitch-row' }, [el('span', { text: tr('body.genitals') }), genitalsPick]);
   const wearList = el('div', { class: 'gf-body-wear' });
-  const wearAdd = el('select', { 'data-body': 'wear-add' });
+  const wearAdd = el('select', { 'data-body': 'wear-add', 'aria-label': tr('body.wear_add') });
   const wearFind = el('input', { type: 'search', 'data-body': 'wear-find', placeholder: tr('body.wear_find'), 'aria-label': tr('body.wear_find') });
   let freeWear = [];
   wearFind.addEventListener('input', () => fillAdd());

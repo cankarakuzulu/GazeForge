@@ -86,7 +86,7 @@ function mount(root, api) {
   const head = el("input", { type: "checkbox", title: tr("timeline.head_title") });
   head.checked = true;
   transport.append(play, el("label", {}, ` ${tr("timeline.loop")} `), loop, el("label", {}, ` ${tr("timeline.speed")} `), speed, el("label", {}, ` ${tr("timeline.head")} `), head);
-  const scrub = el("input", { type: "range", min: "0", max: "0", step: "1", value: "0", style: "width:100%" });
+  const scrub = el("input", { type: "range", min: "0", max: "0", step: "1", value: "0", style: "width:100%", "aria-label": tr("timeline.scrub") });
   const readout = el("div", { class: "note" }, "");
   root.append(row1, rigNote, runRow, transport, scrub, readout, status);
 
