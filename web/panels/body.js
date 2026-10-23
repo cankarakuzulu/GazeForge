@@ -141,6 +141,8 @@ function mount(root, api) {
     }
   }
 
+  const moreOpen = new Set();
+
   function wearName(asset) {
     const w = storeWear.find((x) => x.wearable === asset);
     const short = asset.replace('sha256:', '').slice(0, 8);
@@ -424,9 +426,16 @@ function mount(root, api) {
         apply(withWear(b, (list) => list.filter((x) => x.asset !== w.asset)), line);
         if (api.toast) api.toast(tr('designer.undo_hint', { what: line }));
       });
+      const more = el('details', { class: 'gf-wear-more' }, [
+        el('summary', { text: tr('body.wear_more') }),
+        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), el('label', {}, [el('span', { text: tr('body.wear_coarse') }), coarse]), ...(cards ? [] : [el('label', {}, [el('span', { text: tr('body.wear_hair') }), hair])])]),
+      ]);
+      more.open = moreOpen.has(w.asset);
+      more.addEventListener('toggle', () => { if (more.open) moreOpen.add(w.asset); else moreOpen.delete(w.asset); });
       return el('div', { class: 'gf-wear-item', 'data-wear': w.asset }, [
         el('div', { class: 'gf-wear-name', text: wearName(w.asset), title: wearName(w.asset) }),
-        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), el('label', {}, [el('span', { text: tr('body.wear_physics') }), kind]), el('label', {}, [own, el('span', { text: tr('body.wear_layer') }), layer]), el('label', {}, [el('span', { text: tr('body.wear_opening') }), opening]), el('label', {}, [el('span', { text: tr('body.wear_coarse') }), coarse]), ...(cards ? [el('label', {}, [cap, el('span', { text: tr('body.wear_cap') })]), el('label', {}, [strands, el('span', { text: tr('body.wear_strands') })])] : [el('label', {}, [el('span', { text: tr('body.wear_hair') }), hair])]), remove]),
+        el('div', { class: 'gf-wear-controls' }, [el('label', {}, [hide, el('span', { text: tr('body.wear_hide') })]), ...(cards ? [el('label', {}, [cap, el('span', { text: tr('body.wear_cap') })]), el('label', {}, [strands, el('span', { text: tr('body.wear_strands') })])] : []), remove]),
+        more,
       ]);
     }) : [el('div', { class: 'gf-body-note', text: tr('body.wear_none') })]));
     freeWear = storeWear.filter((x) => !worn.some((w) => w.asset === x.wearable)).sort((a, b) => String(a.name).localeCompare(String(b.name)));

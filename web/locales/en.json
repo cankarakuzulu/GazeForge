@@ -162,6 +162,7 @@
  "body.physics.none": "None",
  "body.physics.springbone": "Spring bones",
  "body.wear_layer": "Own layer",
+ "body.wear_more": "More settings",
  "body.wear_layer_auto": "Layer {z}",
  "body.wear_layer_line": "{name}: layer {layer}",
  "body.wear_layer_off_line": "{name}: layer from its own depth ({z})",

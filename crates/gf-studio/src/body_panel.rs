@@ -541,12 +541,30 @@ impl crate::studio::Studio<'_> {
             }
             for (asset, hide) in &worn {
                 ui.label(label(asset));
+                let cards = ui_state.store_wear.iter().find(|w| w.reference == *asset).is_some_and(|w| w.transparent);
                 ui.horizontal_wrapped(|ui| {
                     let mut h = *hide;
                     if ui.checkbox(&mut h, tr("body.wear_hide")).on_hover_text(tr("body.wear_hide_tip")).changed() {
                         wear_commit = Some((asset.clone(), Some(h)));
                     }
+                    if cards {
+                        let mut cap = cap_of(asset);
+                        if ui.checkbox(&mut cap, tr("body.wear_cap")).on_hover_text(tr("body.wear_cap_tip")).changed() {
+                            cap_commit = Some((asset.clone(), cap));
+                        }
+                        let mut strands = strands_of(asset);
+                        if ui.checkbox(&mut strands, tr("body.wear_strands")).on_hover_text(tr("body.wear_strands_tip")).changed() {
+                            strands_commit = Some((asset.clone(), strands));
+                        }
+                    }
+                    if ui.small_button(tr("body.wear_remove")).clicked() {
+                        wear_commit = Some((asset.clone(), None));
+                        removed = Some(label(asset));
+                    }
+                });
+                egui::CollapsingHeader::new(egui::RichText::new(tr("body.wear_more")).weak()).id_salt(("wear_more", asset.as_str())).default_open(false).show(ui, |ui| ui.horizontal_wrapped(|ui| {
                     let current = physics_of(asset);
+                    ui.label(tr("body.wear_physics")).on_hover_text(tr("body.wear_physics_tip"));
                     let kind_label = |k: &str| tr(&format!("body.physics.{k}")).to_string();
                     egui::ComboBox::from_id_salt(("body_wear_physics", asset.as_str()))
                         .selected_text(kind_label(&current))
@@ -604,16 +622,7 @@ impl crate::studio::Studio<'_> {
                         let p = (p * 100.0).round() / 100.0;
                         coarse_commit = Some((asset.clone(), (p != kind_default).then_some(p)));
                     }
-                    if ui_state.store_wear.iter().find(|w| w.reference == *asset).is_some_and(|w| w.transparent) {
-                        let mut cap = cap_of(asset);
-                        if ui.checkbox(&mut cap, tr("body.wear_cap")).on_hover_text(tr("body.wear_cap_tip")).changed() {
-                            cap_commit = Some((asset.clone(), cap));
-                        }
-                        let mut strands = strands_of(asset);
-                        if ui.checkbox(&mut strands, tr("body.wear_strands")).on_hover_text(tr("body.wear_strands_tip")).changed() {
-                            strands_commit = Some((asset.clone(), strands));
-                        }
-                    } else {
+                    if !cards {
                         let current = hair_of(asset);
                         let mode_label = |m: &str| tr(&format!("body.wear_hair.{m}")).to_string();
                         ui.label(tr("body.wear_hair")).on_hover_text(tr("body.wear_hair_tip"));
@@ -629,11 +638,7 @@ impl crate::studio::Studio<'_> {
                             .response
                             .on_hover_text(tr("body.wear_hair_tip"));
                     }
-                    if ui.small_button(tr("body.wear_remove")).clicked() {
-                        wear_commit = Some((asset.clone(), None));
-                        removed = Some(label(asset));
-                    }
-                });
+                }));
             }
             let mut free: Vec<&StoreWear> = ui_state.store_wear.iter().filter(|w| !worn.iter().any(|x| x.0 == w.reference)).collect();
             free.sort_by_key(|w| label(&w.reference).to_lowercase());

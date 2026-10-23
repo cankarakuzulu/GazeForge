@@ -301,6 +301,10 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Wearable rows were cramped.** In both clients an item's row now holds Hide body, Remove and, for hair cards, Cap
+  and Strands; physics, layer, openings, coarse detail and Hair under it fold under the item's More settings, which
+  remembers being open across edits (browser: checked through a rebuild; studio: egui keeps it per item). The studio's
+  physics picker gained its label.
 - **Design panels sat in developer order.** Both clients now list Body shape, Body, (Eyes,) Face rig, Skin (studio)
   and Timeline first, and the developer sections (Measurements, Pins, Topology, Store, Jobs; Topology and Diagnostics
   in the studio) after them. The studio keeps Store and Project at the top.
