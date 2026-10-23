@@ -39,6 +39,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   async function open() {
     box.classList.remove("hidden");
+    if (W.def && W.state) { render(); return; }
     W.def = null;
     W.list = W.list || (await api("wizards.list", { developer: W.dev })).wizards;
     W.project = (await prepare()).project;
@@ -56,6 +57,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
     }
     box.querySelector(".wz-title").textContent = tr("ui.wz-title");
     box.querySelector(".wz-steps").innerHTML = "";
+    for (const sel of [".wz-run", ".wz-next", ".wz-back"]) box.querySelector(sel).disabled = true;
     for (const b of box.querySelectorAll(".wz-pick")) b.addEventListener("click", () => begin(b.dataset.id).catch((e) => fail(e)));
     for (const b of box.querySelectorAll(".wz-resume")) b.addEventListener("click", () => resume(b.dataset.wizard, b.dataset.run).catch((e) => fail(e)));
     box.querySelector(".wz-dev input").addEventListener("change", async (e) => { W.dev = e.target.checked; W.list = (await api("wizards.list", { developer: W.dev })).wizards; renderList(); });
@@ -70,7 +72,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   async function begin(id) {
     W.def = await api("wizards.get", { id });
     const ctx = await prepare();
-    W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: ctx.values });
+    W.state = await api("wizards.start", { wizard: id, project: ctx.project, values: W.lastGlb ? { ...ctx.values, glb: W.lastGlb } : ctx.values });
     W.prepared = await ctx.after(W.state.dir);
     if (W.prepared?.character) W.state = await api("wizards.state", { run: W.state.run });
     W.at = 0;
@@ -127,6 +129,8 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   }
 
   function render() {
+    const glb = (W.state?.steps || []).map((s) => s?.result?.out).filter((o) => typeof o === "string" && o.endsWith(".glb")).pop();
+    if (glb) W.lastGlb = glb;
     const steps = W.def.steps;
     box.querySelector(".wz-steps").innerHTML = steps.map((s, i) =>
       `<button class="wz-step ${i === W.at ? "now" : ""} st-${esc(stepState(i).state)}" data-i="${i}">${i + 1}. ${esc(tr(`wizard.${W.def.id}.${s.id}.title`, null, s.title))}<small>${esc(tr(`wizard.state.${stepState(i).state}`, null, stepState(i).state))}${s.optional ? ` · ${tr("wizard.optional")}` : ""}</small></button>`).join("");
@@ -211,9 +215,11 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
       if (sh.kind === "glb" || sh.kind === "file") {
         const path = sh.from ? resolve(sh.from) : null;
         const look = sh.kind === "glb" && canShow?.() ? ` <button class="wz-show-glb" data-path="${esc(path)}" title="${tr("wizard.show_glb_title")}">${tr("wizard.show_glb")}</button>` : "";
-        return path ? `<div class="wz-file">${tr("wizard.wrote", { path: `<code>${esc(path)}</code>` })}${look}</div>` : "";
+        const name = String(path ?? "").split(/[\\/]/).pop();
+        const get = sh.kind === "glb" ? ` <a class="wz-download" download="${esc(name)}" href="/v1/wizard-file?run=${encodeURIComponent(W.state.run)}&path=${encodeURIComponent(path ?? "")}">${tr("wizard.download")}</a>` : "";
+        return path ? `<div class="wz-file">${tr("wizard.wrote", { path: `<code>${esc(path)}</code>` })}${look}${get}</div>` : "";
       }
-      return `<details open><summary>${tr("wizard.report")}</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
+      return `<details><summary>${tr("wizard.report")}</summary><pre>${esc(JSON.stringify(st.result, null, 1))}</pre></details>`;
     });
     return shows.join("") || `<pre>${esc(JSON.stringify(st.result, null, 1))}</pre>`;
   }
@@ -252,7 +258,7 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
   }
 
   async function run() {
-    if (W.busy) return;
+    if (W.busy || !W.def || !W.state) return;
     W.busy = true;
     try {
       const input = collect();
@@ -296,11 +302,18 @@ export function createWizards({ api, root, toast, prepare, openSpec, showMesh, c
 
   box.querySelector(".wz-close").addEventListener("click", close);
   box.querySelector(".wz-cancel").addEventListener("click", cancel);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.classList.contains("hidden")) { e.preventDefault(); close(); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || box.classList.contains("hidden")) return;
+    e.preventDefault();
+    const at = document.activeElement;
+    if (at && box.contains(at) && at.matches("input, select, textarea")) { at.blur(); return; }
+    box.classList.add("hidden");
+    peek(false);
+  });
   box.querySelector(".wz-peek").addEventListener("click", () => peek(!box.classList.contains("peek")));
   box.querySelector(".wz-run").addEventListener("click", run);
-  box.querySelector(".wz-next").addEventListener("click", () => { W.at++; render(); });
-  box.querySelector(".wz-back").addEventListener("click", () => { W.at--; render(); });
+  box.querySelector(".wz-next").addEventListener("click", () => { if (W.def) { W.at++; render(); } });
+  box.querySelector(".wz-back").addEventListener("click", () => { if (W.def) { W.at--; render(); } });
   box.querySelector(".wz-home").addEventListener("click", () => { clearTimeout(W.polling); W.def = null; W.state = null; open().catch((e) => fail(e)); });
   async function openTask(id) {
     box.classList.remove("hidden");

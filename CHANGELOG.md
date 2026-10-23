@@ -301,6 +301,18 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Browser usability, from a UX review.** Typing into a number box (wearable layer, openings, every grown-hair
+  setting) also fired the viewport's keys: "25" became "2" and the view switched to orthographic. Number boxes, menus
+  and text areas now keep their keys. A character with a body now stitches when it opens, re-stitches after each
+  change by default and keeps its body, clothes and hair shown meanwhile; F frames everything shown (the head alone
+  before), and the seam outline is off by default (on again when a stitch fails). Tasks: Escape leaves the field
+  first, then hides the task without losing it (reopening Tasks returns to it); Run, Next and Back no longer act
+  with no task chosen (a raw script error before); a finished export offers Download, the report is folded, and
+  Bake physics fills in the last exported glb (the studio offers Show in folder and Copy path). Grown hair: turning
+  it off and on again restores its settings; a value out of range says so instead of silently reverting; the seed
+  box takes the whole seed range; number boxes are wide enough for 20000. The face rig's presets ask for the rig to
+  be loaded instead of adding history entries that do nothing, and a rig that fails to load shows in red. The
+  autosave note gives local time and no longer claims the last session ended without saving.
 - **Studio usability, from a UX review.** A character with a body opened as a bare head, and every edit after a
   stitch hid the body, clothes and hair until Stitch was pressed again in the collapsed Body panel. The studio now
   stitches on load, re-stitches after each change by default, and keeps showing the last body, clothes and hair

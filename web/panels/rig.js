@@ -129,6 +129,10 @@ function mount(root, api) {
     update();
   }
   function applyPreset(name) {
+    if (!S.rig) {
+      status.textContent = tr("rig.load_first");
+      return;
+    }
     const before = { ...S.weights };
     const after = Object.fromEntries(SHAPES.map((n) => [n, PRESETS[name][n] ?? 0]));
     api.pushUndo({ label: tr("rig.undo_preset", { name: tr(`rig.preset.${name}`) }), undo: () => setWeights(before), redo: () => setWeights(after) });
@@ -186,9 +190,11 @@ function mount(root, api) {
         i.label.textContent = SHAPES[k] + (f.poorly_expressed ? " *" : "");
       });
       const poor = r.fit.filter((f) => f.poorly_expressed).length;
+      status.className = "note";
       status.textContent = tr("rig.loaded", { joints: r.joints.length, shapes: SHAPES.length, poor, ms: Math.round(r.timing_ms.total) });
     } catch (e) {
       status.textContent = tr("rig.error", { error: e.message ?? e });
+      status.className = "note bad";
     }
     S.busy = false;
     update();

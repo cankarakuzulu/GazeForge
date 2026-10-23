@@ -57,8 +57,8 @@ function mount(root, api) {
     store: saved.store || '',
     body: saved.body || '',
     show: saved.show !== false,
-    seam: saved.seam !== false,
-    auto: saved.auto === true,
+    seam: saved.seam === true,
+    auto: saved.auto !== false,
     values: Object.fromEntries(CONTROLS.map((c) => [c.id, saved.values && saved.values[c.id] !== undefined ? clampControl(c, saved.values[c.id]) : c.value])),
   };
   let last = null;
@@ -66,6 +66,7 @@ function mount(root, api) {
   let pending = false;
   let stale = false;
   let wanted = false;
+  let tried = false;
 
   const store = el('input', { type: 'text', placeholder: tr('stitch.store_placeholder'), value: state.store });
   const body = el('input', { type: 'text', placeholder: tr('stitch.body_placeholder'), value: state.body });
@@ -113,16 +114,16 @@ function mount(root, api) {
   let drawnWear = 0;
 
   function draw() {
-    const visible = last && state.show && !stale;
+    const visible = last && state.show;
     if (!visible) api.setExtraMesh('stitch-body', null);
     else api.setExtraMesh('stitch-body', { positions: last.positions, indices: last.indices, normals: last.normals, color: last.pass ? BODY_COLOR : FAIL_COLOR, label: last.pass ? tr('stitch.mesh_ok') : tr('stitch.mesh_failed') });
     const wear = visible ? last.wearables : [];
     wear.forEach((w, i) => api.setExtraMesh(`wear-${i}`, { positions: w.positions, indices: w.indices, normals: w.normals, color: w.color || WEAR_COLORS[i % WEAR_COLORS.length], label: w.name }));
     for (let i = wear.length; i < drawnWear; i++) api.setExtraMesh(`wear-${i}`, null);
     drawnWear = wear.length;
-    if (!last || !state.seam || stale) api.setOverlay('stitch-seam', null);
+    if (!last || !(state.seam || !last.pass) || stale) api.setOverlay('stitch-seam', null);
     else api.setOverlay('stitch-seam', { lines: last.lines, color: last.pass ? [1.0, 0.35, 0.2] : [1.0, 0.0, 0.0] });
-    api.setPose('stitch-head', visible && last.head && last.headScale !== 1 ? last.head : null);
+    api.setPose('stitch-head', visible && !stale && last.head && last.headScale !== 1 ? last.head : null);
     api.requestRender();
   }
 
@@ -225,7 +226,13 @@ function mount(root, api) {
   });
   auto.addEventListener('change', persist);
   api.onCharacterChange((c, info) => {
-    if (!last) return;
+    if (!last) {
+      if (!tried && state.auto && state.show && c && c.body && !(info && info.kind === 'slider')) {
+        tried = true;
+        stitch();
+      }
+      return;
+    }
     if (info && info.kind === 'slider') {
       if (!stale) {
         stale = true;
@@ -269,8 +276,8 @@ function mount(root, api) {
       store.value = typeof r.store === 'string' ? r.store : '';
       body.value = typeof r.body === 'string' ? r.body : '';
       show.checked = s.show !== false;
-      seam.checked = s.seam !== false;
-      auto.checked = s.auto === true;
+      seam.checked = s.seam === true;
+      auto.checked = s.auto !== false;
       for (const c of CONTROLS) {
         const v = s.values && s.values[c.id] !== undefined ? clampControl(c, s.values[c.id]) : c.value;
         state.values[c.id] = v;
@@ -280,6 +287,7 @@ function mount(root, api) {
       persist();
       last = null;
       stale = false;
+      tried = false;
       wanted = !!s.stitched;
       draw();
       status.textContent = tr('stitch.not_stitched');

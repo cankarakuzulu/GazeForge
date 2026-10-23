@@ -59,6 +59,15 @@ pub fn run_values(world: &crate::world::World) -> Value {
     }
 }
 
+fn show_in_folder(path: &str) {
+    let p = std::path::Path::new(path);
+    let _ = if cfg!(windows) {
+        std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn()
+    } else {
+        std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }).arg(p.parent().unwrap_or(p)).spawn()
+    };
+}
+
 pub fn ctx() -> Result<Ctx, String> {
     let mut ctx = Ctx::from_env();
     let name = if cfg!(windows) { "gazeforge.exe" } else { "gazeforge" };
@@ -575,7 +584,7 @@ impl Wizards {
                     }
                     if !st["result"].is_null() {
                         self.shows_ui(ui, &s);
-                        egui::CollapsingHeader::new(tr("wizard.report")).id_salt(("wz_report", self.at)).default_open(true).show(ui, |ui| {
+                        egui::CollapsingHeader::new(tr("wizard.report")).id_salt(("wz_report", self.at)).default_open(false).show(ui, |ui| {
                             ui.label(egui::RichText::new(serde_json::to_string_pretty(&st["result"]).unwrap_or_default()).monospace().small());
                         });
                     }
@@ -665,7 +674,15 @@ impl Wizards {
                 }
                 Some("glb") | Some("file") => {
                     if let Some(path) = sh["from"].as_str().map(|b| self.resolve(b)).and_then(|v| v.as_str().map(str::to_string)) {
-                        ui.label(trf("wizard.wrote", &[("path", &path)]));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(trf("wizard.wrote", &[("path", &path)]));
+                            if ui.small_button(tr("wizard.show_in_folder")).clicked() {
+                                show_in_folder(&path);
+                            }
+                            if ui.small_button(tr("wizard.copy_path")).clicked() {
+                                ui.ctx().copy_text(path.clone());
+                            }
+                        });
                     }
                 }
                 _ => {}

@@ -64,6 +64,7 @@ function mount(root, api) {
   const wearList = el('div', { class: 'gf-body-wear' });
   const wearAdd = el('select', { 'data-body': 'wear-add' });
   let groomSchema = null;
+  let lastGroom = null;
   const groomInputs = new Map();
   const groomOn = el('input', { type: 'checkbox', 'data-body': 'groom', title: tr('body.groom_on_tip') });
   const groomBox = el('div', { class: 'gf-body-groom' });
@@ -228,13 +229,14 @@ function mount(root, api) {
     for (const [k, unit, step, decimals] of GROOM_SHOWN) {
       const f = groomSchema.fields.find((x) => x.key === k);
       if (!f) continue;
-      const input = el('input', { type: 'number', min: String(f.lo * unit), max: String(Math.min(f.hi, 1e6) * unit), step: String(step), class: 'gf-wear-layer', 'data-groom': k, title: tr(`body.groom.${k}_tip`) });
+      const input = el('input', { type: 'number', min: String(f.lo * unit), max: String(f.hi * unit), step: String(step), class: 'gf-wear-layer', 'data-groom': k, title: tr(`body.groom.${k}_tip`) });
       input.addEventListener('change', () => {
         const b = api.body.get();
         const shown = Number(input.value);
         let v = shown / unit;
         v = f.integer ? Math.round(v) : Math.round(v * 1e6) / 1e6;
         if (!b || !b.groom || !Number.isFinite(shown) || v < f.lo || v > f.hi) {
+          if (b && b.groom && api.toast) api.toast(tr('body.groom_range', { setting: tr(`body.groom.${k}`), lo: f.lo * unit, hi: f.hi * unit }));
           sync();
           return;
         }
@@ -496,8 +498,10 @@ function mount(root, api) {
     const b = api.body.get();
     if (!b || !groomSchema) return;
     const next = JSON.parse(JSON.stringify(b));
-    if (!groomOn.checked) delete next.groom;
-    else if (!next.groom) next.groom = JSON.parse(JSON.stringify(groomSchema.starter));
+    if (!groomOn.checked) {
+      if (next.groom) lastGroom = JSON.parse(JSON.stringify(next.groom));
+      delete next.groom;
+    } else if (!next.groom) next.groom = JSON.parse(JSON.stringify(lastGroom || groomSchema.starter));
     apply(next, tr('body.groom_line', { state: groomOn.checked ? '✓' : '✗' }));
   });
   wearAdd.addEventListener('change', () => {

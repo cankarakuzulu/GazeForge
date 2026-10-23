@@ -720,7 +720,9 @@ function setFov(f) {
 function frameHead() {
   const head = V.meshes.get("head");
   if (!head?.cpuPos) return;
-  V.frameBox(V.computeBounds(head.cpuPos), [V.activeCam()]);
+  const parts = [...V.meshes.values()].filter((m) => m.cpuPos && (m === head || m.visible)).map((m) => V.computeBounds(m.cpuPos)).filter((b) => Number.isFinite(b.radius));
+  const lo = [0, 1, 2].map((k) => Math.min(...parts.map((b) => b.lo[k]))), hi = [0, 1, 2].map((k) => Math.max(...parts.map((b) => b.hi[k])));
+  V.frameBox({ lo, hi, centre: lo.map((x, k) => (x + hi[k]) / 2), radius: Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 }, [V.activeCam()]);
   V.pivotFlash = 0.6;
   request(false);
 }
@@ -1054,7 +1056,7 @@ function interaction() {
       if (kl === "n") { e.preventDefault(); newProject(); return; }
     }
     if (k === "Escape" && P.dialogDone) { P.dialogDone(false); return; }
-    if (e.target.matches?.("input[type=text], input[type=search], textarea") || e.target.closest?.("#wizard") || P.dialogDone) return;
+    if (e.target.matches?.("input:not([type=range],[type=checkbox],[type=radio],[type=button],[type=color]), select, textarea, [contenteditable]") || e.target.closest?.("#wizard") || P.dialogDone) return;
     if (ctrl && (k === "z" || k === "Z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (ctrl && (k === "y" || ((k === "z" || k === "Z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
     if (ctrl || (e.altKey && k !== "h" && k !== "H")) return;
@@ -1382,6 +1384,7 @@ function makeApi(panelId) {
     poseExtraMesh: (id, rotation, centre) => { const ok = V.poseExtra(String(id), rotation || null, centre || null); request(false); return ok; },
     setOverlay: (id, spec) => { V.setOverlay(String(id), spec || null); pendingVisibility("overlay", String(id)); renderVisibility(); request(false); },
     pushUndo,
+    toast,
     tasks: { open: (id) => D.wizards.openTask(id) },
     requestRender: () => request(false),
     grid: gridApi(),
@@ -1822,7 +1825,7 @@ async function offerRecovery() {
   try { slot = (await api("project.list", rootArg())).recoveries.find((r) => r.name === slotName() && r.newer_than_saved); } catch {}
   if (!slot) return;
   P.recoveryOffer = slot;
-  $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: slot.modified });
+  $("p-recover-text").textContent = tr("designer.recover", { name: slot.name, modified: Number.isNaN(Date.parse(slot.modified)) ? slot.modified : new Date(slot.modified).toLocaleString() });
   $("p-recover").classList.remove("hidden");
 }
 
