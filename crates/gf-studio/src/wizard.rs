@@ -88,7 +88,7 @@ fn call(name: &str, input: Value) -> Result<Value, String> {
     }
 }
 
-fn humanize(name: &str) -> String {
+pub(crate) fn humanize(name: &str) -> String {
     let s = name.replace('_', " ");
     let mut c = s.chars();
     c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())

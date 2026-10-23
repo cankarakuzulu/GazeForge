@@ -3,11 +3,70 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::face_rig::{Mode, SHAPES};
-use crate::i18n::{tr, trf};
+use crate::i18n::{tr, tr_or, trf};
 use crate::stitch::CONTROLS;
 use crate::world::World;
 
 pub const LIMIT: usize = 300;
+
+fn first_difference(a: &Value, b: &Value, path: &mut Vec<String>) -> bool {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let mut keys: Vec<&String> = x.keys().chain(y.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys {
+                let (u, v) = (x.get(k).unwrap_or(&Value::Null), y.get(k).unwrap_or(&Value::Null));
+                if u != v {
+                    path.push(k.clone());
+                    first_difference(u, v, path);
+                    return true;
+                }
+            }
+            false
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (u, v)) in x.iter().zip(y).enumerate() {
+                if u != v {
+                    path.push(i.to_string());
+                    first_difference(u, v, path);
+                    return true;
+                }
+            }
+            false
+        }
+        _ => a != b,
+    }
+}
+
+fn panel_label(before: &Value, after: &Value) -> String {
+    let mut path = Vec::new();
+    if !first_difference(before, after, &mut path) || path.is_empty() {
+        return tr("history.panels").to_string();
+    }
+    let panel = tr_or(&format!("panel.{}", path[0]), &crate::wizard::humanize(&path[0])).to_string();
+    let Some(leaf) = path.iter().skip(1).rev().find(|p| p.parse::<usize>().is_err()) else { return panel };
+    let wear = |k: &str| match k {
+        "hair" => Some("body.wear_hair"),
+        "physics" => Some("body.wear_physics"),
+        "layer" => Some("body.wear_layer"),
+        "hide_body" => Some("body.wear_hide"),
+        "wearables" => Some("body.wearables"),
+        "opening_m" => Some("body.wear_opening"),
+        "coarse_power" => Some("body.wear_coarse"),
+        "scalp_cap" => Some("body.wear_cap"),
+        "strands" => Some("body.wear_strands"),
+        _ => None,
+    };
+    let key = if path.iter().any(|p| p == "groom") && leaf != "groom" { Some(format!("body.groom.{leaf}")) } else { wear(leaf).map(str::to_string) };
+    let what = key
+        .map(|k| tr_or(&k, "").to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| Some(tr_or(&format!("stitch.control.{leaf}"), "").to_string()).filter(|s| !s.is_empty()))
+        .or_else(|| Some(tr_or(&format!("body.{leaf}"), "").to_string()).filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| crate::wizard::humanize(leaf));
+    trf("history.panel_change", &[("panel", &panel), ("what", &what)])
+}
 const SETTLE: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,8 +236,9 @@ impl World {
         self.journal.committed = Some(target.clone());
         self.journal.last = Some(target);
         self.journal.changed_at = None;
+        let label = panel_label(&before, &after);
         if redo { self.journal.panels_done.push((before, after)) } else { self.journal.panels_undone.push((before, after)) }
-        Some(tr("history.panels").to_string())
+        Some(label)
     }
 
     pub fn undo(&mut self, redo: bool) -> Option<String> {
@@ -196,5 +256,21 @@ impl World {
                 return Some(if redo { trf("designer.redone", &[("what", &label)]) } else { trf("designer.undone", &[("what", &label)]) });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panel_undo_names_the_setting_it_reverts() {
+        let hair = |l: f64| json!({"body": {"groom": {"length_m": l, "seed": 1}}, "notes": ""});
+        assert_eq!(panel_label(&hair(0.15), &hair(0.2)), format!("{}: {}", tr("panel.body"), tr("body.groom.length_m")));
+        let worn = |h: &str| json!({"body": {"wearables": [{"asset": "a"}, {"asset": "b", "hair": h}]}});
+        assert_eq!(panel_label(&worn("tuck"), &worn("hide")), format!("{}: {}", tr("panel.body"), tr("body.wear_hair")));
+        let stitch = |v: f64| json!({"stitch": {"values": {"blend_mm": v}}});
+        assert_eq!(panel_label(&stitch(60.0), &stitch(40.0)), format!("{}: {}", tr("panel.stitch"), tr("stitch.control.blend_mm")));
+        assert_eq!(panel_label(&hair(0.2), &hair(0.2)), tr("history.panels"));
     }
 }

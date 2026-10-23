@@ -301,6 +301,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **Studio undo said "Panel settings" for every body, clothes and hair edit.** It now names the setting it reverts,
+  such as "Undo: Body shape: Length (cm)", "Body shape: Hair under it" or "Body: Blend width (mm)".
 - **Hair cards and garment fitting asked for MakeHuman's base.obj by hand.** Both tasks now find it beside the macro
   definition the client was opened with (`data/3dobjs/base.obj` of the same MakeHuman install), so "Make game hair
   cards…" opens ready to run; a base.obj you give wins, and none is proposed when the file is not there.

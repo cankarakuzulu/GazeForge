@@ -537,6 +537,7 @@
  "eyes.undo_radius_back": "Eye radius back to 12 mm",
  "eyes.undo_stay": "Eyes stay where the eyes file puts them",
  "history.panels": "Panel settings",
+ "history.panel_change": "{panel}: {what}",
  "history.skin": "Skin",
  "job.state.cancelled": "Cancelled",
  "job.state.done": "Done",
