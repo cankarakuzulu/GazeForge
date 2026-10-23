@@ -603,7 +603,7 @@ fn build(ctx: &Ctx, input: &Value, fresh: bool) -> Result<Value, ApiError> {
     };
     let bytes = serde_json::to_vec_pretty(&doc).map_err(|e| ApiError::internal(e.to_string()))?;
     write_atomic(&target, &bytes)?;
-    if !recovery {
+    if !recovery && !flag(input, "keep_recovery") {
         let slot = recovery_path(&root, name);
         if slot.is_file() {
             std::fs::remove_file(&slot).map_err(io_err(&slot))?;
@@ -1069,6 +1069,7 @@ pub fn save_input() -> Value {
                "options": {"type": "object", "description": "designer options: macro, eyes, face_morphs (paths, kept as resources by identity) and plain values such as face_prefix"},
                "macro": {"type": "string", "minLength": 1, "description": "the macro definition file, for characters with macro sliders"},
                "recovery": {"type": "boolean", "description": "write the recovery slot (autosave) instead of the project file"},
+               "keep_recovery": {"type": "boolean", "description": "a project save that leaves the recovery slot alone (a client that does not own the slot, such as a second tab, so the autosave of the one that does survives); by default a project save removes it"},
                "evaluate": {"type": "boolean", "description": "report each character's evaluated dense sha256"}}),
         &["name"],
     )

@@ -1818,7 +1818,7 @@ async function saveProject(asName) {
   const ownedSlot = !P.slotShared;
   P.saving = true;
   try {
-    const r = await api("project.save", projectInput(name));
+    const r = await api("project.save", { ...projectInput(name), ...(ownedSlot && !P.slotShared ? {} : { keep_recovery: true }) });
     if (!was && name !== "untitled" && ownedSlot && !P.slotShared && P.recoveryOffer?.name !== "untitled") { try { await api("project.discard", { name: "untitled", ...rootArg() }); } catch {} }
     if (P.recoveryOffer?.name === name) {
       P.recoveryOffer = null;
