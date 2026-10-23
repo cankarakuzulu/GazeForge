@@ -301,6 +301,8 @@ open, with its last measurement, rather than left out.
 
 ### Fixed
 
+- **The studio's wireframe stopped at the neck.** It now draws on the body, clothes and hair as well (the browser
+  already did). X-ray, points, back faces, seams and the analysis modes still draw on the head only.
 - **Most of the browser's controls had no accessible name.** Every target, macro and face-rig slider, the joint and
   wearable pickers, the category select, the clip scrubber and the project dialog's name field now carry one (an
   `aria-label` from the visible text, or the dialog's heading): unnamed controls on the designer page with a dressed
